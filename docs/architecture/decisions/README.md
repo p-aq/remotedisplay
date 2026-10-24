@@ -28,3 +28,4 @@ architecture README's change log (and its departures table, if it departs).
 | [0011](0011-extension-owns-placeholder.md) | The camera extension owns the placeholder and drains the sink | Accepted | Extends |
 | [0012](0012-devices-menu-and-device-status.md) | Devices menu always shown; status strings and `DeviceStatus` | Accepted | Departs |
 | [0013](0013-virtual-mic-input-only-driver.md) | Virtual mic as an input-only driver fed by a hidden device | Proposed | Extends |
+| [0014](0014-phase0-camera-harness.md) | The camera harness follows the repo's harness, engine and server-app patterns | Accepted (Phase 0) | Departs (build only) |

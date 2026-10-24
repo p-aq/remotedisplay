@@ -113,8 +113,9 @@ means a Phase 0 measurement exists; *built* means merged into the feature branch
 | Component | Phase | Status | Where |
 |---|---|---|---|
 | Spec | — | Revised after review | `docs/specs/camera-audio-forwarding.md` |
-| Camera extension | 0 → 1 | Planned | `server-mac/CameraExtension/` |
-| Camera sink feeder | 0 → 1 | Planned | `src/platform/macos_camera_sink.mm` |
+| Camera extension | 0 → 1 | Harness built; gate tests need a signed build | `docs/tests/camera-extension/harness/CameraExtension/` → `server-mac/CameraExtension/` |
+| Camera extension container (activate, remove) | 0 → 1 | Harness built; activation refused unsigned, as expected | `docs/tests/camera-extension/harness/ContainerApp/` → server app Setup row |
+| Camera sink feeder | 0 → 1 | Harness built; enumerates CoreMediaIO devices | `docs/tests/camera-extension/harness/camera_sink.mm` → `src/platform/macos_camera_sink.mm` |
 | Virtual mic | 0 → 2 | Planned | `server-mac/AudioDriver/` (Option A) |
 | Messages 100–104 | 1 | Planned | `libs/hbb_common/protos/message.proto` |
 | Controller capture and encode | 1 | Planned | `src/platform/macos_camera_capture.mm` |
@@ -139,6 +140,7 @@ Changes against the spec as first written (`4df72ed`). Each has a record.
 | The extension shows the card while the sink is idle | The extension owns the placeholder on a 500 ms timer, always drains the sink, shares no storage | A crashed feeder would leave a frozen frame; the extension runs as another user | [0011](decisions/0011-extension-owns-placeholder.md) |
 | Show each switch only when its capability flag is present | Devices menu always shown; status strings; `DeviceStatus` (104) | Flags are sent once and can't say why | [0012](decisions/0012-devices-menu-and-device-status.md) |
 | Turn on `screencapturekit` | Turn it on and remove its fallback to the host's mic | The feature still falls back to the default input device | [0008](decisions/0008-mic-path.md) |
+| Build the extension with `xcodebuild` from its own target | Phase 0: `swiftc` and a Makefile, like `server-mac/Makefile`; Phase 1 decides | No Xcode project to maintain; matches how the server app is already built | [0014](decisions/0014-phase0-camera-harness.md) |
 
 ## Change log
 
@@ -146,3 +148,4 @@ Changes against the spec as first written (`4df72ed`). Each has a record.
 |---|---|---|
 | 2026-10-23 | Spec added (`4df72ed`) | [0001](decisions/0001-spec-first-gated-phases.md)–[0003](decisions/0003-cameraframe-message.md) |
 | 2026-10-24 | Spec revised after the review in PR #16 (`6731a75`…`8d0fc62`); this folder added | [0004](decisions/0004-camera-encode-videotoolbox.md)–[0013](decisions/0013-virtual-mic-input-only-driver.md) |
+| 2026-10-24 | Phase 0 camera harness in `docs/tests/camera-extension/` (issue #1): builds; gate tests wait for a signed build | [0014](decisions/0014-phase0-camera-harness.md) |
