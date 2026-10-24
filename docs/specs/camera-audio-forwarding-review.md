@@ -1,6 +1,6 @@
-# Review: Camera & Audio Forwarding Spec
+# Review: Camera & Audio Forwarding Spec (Gemini 4 Argon review)
 
-*Review of [camera-audio-forwarding.md](camera-audio-forwarding.md) at commit `4df72ed` (branch `feature/camera-audio-forwarding`) · 2026-10-24*
+*Gemini 4 Argon review of [camera-audio-forwarding.md](camera-audio-forwarding.md) at commit `4df72ed` (branch `feature/camera-audio-forwarding`) · 2026-10-24*
 
 ## Purpose
 
