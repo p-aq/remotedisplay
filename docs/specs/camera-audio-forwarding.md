@@ -67,10 +67,10 @@ On the host, once (Remote Display Server app):
 
 On the controller, per session:
 
-- The session toolbar gains a Devices menu: ‹ · peer · full screen · fit · Input · Screen · Devices · ✕.
-- Devices holds on/off switches for Camera (with a picker when there is more than one), Microphone, and Play the Mac's sound here.
-- The first time, macOS asks the controller app for Camera access.
-- When the host can't receive, the menu says why, for example "This Mac hasn't turned on camera sharing" or "Update Remote Display Server on this Mac".
+- The session toolbar gains a Devices menu: ‹ · peer · full screen · fit · Input · Screen · Devices · ✕. It is always there, because Play the Mac's sound here works with every host, including 1.0.x.
+- Devices holds on/off switches for Camera (with a picker when there is more than one), Microphone (with a picker), and Play the Mac's sound here. That last switch replaces the engine's Mute toggle, which today shows under Input › Session; Input stops showing it so there aren't two opposite switches for one setting.
+- The first time, macOS asks the controller app for Camera access. If access was denied, the row says "Allow camera access in System Settings" and opens the right pane.
+- When the host can't receive, the Camera or Microphone row is shown disabled and says why, for example "This Mac hasn't turned on camera sharing" or "Update Remote Display Server on this Mac". The row updates if the host owner changes the setting during the session.
 
 On the host, while forwarding:
 
@@ -118,7 +118,7 @@ Highlighted boxes are new in this spec. Not drawn: the Remote Display Server app
 | Devices menu | client/lib/session/session_toolbar.dart | New menu |
 | macOS camera capture and encode | src/platform/macos_camera_capture.mm | New file |
 | Camera sender | src/client/device_forward.rs, src/client/io_loop.rs | New file, hook |
-| Messages | libs/hbb_common/protos/message.proto | New fields 100–103 |
+| Messages | libs/hbb_common/protos/message.proto | New fields 100–104 |
 | Request handling, mic routing | src/server/connection.rs, src/server/device_forward.rs | Changed, new file |
 | Decode and sink feeder | src/platform/macos_camera_sink.mm | New file |
 | Camera extension | server-mac/CameraExtension/ | New Xcode target |
@@ -129,7 +129,7 @@ Highlighted boxes are new in this spec. Not drawn: the Remote Display Server app
 
 ## Protocol changes
 
-Four new messages carry the feature, and the mic reuses RustDesk's existing AudioFrame. Every change is additive, so peers that don't know the new messages ignore them.
+Five new messages carry the feature, and the mic reuses RustDesk's existing AudioFrame. Every change is additive, so peers that don't know the new messages ignore them.
 
 Proposed additions to libs/hbb_common/protos/message.proto:
 
@@ -148,7 +148,11 @@ message DeviceForwardRequest {          // controller → host
 message DeviceForwardResponse {         // host → controller
   DeviceForwardRequest.Kind kind = 1;
   bool accepted = 2;
-  string reason = 3;                    // "not-installed" | "not-allowed" | "busy"
+  string reason = 3;                    // "not-installed" | "not-approved" | "not-allowed" | "busy"
+}
+message DeviceStatus {                  // host → controller, whenever it changes
+  DeviceForwardRequest.Kind kind = 1;
+  string status = 2;                    // "ready" | "not-installed" | "not-approved" | "not-allowed"
 }
 message CameraFrame {                   // controller → host
   VideoFrame frame = 1;                 // reuses EncodedVideoFrames; H.264 Annex B in v1
@@ -166,6 +170,7 @@ message Message {
     DeviceForwardResponse device_forward_response = 101;
     CameraFrame camera_frame = 102;
     CameraControl camera_control = 103;
+    DeviceStatus device_status = 104;
   }
 }
 ```
@@ -173,10 +178,10 @@ message Message {
 Capabilities. The host advertises what it can receive in PeerInfo.platform_additions, the one-level JSON map that src/server/connection.rs already fills. On a Mac host it carries supported_privacy_mode_impl today, plus the machine_id that Remote Display adds. Three new keys:
 
 - rd_device_forward: protocol version, 1 for this spec.
-- rd_camera_sink: true when the camera extension is installed, approved and allowed by the owner.
+- rd_camera_sink: a status string, "ready", "not-installed", "not-approved" (installed but not yet allowed in System Settings) or "not-allowed" (the owner's switch is off).
 - rd_mic_sink: the same for the virtual mic.
 
-The controller shows each switch only when it sees the matching flag.
+platform_additions is sent once, with the login response, and never updates during a session. So the host also sends DeviceStatus whenever a status changes mid-session, for example when the owner flips the switch or finishes approving the extension. A host without rd_device_forward is 1.0.x: the controller shows the camera and mic rows disabled with "Update Remote Display Server on this Mac".
 
 Flow.
 
@@ -223,7 +228,13 @@ Sending (new). A new src/client/device_forward.rs owns the camera thread: captur
 - Give camera frames their own bounded channel (2–4 frames) into the io loop, separate from the session's unbounded sender that carries input today, and poll it after input in a biased select!, so mouse and keyboard never wait behind video. Track the bytes and age of frames in flight; once more than 150 ms is waiting, skip capture frames until it drains. If an encoded frame still has to be dropped, force a key frame on the next encode. This is a hook in io_loop.rs, listed in HOOKS.md.
 - Stop capture the moment the user switches off, the host refuses, or the session ends; the camera light goes off with it.
 
-UI (new). client/lib/session/session_toolbar.dart gets the Devices menu. Two new FFI calls in src/flutter_ffi.rs back it: session_set_device_forward(session_id, kind, on, device) and session_get_device_forward_state(session_id).
+UI (new). client/lib/session/session_toolbar.dart gets the Devices menu, and drops the engine's Mute toggle from Input › Session. New FFI calls in src/flutter_ffi.rs back it:
+
+- session_set_device_forward(session_id, kind, on, device) and session_get_device_forward_state(session_id), which includes the host's latest status for each device.
+- list_cameras() and list_microphones(), with an event when a device is plugged in or removed.
+- get_capture_permission(kind) and request_capture_permission(kind), for the controller's own Camera and Microphone access.
+
+Adding FFI calls means regenerating the flutter_rust_bridge bindings (the Dart side and client/macos/Runner/bridge_generated.h); the Phase 1 task list includes that step, and every engine touch goes in HOOKS.md and engine/SYNC.md.
 
 Testing without a camera. A --camera-test-pattern option sends a moving test card with a running clock, so the VM test bench can run the whole path without hardware.
 
@@ -305,6 +316,8 @@ The camera extension is what changes how Remote Display Server is built and sign
 
 Every test runs against real apps on macOS 14 and macOS 26 hosts, on the project's Tart VM bench where no hardware is needed and on two physical Macs where it is.
 
+The VM bench needs preparing first. Approving a system extension takes a real click in System Settings (macOS generally refuses synthetic clicks there), and a camera extension in a VM may need SIP relaxed and systemextensionsctl developer on. Phase 0 builds a Tart base image with the extension approved once by hand through the VM window, then snapshots it. At least one test pass a release runs on a physical Mac, for the approval flow itself.
+
 | Test | How | Passes when |
 |---|---|---|
 | Camera, end to end | Controller sends the test pattern; host opens Photo Booth, FaceTime, QuickTime, Zoom, Teams, and a WebRTC test page in Chrome and Safari | The card shows in every app and its clock advances smoothly |
@@ -323,7 +336,8 @@ Every test runs against real apps on macOS 14 and macOS 26 hosts, on the project
 | Owner switches off | Turn off Let controllers share… mid-call | Forwarding stops; the controller's menu says why |
 | Build without a profile | make with no provisioning profile | The app launches; the Camera row says it isn't available in this build |
 | Upgrade | Install a new build over the old one with Photo Booth open | Behaviour documented; no stale device after a relaunch |
-| Older peers | New client with a 1.0.x host, and a 1.0.x client with a new host | No Devices menu, no errors, screen sharing unchanged |
+| Older peers | New client with a 1.0.x host, and a 1.0.x client with a new host | Against a 1.0.x host, Devices shows only the sound switch working and the camera and mic rows asking for an update; no errors; screen sharing unchanged |
+| Mid-session status | Approve the extension, or flip the owner's switch, while a controller is connected | The controller's rows update without reconnecting |
 | Robustness | Fuzz CameraFrame sizes and feed corrupt H.264 | The engine never crashes |
 
 Results go in docs/tests/, as the project already does for display behaviour.
