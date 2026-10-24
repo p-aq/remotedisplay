@@ -1,0 +1,148 @@
+# Architecture: camera & audio forwarding
+
+Where the architecture started, where the [spec](../specs/camera-audio-forwarding.md)
+takes it, and where it is now. Read this before changing the design; update it in the
+same PR as the change.
+
+- **Decisions** live in [`decisions/`](decisions/README.md), one short record each.
+  Records are numbered, never renumbered or deleted; a replaced decision is marked
+  *Superseded by* and stays.
+- **Every PR that changes the design** adds or updates a record, the
+  [current state](#current-state) table and the [change log](#change-log).
+- **Every departure** from the original spec (at `4df72ed`) or from a repo convention
+  below needs a record that says so and why, and a row in
+  [departures](#departures-from-the-original-spec).
+
+## Guardrails: patterns we follow
+
+New code follows what the repo already does. Inventing a new pattern needs a decision
+record first.
+
+| Area | Existing pattern | Source |
+|---|---|---|
+| Engine changes | The engine is vendored RustDesk 1.4.9. Keep changes minimal, put new code in new files so `engine/update.sh` re-applies cleanly, mark hooks with a `remotedisplay:` comment, and list them in `HOOKS.md` and the "What is ours" table in `engine/SYNC.md`. | CONTRIBUTING.md, HOOKS.md, engine/SYNC.md |
+| macOS platform code in the engine | Objective-C++ `.mm` files exposing `extern "C"` functions named `Mac…`, compiled by `build.rs` with `cc`, called from Rust `extern "C"` blocks. | `src/platform/macos.mm`, `src/platform/macos.rs` |
+| Server app ↔ engine, commands | A user-level CLI flag on `remotedisplayd` that skips the install/root gate and talks IPC to the running `--server` as the same user. | `--set-lan-password` in `src/core_main.rs` |
+| Server app ↔ engine, status | The engine writes `~/Library/Application Support/remotedisplay-perms.json`; the app polls it, `pgrep` and `lsof` every 2 s and doesn't change observed state while its menu is open. | `ServerController.swift` |
+| Server app | Swift/SwiftUI on SwiftPM, bundled and signed by `server-mac/Makefile` with a stable identity and an explicit designated requirement. | `server-mac/` |
+| Client UI | `client/` owns its toolbar and consumes the engine's Flutter code as a package, with hooks only where listed in HOOKS.md. | `client/lib/session/session_toolbar.dart` |
+| macOS behaviour | Measured, not assumed: a `docs/tests/<topic>/` folder with a README (what was tested and the result, runtime findings, how to re-run) and a `harness/`. | CONTRIBUTING.md, `docs/tests/vdisplay-vm/` |
+| Protocol | Additive protobuf changes only, so older peers ignore what they don't know. | spec, Protocol changes |
+| Commits | Short imperative summary; the body explains why. | CONTRIBUTING.md |
+
+## Baseline: Remote Display 1.0.x
+
+The code at `86f1b23`, before any of this work.
+
+```mermaid
+flowchart LR
+  subgraph C["Controller Mac"]
+    ui["client/ (Flutter)<br/>session_toolbar.dart"]
+    lib["engine library<br/>flutter_hbb + librustdesk"]
+    ui --- lib
+  end
+  subgraph S["Encrypted session"]
+    vf["VideoFrame<br/>screen, host → controller"]
+    inp["Input<br/>controller → host"]
+    au["AudioFrame<br/>host → controller"]
+    vc["Voice call<br/>never accepted on a Mac host"]
+  end
+  subgraph H["Host Mac"]
+    app["Remote Display Server<br/>SwiftUI menu-bar app"]
+    eng["remotedisplayd<br/>engine --server, headless CM"]
+    perms[("remotedisplay-perms.json")]
+    app -- "spawns, polls pgrep / lsof" --> eng
+    eng -- writes --> perms
+    app -- "polls every 2 s" --> perms
+  end
+  eng --> vf --> lib
+  lib --> inp --> eng
+  eng -- "default input device<br/>(screencapturekit off)" --> au --> lib
+  lib -.-> vc -.-> eng
+```
+
+- There is no camera path in either direction on macOS.
+- Host sound is really the host's microphone, because the release build leaves
+  `screencapturekit` off.
+- The host plays any controller's incoming audio while that controller's
+  `disable_audio` is off, whether or not anyone accepted a call.
+
+## Target: v1
+
+Phases 0–3 of the spec as revised after the review in PR #16. Thick borders are new.
+
+```mermaid
+flowchart LR
+  subgraph C["Controller Mac"]
+    dev["Devices menu<br/>session_toolbar.dart"]:::new
+    cap["macos_camera_capture.mm<br/>AVFoundation → VTCompressionSession"]:::new
+    fwd["device_forward.rs<br/>key frames, drop before encode"]:::new
+    mic["voice-call capture<br/>fixed, voice processing"]
+    spk["speakers"]
+    dev --> cap --> fwd
+  end
+  subgraph S["Encrypted session"]
+    cf["CameraFrame · CameraControl<br/>Annex B H.264"]:::new
+    ctl["DeviceForwardRequest / Response<br/>DeviceStatus"]:::new
+    af1["AudioFrame, controller → host"]
+    af2["AudioFrame, host → controller"]
+  end
+  subgraph H["Host Mac"]
+    gate["connection.rs<br/>owner switch, one sender, audio gate"]:::new
+    sink["device_forward.rs +<br/>macos_camera_sink.mm<br/>Annex B → AVCC, decode, feed"]:::new
+    ext["Camera extension<br/>Remote Display Camera,<br/>owns the placeholder"]:::new
+    vmic["Virtual mic<br/>input-only, low-latency buffer"]:::new
+    sck["ScreenCaptureKit loopback<br/>no mic fallback"]:::new
+    app["Server app<br/>Setup rows, switch, badge"]:::new
+    cli["--set-device-forward<br/>+ status in perms.json"]:::new
+    app --> cli --> gate
+  end
+  fwd --> cf --> gate --> sink --> ext
+  dev --> ctl <--> gate
+  mic --> af1 --> gate --> vmic
+  sck --> af2 --> spk
+  classDef new stroke-width:3px
+```
+
+## Current state
+
+What exists today, by component. *Planned* means only the spec describes it; *harness*
+means a Phase 0 measurement exists; *built* means merged into the feature branch;
+*shipped* means released.
+
+| Component | Phase | Status | Where |
+|---|---|---|---|
+| Spec | — | Revised after review | `docs/specs/camera-audio-forwarding.md` |
+| Camera extension | 0 → 1 | Planned | `server-mac/CameraExtension/` |
+| Camera sink feeder | 0 → 1 | Planned | `src/platform/macos_camera_sink.mm` |
+| Virtual mic | 0 → 2 | Planned | `server-mac/AudioDriver/` (Option A) |
+| Messages 100–104 | 1 | Planned | `libs/hbb_common/protos/message.proto` |
+| Controller capture and encode | 1 | Planned | `src/platform/macos_camera_capture.mm` |
+| Camera sender and channel | 1 | Planned | `src/client/device_forward.rs`, `io_loop.rs` hook |
+| Host request handling and audio gate | 1–2 | Planned | `src/server/connection.rs`, `src/server/device_forward.rs` |
+| Owner's switch and status | 1 | Planned | `--set-device-forward`, `remotedisplay-perms.json` |
+| Devices menu | 1 | Planned | `client/lib/session/session_toolbar.dart` |
+| System sound | 3 | Planned | `release/release-mac.sh`, `src/server/audio_service.rs` |
+
+## Departures from the original spec
+
+Changes against the spec as first written (`4df72ed`). Each has a record.
+
+| The original spec said | Now | Why | Record |
+|---|---|---|---|
+| Hand camera buffers to the VideoToolbox encoder that hwcodec wraps | Encode with `VTCompressionSession` in a new `.mm` | hwcodec takes one CPU buffer and can't force key frames or change bitrate live | [0004](decisions/0004-camera-encode-videotoolbox.md) |
+| `CameraFrame` reuses `EncodedVideoFrames` (format unstated) | H.264 Annex B with SPS/PPS on key frames | VideoToolbox needs AVCC; Annex B matches hwcodec for Phase 4 | [0005](decisions/0005-annex-b-wire-format.md) |
+| Drop frames once 150 ms is queued | Drop before encoding; own bounded channel | Encoded P-frames can't be dropped; the session sender is shared with input | [0006](decisions/0006-camera-channel-drop-before-encode.md) |
+| Mic reuses the voice-call path | Reuse it with fixes, gate incoming audio on an accepted forward, separate low-latency buffer | The host plays unrequested audio today; the voice-call code spins and buffers 600 ms+ | [0007](decisions/0007-host-audio-gate.md), [0008](decisions/0008-mic-path.md) |
+| Report state to the app "over the existing IPC" | User-level `--set-device-forward` plus status in `remotedisplay-perms.json` | No such IPC exists; this reuses the two patterns that do | [0009](decisions/0009-owner-switch-cli-and-status-file.md) |
+| Add the install entitlement to the app's entitlements | One entitlements file per binary; extension signed first | The Makefile signs every binary with one file | [0010](decisions/0010-entitlements-per-binary.md) |
+| The extension shows the card while the sink is idle | The extension owns the placeholder on a 500 ms timer, always drains the sink, shares no storage | A crashed feeder would leave a frozen frame; the extension runs as another user | [0011](decisions/0011-extension-owns-placeholder.md) |
+| Show each switch only when its capability flag is present | Devices menu always shown; status strings; `DeviceStatus` (104) | Flags are sent once and can't say why | [0012](decisions/0012-devices-menu-and-device-status.md) |
+| Turn on `screencapturekit` | Turn it on and remove its fallback to the host's mic | The feature still falls back to the default input device | [0008](decisions/0008-mic-path.md) |
+
+## Change log
+
+| Date | Change | Records |
+|---|---|---|
+| 2026-10-23 | Spec added (`4df72ed`) | [0001](decisions/0001-spec-first-gated-phases.md)–[0003](decisions/0003-cameraframe-message.md) |
+| 2026-10-24 | Spec revised after the review in PR #16 (`6731a75`…`8d0fc62`); this folder added | [0004](decisions/0004-camera-encode-videotoolbox.md)–[0013](decisions/0013-virtual-mic-input-only-driver.md) |

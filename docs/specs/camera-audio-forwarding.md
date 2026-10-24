@@ -378,6 +378,7 @@ There are no dates yet; they depend on who picks up each phase.
 Start with Phase 0: it is small, self-contained Swift and C, and it answers the questions everything else depends on.
 
 - Comment on this doc, or open a [GitHub issue](https://github.com/SamuelRioTz/remotedisplay/issues) that links to it, before writing large changes; the camera extension touches the server app's signing and release flow, so agree on it with the maintainer first.
+- Record design decisions in [docs/architecture/decisions/](../architecture/decisions/README.md), and update the [architecture overview](../architecture/README.md) (current state, departures, change log) in the same PR as the change.
 - Follow the repo's rules: keep engine changes minimal, put new engine code in new files so engine/update.sh re-applies cleanly, and list every engine touch in HOOKS.md and engine/SYNC.md.
 - Measure macOS behaviour and record it under docs/tests/, as CONTRIBUTING.md asks.
 - Contributions are licensed AGPL-3.0, like the rest of Remote Display.
