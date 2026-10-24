@@ -298,14 +298,14 @@ Six phases, gated so the riskiest questions are answered before the main build s
 
 | Phase | Scope | Gate |
 |---|---|---|
-|---|---|---|
 | **0 · Spike (start here)** | A standalone camera extension fed by a small command-line tool; try both microphone options | FaceTime and Zoom show frames pushed from a background process; mic option chosen |
-|---|---|---|
 | **1 · Camera, Mac to Mac** | Messages, AVFoundation capture, decode and sink feeder, extension packaging, Setup row, Devices menu | A Zoom call on the host uses the controller's camera over Tailscale |
 | **2 · Microphone** | Virtual mic (driver or Core Audio taps), routing on the host, the owner's switch | A Zoom test call and macOS Dictation on the host both pass |
 | **3 · System sound** | Turn on the `screencapturekit` feature for the host build; independent of Phases 1 and 2 | The controller hears a test tone, and the host's microphone is never sent |
 | **4 · More controllers** | Windows first, reusing RustDesk's existing camera capture; then iPad and Android | A Windows controller passes the camera tests |
 | **5 · Polish and upstream** | 1080p, lip sync, more than one camera; offer the reusable pieces to RustDesk | — |
+
+v1, as defined in Goals, is Phases 0–3: camera, microphone and the host's sound. Phase 3 has no dependency on Phases 1 and 2, but v1 isn't done until it ships.
 
 There are no dates yet; they depend on who picks up each phase.
 
