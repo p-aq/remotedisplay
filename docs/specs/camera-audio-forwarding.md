@@ -123,6 +123,7 @@ Highlighted boxes are new in this spec. Not drawn: the Remote Display Server app
 | Decode and sink feeder | src/platform/macos_camera_sink.mm | New file |
 | Camera extension | server-mac/CameraExtension/ | New Xcode target |
 | Virtual mic | server-mac/AudioDriver/ (Option A) or engine only (Option B) | New |
+| Owner's switch, forwarding status | src/core_main.rs (--set-device-forward), remotedisplay-perms.json | Hook, changed |
 | Setup rows, switch, badge | server-mac/Sources/RemoteDisplayServer/ | Changed |
 | System sound | release/release-mac.sh | Turn on screencapturekit |
 
@@ -236,7 +237,10 @@ Camera: an extension with a sink stream. For an app that feeds a virtual camera,
 - Feeder (in remotedisplayd: a new src/server/device_forward.rs calling a new src/platform/macos_camera_sink.mm): decode CameraFrame H.264 with VideoToolbox into IOSurface-backed CVPixelBuffers, wrap them as CMSampleBuffers, and enqueue them on the sink. Sinks have no AVFoundation API, so this uses the CoreMediaIO C API: find the device by UID, then CMIOStreamCopyBufferQueue, CMIODeviceStartStream and CMSimpleQueueEnqueue.
 - VTDecompressionSession won't decode Annex B. On each key frame the feeder parses SPS and PPS, rebuilds the format description with CMVideoFormatDescriptionCreateFromH264ParameterSets when they change, and rewrites start codes as 4-byte lengths before decoding. Until the first key frame arrives it drops frames and sends key_frame_request.
 - Scale or letterbox every frame to the advertised format, so a 1080p or portrait camera never breaks the stream.
+- The placeholder comes from the extension itself, not the feeder: if no sink buffer arrives for 500 ms, the source stream switches to the card at a low frame rate until frames return. That way the card still appears when remotedisplayd crashes or is killed.
+- The extension drains the sink even when no app is reading Remote Display Camera, discarding the buffers, so the feeder's queue never fills up and stalls. A controller can turn the camera on before anyone opens Photo Booth.
 - Keep the extension thin: no decoding, no networking. It runs sandboxed as the _cmiodalassistants role user and may not spawn processes or reach the window server.
+- Because it runs as a different user, an app-group container or shared defaults can't carry data between the extension and remotedisplayd. Everything travels through the sink stream, plus custom CoreMediaIO properties if needed. The app group is still needed, for the extension's mach service name.
 
 Microphone: two options, spike both, leaning towards Option A for v1.
 
@@ -251,9 +255,15 @@ Accepting requests. src/server/connection.rs handles the new messages:
 
 - Check the owner's setting, a new engine option rd-allow-device-forward, and that the pieces are installed.
 - Enforce one sender per device, answer DeviceForwardResponse, and tear everything down on disconnect.
-- Report the state to the menu-bar app over the existing IPC, for its badge and menu.
+- When the owner turns the option off mid-session, stop every live forward and send each controller DeviceForwardResponse{accepted: false, reason: "not-allowed"}.
 
-Open question for the spike. Does a process that only feeds a sink stream need the Camera permission? If it does, remotedisplayd needs NSCameraUsageDescription and Setup gains one more row.
+The menu-bar app and the engine. There is no IPC between them today. ServerController.swift polls remotedisplay-perms.json (written by src/platform/macos.rs), pgrep and lsof every 2 seconds, and writes RemoteDisplay2.toml only during setup. remotedisplayd --option can't set the option either: it requires an installed, root process, and the menu-bar app runs as the user. Editing the TOML doesn't reach the running engine, which holds options in memory. So:
+
+- Add a user-level CLI command, --set-device-forward on|off, built the same way as the existing --set-lan-password: it skips the install/root gate and calls ipc::set_option("rd-allow-device-forward", …) on the running --server as the same user.
+- Report forwarding state (which device, which controller) by extending remotedisplay-perms.json, or a status file next to it, which the app already polls.
+- Badge and menu updates follow the guard already in ServerController.swift: observed state doesn't change while the menu is open.
+
+Camera permission for the feeder. Phase 0 checks whether a process that only feeds a sink stream needs the Camera permission. Plan for yes: add NSCameraUsageDescription to server-mac/Info.plist, so a CoreMediaIO call that triggers a privacy check can't terminate remotedisplayd. Setup gains a row only if Phase 0 shows a prompt.
 
 ## Security and privacy
 
@@ -264,7 +274,7 @@ Forwarding a camera or mic into another computer is sensitive in both directions
 | A controller puts a fake face or voice into meetings on the host | Off by default; only the host owner can allow it, in the server app; the menu bar names whoever is sending |
 | The host records the controller's camera or mic | The controller turns each device on per session and nothing auto-starts; the controller's camera light shows capture |
 | Media is exposed on the network | Media rides the existing encrypted session; no new listener, port or relay |
-| A stale feed lingers after a disconnect | The host stops the sink and shows the placeholder within 1 second of the session ending |
+| A stale feed lingers after a disconnect | The host stops the sink and shows the placeholder within 1 second of the session ending; the extension shows it on its own after 500 ms without frames, even if remotedisplayd has crashed |
 | A second controller takes over a live device | One sender per device; later requests get busy |
 | A controller plays audio into the host without a request | Controller audio is accepted only while a mic forward or voice call is active for that connection; anything else is dropped (today any controller can) |
 | Malformed frames crash the host engine | Validate every width, height and frame rate before use; decode on a guarded thread; drop bad frames; fuzz the new messages |
@@ -277,10 +287,13 @@ No frames or audio are written to disk, and logs carry sizes and timings, never 
 
 The camera extension is what changes how Remote Display Server is built and signed; the client only gains a usage string and an entitlement.
 
-- Build. Keep the SwiftUI app on SwiftPM. Build the extension with xcodebuild from its own target, and have the Makefile copy Remote Display Camera.systemextension into Contents/Library/SystemExtensions/ before signing.
-- App entitlements. Add com.apple.developer.system-extension.install and an app group shared with the extension ([Apple](https://developer.apple.com/documentation/coremediaio/creating-a-camera-extension-with-core-media-i-o)). The install entitlement is restricted, so the app needs an embedded provisioning profile, or macOS kills it at launch ([Apple DTS](https://developer.apple.com/forums/thread/710046)).
-- Extension entitlements. App sandbox on, the same app group, and CMIOExtensionMachServiceName in its Info.plist with the app group as its prefix ([WWDC22 10022](https://developer.apple.com/videos/play/wwdc2022/10022/)).
-- Signing. Sign the extension, then the app, with the project's Developer ID team. Keep the Makefile's explicit designated requirement, so existing Screen Recording and Accessibility grants survive the upgrade.
+- Build. Keep the SwiftUI app on SwiftPM. Build the extension with xcodebuild from its own target, and have the Makefile copy it into Contents/Library/SystemExtensions/ before signing. macOS finds and activates system extensions by bundle identifier, so the bundle is named after it: app.remotedisplay.server.camera.systemextension, with an identifier prefixed by the app's. Users still see "Remote Display Camera", the device name.
+- Entitlements, one file per binary. Today the Makefile signs remotedisplayd, the app executable and the bundle with the same --identifier and Entitlements.plist. Adding the restricted install entitlement there would make remotedisplayd claim it too, kill ad-hoc and contributor builds that have no provisioning profile, and break the Makefile's fallback from Developer ID to Apple Development, since each profile matches only one kind of certificate. So:
+  - remotedisplayd keeps today's Entitlements.plist, unchanged.
+  - The app gets its own file with com.apple.developer.system-extension.install and an app group shared with the extension ([Apple](https://developer.apple.com/documentation/coremediaio/creating-a-camera-extension-with-core-media-i-o)). The install entitlement is restricted, so the app needs an embedded provisioning profile, or macOS kills it at launch ([Apple DTS](https://developer.apple.com/forums/thread/710046)).
+  - The extension gets its own file: app sandbox on, the same app group, and CMIOExtensionMachServiceName in its Info.plist with the app group as its prefix ([WWDC22 10022](https://developer.apple.com/videos/play/wwdc2022/10022/)).
+  - The Makefile embeds the provisioning profile that matches the chosen identity. A build without one leaves out the restricted entitlement and the extension, and the Camera row says "Not available in this build".
+- Signing. Sign the extension first, on its own, with its own identifier, entitlements and profile, then remotedisplayd, then the app, all with the project's Developer ID team and without --deep. Keep the Makefile's explicit designated requirement, so existing Screen Recording and Accessibility grants survive the upgrade.
 - Notarization. A Developer ID system extension loads only once notarized ([Apple DTS](https://developer.apple.com/forums/thread/710046)). The release flow already notarizes the DMG; the build now also has to embed the provisioning profiles.
 - Location. Only an app in /Applications can activate the extension; Setup says so when the app runs from elsewhere.
 - Updates. A new app version updates the extension. Apps such as Photo Booth may not see the new version until they relaunch ([report](https://developer.apple.com/forums/thread/734259)), so release notes should say so.
@@ -305,6 +318,10 @@ Every test runs against real apps on macOS 14 and macOS 26 hosts, on the project
 | Speakers, no ScreenCaptureKit | Revoke Screen Recording on the host, then turn the sound on | The switch says unavailable; the host's microphone is never sent |
 | Lip sync | Clap test recorded in a host app | Drift measured and recorded |
 | Disconnect | Cut the network mid-call | Placeholder within 1 second; the controller's camera light goes off |
+| Engine crash | Kill remotedisplayd mid-call | Placeholder within 1 second |
+| No reader yet | Turn the camera on, then open Photo Booth 30 seconds later | Live frames within 1 second of Photo Booth opening |
+| Owner switches off | Turn off Let controllers share… mid-call | Forwarding stops; the controller's menu says why |
+| Build without a profile | make with no provisioning profile | The app launches; the Camera row says it isn't available in this build |
 | Upgrade | Install a new build over the old one with Photo Booth open | Behaviour documented; no stale device after a relaunch |
 | Older peers | New client with a 1.0.x host, and a 1.0.x client with a new host | No Devices menu, no errors, screen sharing unchanged |
 | Robustness | Fuzz CameraFrame sizes and feed corrupt H.264 | The engine never crashes |
