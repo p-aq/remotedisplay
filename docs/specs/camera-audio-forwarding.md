@@ -86,7 +86,7 @@ Each device rides the existing Remote Display session, and the host turns it bac
 ```mermaid
 flowchart LR
   subgraph C["Controller Mac"]
-    cam["Camera<br/>AVFoundation · H.264 encode"]:::new
+    cam["Camera<br/>AVFoundation · VideoToolbox H.264"]:::new
     mic["Microphone<br/>capture, Opus (voice-call code)"]
     spk["Speakers<br/>play the host's sound here"]
   end
@@ -116,8 +116,8 @@ Highlighted boxes are new in this spec. Not drawn: the Remote Display Server app
 | Piece | Where it lives | Change |
 |---|---|---|
 | Devices menu | client/lib/session/session_toolbar.dart | New menu |
-| macOS camera capture | libs/scrap/src/quartz/ | New |
-| Camera sender | src/client/device_forward.rs | New file |
+| macOS camera capture and encode | src/platform/macos_camera_capture.mm | New file |
+| Camera sender | src/client/device_forward.rs, src/client/io_loop.rs | New file, hook |
 | Messages | libs/hbb_common/protos/message.proto | New fields 100–103 |
 | Request handling, mic routing | src/server/connection.rs, src/server/device_forward.rs | Changed, new file |
 | Decode and sink feeder | src/platform/macos_camera_sink.mm | New file |
@@ -150,11 +150,11 @@ message DeviceForwardResponse {         // host → controller
   string reason = 3;                    // "not-installed" | "not-allowed" | "busy"
 }
 message CameraFrame {                   // controller → host
-  VideoFrame frame = 1;                 // reuses EncodedVideoFrames; H.264 in v1
+  VideoFrame frame = 1;                 // reuses EncodedVideoFrames; H.264 Annex B in v1
   int64 capture_time_us = 2;            // controller clock, for latency and sync
 }
 message CameraControl {                 // host → controller
-  bool key_frame_request = 1;
+  bool key_frame_request = 1;           // at most one per 500 ms
   int32 target_bitrate_kbps = 2;
 }
 
@@ -186,19 +186,23 @@ Flow.
 
 Microphone. After accepted, the controller sends ordinary Opus AudioFrames and a Misc.audio_format, the path RustDesk voice calls use. The host routes them to the virtual mic instead of its speakers. The voice-call accept step is skipped because the owner already allowed forwarding on the host.
 
+Bitstream. CameraFrame carries H.264 in Annex B form (start codes), one access unit per EncodedVideoFrame, with SPS and PPS in front of every key frame (key: true). That is what hwcodec emits for the screen today, so a Windows controller (Phase 4) can send it unchanged; the macOS controller converts VideoToolbox's length-prefixed output before sending, and the host converts back before decoding (Host side).
+
 Why a new CameraFrame instead of reusing VideoFrame? VideoFrame.display means a host display. Overloading it for controller-to-host video would confuse older peers and upstream code; a wrapper keeps the intent explicit and still reuses the codec payload.
 
-Rate. Start at 1280×720, 30 fps, with the bitrate capped at 2 Mbit/s. The host lowers it with CameraControl when decoding falls behind; the controller drops frames when its send queue grows (Controller side).
+Rate. Start at 1280×720, 30 fps, with the bitrate capped at 2 Mbit/s. The host lowers it with CameraControl when decoding falls behind, and asks for a key frame when it loses one, no more than once per 500 ms so a lossy link can't cause a storm. The controller drops frames before encoding when its send queue grows (Controller side).
 
 ## Controller side
 
 The controller needs one new piece, a macOS camera capturer; mic capture, encoding and sending already exist in the engine.
 
-Camera capture on macOS (new). RustDesk's camera module uses nokhwa only on Windows and Linux, decodes every frame to RGBA, and carries a FIXME that macOS pixel buffers can't be built from those bytes. Use AVFoundation directly instead:
+Camera capture and encode on macOS (new). RustDesk's camera module uses nokhwa only on Windows and Linux, decodes every frame to RGBA, and carries a FIXME that macOS pixel buffers can't be built from those bytes. The screen encoder doesn't fit either: hwcodec's HwRamEncoder takes one contiguous CPU buffer in FFmpeg's layout, quartz::PixelBuffer is BGRA only, and convert_to_yuv rejects NV12 input, so a camera CVPixelBuffer would be copied twice. EncoderApi also has no way to force a key frame or change bitrate on a running encoder. Use AVFoundation and VideoToolbox directly instead, in a new src/platform/macos_camera_capture.mm that mirrors the host's macos_camera_sink.mm:
 
-- An AVCaptureSession with AVCaptureVideoDataOutput delivering NV12 CVPixelBuffers, at 1280×720 and 30 fps when the camera offers it.
-- Hand the pixel buffers straight to the VideoToolbox H.264 encoder that hwcodec already wraps for screen encoding, with no RGBA round trip.
-- Put it next to the existing Quartz screen capture in libs/scrap/src/quartz/, behind the same TraitCapturer interface.
+- An AVCaptureSession with AVCaptureVideoDataOutput delivering NV12 CVPixelBuffers, at 1280×720 and 30 fps when the camera offers it, with alwaysDiscardsLateVideoFrames on.
+- Feed each buffer to a VTCompressionSession with VTCompressionSessionEncodeFrame: zero copy, H.264, RealTime on, AllowFrameReordering off (no B-frames).
+- Force key frames per frame with kVTEncodeFrameOptionKey_ForceKeyFrame, and change bitrate live with AverageBitRate and DataRateLimits.
+- Convert the length-prefixed output to Annex B, adding SPS and PPS from the format description in front of each key frame.
+- hwcodec stays for Phase 4 (Windows), which already captures through nokhwa.
 - Add NSCameraUsageDescription to client/macos/Runner/Info.plist and com.apple.security.device.camera to both entitlements files; the microphone equivalents are already there.
 
 Microphone capture (exists). start_voice_call() in src/client/io_loop.rs already captures the default input through audio_service and sends Opus AudioFrames. Reuse it, started by DeviceForwardResponse instead of VoiceCallResponse, and let the user pick the input device.
@@ -206,7 +210,8 @@ Microphone capture (exists). start_voice_call() in src/client/io_loop.rs already
 Sending (new). A new src/client/device_forward.rs owns the camera thread: capture, encode, wrap in CameraFrame, hand to the session's sender. Its rules:
 
 - Send a key frame at start, every 2 seconds, and whenever CameraControl.key_frame_request arrives.
-- Drop camera frames rather than queue them once more than 150 ms of camera data waits to be sent, so screen updates and input stay responsive.
+- Drop frames before they are encoded, never after: a dropped P-frame smears the picture until the next key frame. Capture hands frames to the encoder through a slot that holds one frame, so a slow encoder skips frames instead of queuing them.
+- Give camera frames their own bounded channel (2–4 frames) into the io loop, separate from the session's unbounded sender that carries input today, and poll it after input in a biased select!, so mouse and keyboard never wait behind video. Track the bytes and age of frames in flight; once more than 150 ms is waiting, skip capture frames until it drains. If an encoded frame still has to be dropped, force a key frame on the next encode. This is a hook in io_loop.rs, listed in HOOKS.md.
 - Stop capture the moment the user switches off, the host refuses, or the session ends; the camera light goes off with it.
 
 UI (new). client/lib/session/session_toolbar.dart gets the Devices menu. Two new FFI calls in src/flutter_ffi.rs back it: session_set_device_forward(session_id, kind, on, device) and session_get_device_forward_state(session_id).
@@ -221,6 +226,7 @@ Camera: an extension with a sink stream. For an app that feeds a virtual camera,
 
 - Extension (server-mac/CameraExtension/, a new Xcode target from Apple's Camera Extension template): one device named Remote Display Camera, with a sink and a source stream at 1280×720, 30 fps, NV12. It moves each buffer from sink to source and shows the placeholder card while the sink is idle. Add 1920×1080 later.
 - Feeder (in remotedisplayd: a new src/server/device_forward.rs calling a new src/platform/macos_camera_sink.mm): decode CameraFrame H.264 with VideoToolbox into IOSurface-backed CVPixelBuffers, wrap them as CMSampleBuffers, and enqueue them on the sink. Sinks have no AVFoundation API, so this uses the CoreMediaIO C API: find the device by UID, then CMIOStreamCopyBufferQueue, CMIODeviceStartStream and CMSimpleQueueEnqueue.
+- VTDecompressionSession won't decode Annex B. On each key frame the feeder parses SPS and PPS, rebuilds the format description with CMVideoFormatDescriptionCreateFromH264ParameterSets when they change, and rewrites start codes as 4-byte lengths before decoding. Until the first key frame arrives it drops frames and sends key_frame_request.
 - Scale or letterbox every frame to the advertised format, so a 1080p or portrait camera never breaks the stream.
 - Keep the extension thin: no decoding, no networking. It runs sandboxed as the _cmiodalassistants role user and may not spawn processes or reach the window server.
 
