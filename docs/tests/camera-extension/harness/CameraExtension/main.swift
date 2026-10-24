@@ -1,8 +1,8 @@
-// Phase 0 spike: the Remote Display Camera extension.
+// Phase 0 harness: the Remote Display Camera extension.
 //
 // One device with two streams:
 // - source: what FaceTime, Zoom and other apps read;
-// - sink: what a feeder process (spikes/phase0/camera/Feeder, later remotedisplayd)
+// - sink: what a feeder process (feeder.mm here, remotedisplayd in Phase 1)
 //   writes into through the CoreMediaIO C API.
 //
 // The extension stays thin: no decoding, no networking. It forwards sink buffers to

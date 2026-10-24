@@ -1,4 +1,4 @@
-// Phase 0 spike: draws into NV12 (420v) pixel buffers without a BGRA round trip.
+// Phase 0 harness: draws into NV12 (420v) pixel buffers without a BGRA round trip.
 // Luma is drawn with Core Graphics on plane 0 as an 8-bit gray bitmap; chroma
 // (plane 1, interleaved CbCr at half resolution) is filled directly.
 

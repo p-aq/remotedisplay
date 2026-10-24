@@ -1,4 +1,4 @@
-// Phase 0 spike: the container app that activates and removes the camera extension.
+// Phase 0 harness: the container app that activates and removes the camera extension.
 //
 // macOS activates a system extension only for the app that embeds it, and only when
 // that app runs from /Applications. In Phase 1 this becomes the Camera row's
@@ -33,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OSSystemExtensionReque
     private func showWindow() {
         let activate = NSButton(title: "Install camera", target: self, action: #selector(activateClicked))
         let remove = NSButton(title: "Remove camera", target: self, action: #selector(deactivateClicked))
-        status.stringValue = "Remote Display Camera (Phase 0 spike)"
+        status.stringValue = "Remote Display Camera (Phase 0 harness)"
         let stack = NSStackView(views: [status, NSStackView(views: [activate, remove])])
         stack.orientation = .vertical
         stack.alignment = .leading
