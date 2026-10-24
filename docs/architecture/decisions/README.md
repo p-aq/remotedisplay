@@ -29,3 +29,4 @@ architecture README's change log (and its departures table, if it departs).
 | [0012](0012-devices-menu-and-device-status.md) | Devices menu always shown; status strings and `DeviceStatus` | Accepted | Departs |
 | [0013](0013-virtual-mic-input-only-driver.md) | Virtual mic as an input-only driver fed by a hidden device | Proposed | Extends |
 | [0014](0014-phase0-camera-harness.md) | The camera harness follows the repo's harness, engine and server-app patterns | Accepted (Phase 0) | Departs (build only) |
+| [0015](0015-virtual-mic-harness.md) | Virtual-mic harness: BlackHole configured, not modified; one engine-side module for both options | Accepted (Phase 0) | Extends; departs from vendoring for Phase 0 |

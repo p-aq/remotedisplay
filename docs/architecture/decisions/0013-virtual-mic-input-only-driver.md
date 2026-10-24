@@ -28,3 +28,14 @@ Accepted.
 
 - An admin password at install, like the camera extension's approval.
 - GPL-3.0 driver code combined with AGPL-3.0, which section 13 allows.
+
+## Phase 0 notes (2026-10-24)
+
+Not a decision yet; these shape it. Details in `docs/tests/virtual-mic/`.
+
+- BlackHole's own build constants give this layout with no code changes.
+- Option B's failure mode above belongs to `CATapMutedWhenTapped` only. The SDK also has
+  `CATapMuted`, which never sends the process's audio to the hardware.
+- A tap-only aggregate is input-only, so Option B can't become a speaker either.
+- Option B's device exists only while `remotedisplayd` runs, which works against the
+  spec's "the choice sticks" between sessions.

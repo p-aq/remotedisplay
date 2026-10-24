@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Option A: the Remote Display Microphone HAL plug-in, a BlackHole build (see Makefile). -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>English</string>
+    <key>CFBundleExecutable</key>
+    <string>RemoteDisplayMicrophone</string>
+    <key>CFBundleIconFile</key>
+    <string>RemoteDisplay.icns</string>
+    <key>CFBundleIdentifier</key>
+    <string>app.remotedisplay.spike.mic</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>RemoteDisplayMicrophone</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFPlugInFactories</key>
+    <dict>
+        <!-- Our own factory UUID, so this never collides with an installed BlackHole. -->
+        <key>2bc08970-6b20-4a8d-8c46-44eeedd95d70</key>
+        <string>BlackHole_Create</string>
+    </dict>
+    <key>CFPlugInTypes</key>
+    <dict>
+        <!-- kAudioServerPlugInTypeUUID -->
+        <key>443ABAB8-E7B3-491A-B985-BEB9187030DB</key>
+        <array>
+            <string>2bc08970-6b20-4a8d-8c46-44eeedd95d70</string>
+        </array>
+    </dict>
+</dict>
+</plist>
