@@ -186,6 +186,8 @@ Flow.
 
 Microphone. After accepted, the controller sends ordinary Opus AudioFrames and a Misc.audio_format, the path RustDesk voice calls use. The host routes them to the virtual mic instead of its speakers. The voice-call accept step is skipped because the owner already allowed forwarding on the host.
 
+The host accepts incoming controller audio only while a MICROPHONE forward (or a voice call) is active for that connection, and drops it otherwise, logging once. Today src/server/connection.rs plays any AudioFormat and AudioFrame a controller sends whenever that controller's disable_audio option is off. That is wrong in two ways: a controller that turns off Play the Mac's sound here would silence its own mic, and any connected controller can play sound through the host without anyone accepting it. With mic routing, the second becomes a way to put a voice into the host's calls, so this gate is a security fix, not a nicety.
+
 Bitstream. CameraFrame carries H.264 in Annex B form (start codes), one access unit per EncodedVideoFrame, with SPS and PPS in front of every key frame (key: true). That is what hwcodec emits for the screen today, so a Windows controller (Phase 4) can send it unchanged; the macOS controller converts VideoToolbox's length-prefixed output before sending, and the host converts back before decoding (Host side).
 
 Why a new CameraFrame instead of reusing VideoFrame? VideoFrame.display means a host display. Overloading it for controller-to-host video would confuse older peers and upstream code; a wrapper keeps the intent explicit and still reuses the codec payload.
@@ -205,7 +207,13 @@ Camera capture and encode on macOS (new). RustDesk's camera module uses nokhwa o
 - hwcodec stays for Phase 4 (Windows), which already captures through nokhwa.
 - Add NSCameraUsageDescription to client/macos/Runner/Info.plist and com.apple.security.device.camera to both entitlements files; the microphone equivalents are already there.
 
-Microphone capture (exists). start_voice_call() in src/client/io_loop.rs already captures the default input through audio_service and sends Opus AudioFrames. Reuse it, started by DeviceForwardResponse instead of VoiceCallResponse, and let the user pick the input device.
+Microphone capture (exists, needs fixes). start_voice_call() in src/client/io_loop.rs already captures the default input through audio_service and sends Opus AudioFrames. Reuse it, started by DeviceForwardResponse instead of VoiceCallResponse, with three fixes, each listed in HOOKS.md:
+
+- Its relay thread spins on try_recv() with no blocking receive or sleep, using a full CPU core for the whole call. Use a blocking receive with a timeout.
+- It sets the input with set_voice_call_input_device(…, false), which keeps any device already set, so a later pick is ignored. Pass the chosen device with set_if_present = true and restart capture when it changes.
+- The chosen device is a process-wide global, shared by every session. Scope it per session.
+
+Echo. Without headphones, the far end's voice goes host → controller speakers → controller mic → host virtual mic → back into the call. The host app's echo canceller can't remove it: the speaker is on another machine and 100–300 ms away. Capture the controller mic with Apple's voice processing (AVAudioEngine's input node with voice processing on), which cancels echo against the controller's own speaker output. If Phase 2 shows that isn't enough, v1 asks for headphones, with a hint in the Devices menu when both Microphone and Play the Mac's sound here are on.
 
 Sending (new). A new src/client/device_forward.rs owns the camera thread: capture, encode, wrap in CameraFrame, hand to the session's sender. Its rules:
 
@@ -230,13 +238,14 @@ Camera: an extension with a sink stream. For an app that feeds a virtual camera,
 - Scale or letterbox every frame to the advertised format, so a 1080p or portrait camera never breaks the stream.
 - Keep the extension thin: no decoding, no networking. It runs sandboxed as the _cmiodalassistants role user and may not spawn processes or reach the window server.
 
-Microphone: two options, spike both.
+Microphone: two options, spike both, leaning towards Option A for v1.
 
-- Option A, virtual audio driver (known to work). A HAL plug-in in /Library/Audio/Plug-Ins/HAL, adapted from [BlackHole](https://github.com/ExistentialAudio/BlackHole) and named Remote Display Microphone. remotedisplayd plays decoded Opus into it and apps read it as an input. Cost: an admin password and a coreaudiod restart to install. BlackHole is GPL-3.0, which section 13 lets us combine with AGPL-3.0.
-- Option B, Core Audio taps (needs a spike). Since macOS 14.2 a process can tap audio output and use the tap as the input of an aggregate device ([Apple sample](https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps)). remotedisplayd would play the mic audio muted, tap its own output, and publish a public aggregate device named Remote Display Microphone. Nothing to install, but unproven: we don't know yet whether Zoom and Teams accept such a device or how it behaves across engine restarts.
-- Either way the routing change is small: AudioHandler::start_audio in src/client.rs always opens default_output_device() and needs a target-device parameter.
+- Option A, virtual audio driver (known to work). A HAL plug-in in /Library/Audio/Plug-Ins/HAL, adapted from [BlackHole](https://github.com/ExistentialAudio/BlackHole). Stock BlackHole puts input and output on one device, so the user or macOS could pick it as the system output and send all host sound, including the far end of the call, into the mic. Instead, publish Remote Display Microphone as an input-only device, so it never appears under Sound › Output, and feed it through a second, output-only device marked hidden (kAudioDevicePropertyIsHidden) that remotedisplayd opens by UID, or through shared memory. Cost: an admin password and a coreaudiod restart to install (launchctl kickstart -k system/com.apple.audio.coreaudiod, in the same admin step; confirm on macOS 14 and 26). BlackHole is GPL-3.0, which section 13 lets us combine with AGPL-3.0.
+- Option B, Core Audio taps (needs a spike). Since macOS 14.2 a process can tap audio output and use the tap as the input of an aggregate device ([Apple sample](https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps)). remotedisplayd would play the mic audio muted, tap its own output, and publish a public aggregate device named Remote Display Microphone. Nothing to install, but unproven: we don't know yet whether Zoom and Teams accept such a device, how it behaves across engine restarts, or what audio-capture permission it triggers. It also has a known failure mode: "muted when tapped" mutes only while something reads the tap, so before Zoom opens the device or after it closes it, the mic audio plays from the host's speakers, and the host's sound capture sends it back to the controller.
+- Either way, AudioHandler::start_audio in src/client.rs always opens default_output_device() and needs a target-device parameter.
+- The mic path also needs its own buffering. AudioHandler sizes its ring buffer for 3 seconds (AUDIO_BUFFER_MS), shrinks it only every 12 seconds or so and never below 600 ms, and sleeps inside the Core Audio output callback. That is too much latency for a call and can glitch. The virtual-mic and speaker paths use a separate jitter buffer: 40–100 ms target, drop the oldest audio on overflow, silence on underrun, no sleeping in the callback.
 
-Speakers: turn on the existing ScreenCaptureKit path. RustDesk captures system sound through ScreenCaptureKit behind the screencapturekit cargo feature. release/release-mac.sh builds the host without it (--features hwcodec), so src/server/audio_service.rs falls back to the default input device, usually the Mac's microphone. Enabling the feature, then testing it, gives controllers the host's real sound; Core Audio taps are the fallback.
+Speakers: turn on the existing ScreenCaptureKit path. RustDesk captures system sound through ScreenCaptureKit behind the screencapturekit cargo feature. release/release-mac.sh builds the host without it (--features hwcodec), so src/server/audio_service.rs falls back to the default input device, usually the Mac's microphone. Enabling the feature gives controllers the host's real sound, but isn't enough on its own: with the feature on, get_device() still falls back to get_audio_input(""), which ends at the host's default input device, whenever ScreenCaptureKit is unavailable or an audio-input option is set. On a Mac host, system-sound capture must never fall back to an input device; when ScreenCaptureKit audio is unavailable, the feature reports itself unavailable. This is a code change in Phase 3, not just a build flag. release/release-mac.sh builds both the client library and the server binary, so the change applies only to the server's loopback and leaves the client's mic capture alone. Core Audio taps are the fallback.
 
 Accepting requests. src/server/connection.rs handles the new messages:
 
@@ -257,6 +266,7 @@ Forwarding a camera or mic into another computer is sensitive in both directions
 | Media is exposed on the network | Media rides the existing encrypted session; no new listener, port or relay |
 | A stale feed lingers after a disconnect | The host stops the sink and shows the placeholder within 1 second of the session ending |
 | A second controller takes over a live device | One sender per device; later requests get busy |
+| A controller plays audio into the host without a request | Controller audio is accepted only while a mic forward or voice call is active for that connection; anything else is dropped (today any controller can) |
 | Malformed frames crash the host engine | Validate every width, height and frame rate before use; decode on a guarded thread; drop bad frames; fuzz the new messages |
 
 The last row is not hypothetical: FreeRDP shipped a crash in its camera redirection channel because one frame-rate field went unchecked ([CVE-2026-67302](https://explore.alas.aws.amazon.com/CVE-2026-67302.html)).
@@ -287,7 +297,12 @@ Every test runs against real apps on macOS 14 and macOS 26 hosts, on the project
 | Camera, end to end | Controller sends the test pattern; host opens Photo Booth, FaceTime, QuickTime, Zoom, Teams, and a WebRTC test page in Chrome and Safari | The card shows in every app and its clock advances smoothly |
 | Glass-to-glass latency | Film a stopwatch with the controller's camera; compare it with the host app's preview | Measured and recorded per build; the target is set after the spike |
 | Microphone | Zoom test call and macOS Dictation on the host | Speech is clear, and the host's sound doesn't echo back to the controller |
+| Mic latency | Clap into the controller mic; record the host's virtual mic | Under 150 ms from the controller mic to the host's virtual mic on a LAN |
+| Mic, host sound off | Microphone on, Play the Mac's sound here off | The mic still reaches the host |
+| Unrequested audio | Send AudioFormat and AudioFrame with no accepted request | The host drops them and logs once |
+| No headphones | Controller on built-in speakers and mic, both switches on, in a Zoom call | The far end hears no echo, or the Devices menu shows the headphones hint |
 | Speakers | Play a test tone on the host | The controller hears it, and the host's microphone is not sent |
+| Speakers, no ScreenCaptureKit | Revoke Screen Recording on the host, then turn the sound on | The switch says unavailable; the host's microphone is never sent |
 | Lip sync | Clap test recorded in a host app | Drift measured and recorded |
 | Disconnect | Cut the network mid-call | Placeholder within 1 second; the controller's camera light goes off |
 | Upgrade | Install a new build over the old one with Photo Booth open | Behaviour documented; no stale device after a relaunch |
@@ -304,10 +319,10 @@ Six phases, gated so the riskiest questions are answered before the main build s
 
 | Phase | Scope | Gate |
 |---|---|---|
-| **0 · Spike (start here)** | A standalone camera extension fed by a small command-line tool; try both microphone options | FaceTime and Zoom show frames pushed from a background process; mic option chosen |
+| **0 · Spike (start here)** | A standalone camera extension fed by a small command-line tool; try both microphone options | FaceTime and Zoom show frames pushed from a background process; mic option chosen, with Option A's input-only layout and Option B's unmuted-tap case both tested |
 | **1 · Camera, Mac to Mac** | Messages, AVFoundation capture, decode and sink feeder, extension packaging, Setup row, Devices menu | A Zoom call on the host uses the controller's camera over Tailscale |
 | **2 · Microphone** | Virtual mic (driver or Core Audio taps), routing on the host, the owner's switch | A Zoom test call and macOS Dictation on the host both pass |
-| **3 · System sound** | Turn on the `screencapturekit` feature for the host build; independent of Phases 1 and 2 | The controller hears a test tone, and the host's microphone is never sent |
+| **3 · System sound** | Turn on the `screencapturekit` feature for the host build and remove its fallback to the host's microphone; independent of Phases 1 and 2 | The controller hears a test tone, and the host's microphone is never sent |
 | **4 · More controllers** | Windows first, reusing RustDesk's existing camera capture; then iPad and Android | A Windows controller passes the camera tests |
 | **5 · Polish and upstream** | 1080p, lip sync, more than one camera; offer the reusable pieces to RustDesk | — |
 
@@ -318,8 +333,8 @@ There are no dates yet; they depend on who picks up each phase.
 ## Open questions
 
 - Does a process that only feeds a sink stream need the Camera permission? (Phase 0)
-- Microphone: a driver (Option A) or Core Audio taps (Option B)? Do Zoom and Teams accept a tap-backed aggregate device?
-- Can the driver hide its output side, so it never appears under Sound › Output?
+- Microphone: a driver (Option A) or Core Audio taps (Option B)? Do Zoom and Teams accept a tap-backed aggregate device? Leaning towards A (Host side); Phase 0 decides.
+- Can the driver hide its output side, so it never appears under Sound › Output? Proposed: yes, by design, with an input-only visible device fed through a hidden output-only one (Host side); Phase 0 confirms.
 - Camera formats: 720p only, or 720p and 1080p from the start?
 - Should the host delay mic audio to match video, or is unsynced good enough for calls?
 - One forwarded camera per host, or one per connected controller?
