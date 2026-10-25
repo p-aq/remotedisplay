@@ -23,3 +23,11 @@ decoding; until its first key frame it drops frames and asks for one.
 - One wire format for every controller: a Windows controller (Phase 4) can send what
   hwcodec already produces.
 - Conversion code on both macOS ends, small and testable with fuzzed input.
+
+## Measured (2026-10-24)
+
+`docs/tests/camera-extension/` (`make codec-test`, `make codec-test-asan`): the AVCC →
+Annex B → AVCC round trip decodes 300/300 frames at 47–60 dB luma PSNR. A decoder that
+joins mid-stream waits for the next key frame. A resolution change rebuilds the session.
+20,000 corrupted access units cause no memory errors under the sanitizers. The decoder's
+limits and outcomes are in decision 0016.
