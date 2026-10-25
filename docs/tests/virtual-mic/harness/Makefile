@@ -75,16 +75,19 @@ driver: $(BLACKHOLE)
 	codesign --sign "$(CS_ID)" --identifier app.remotedisplay.spike.mic --options runtime --force $(DRIVER)
 	@echo "Built $(DRIVER)"
 
-# Needs an admin: copies into /Library and restarts coreaudiod (decision 0013).
+# Needs an admin: copies into /Library and restarts coreaudiod (decision 0013). Touches
+# only our own bundle name. `launchctl kickstart -k` is refused while SIP is on
+# (macOS 15.7, error 150); killing coreaudiod lets launchd restart it, as BlackHole's
+# own installer does.
 install-driver:
 	@test -d $(DRIVER) || { echo "run make driver first"; exit 1; }
 	rm -rf "$(HAL_DIR)/$(DRIVER_NAME).driver"
 	cp -R $(DRIVER) "$(HAL_DIR)/"
-	launchctl kickstart -k system/com.apple.audio.coreaudiod
+	killall coreaudiod
 
 uninstall-driver:
 	rm -rf "$(HAL_DIR)/$(DRIVER_NAME).driver"
-	launchctl kickstart -k system/com.apple.audio.coreaudiod
+	killall coreaudiod
 
 list:
 	$(PROBE) --list
