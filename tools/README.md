@@ -109,6 +109,24 @@ compiles its Objective-C helpers (`pomace`) with `xcodebuild`; with only the Com
 Tools it stops at "tool 'xcodebuild' requires Xcode". On macOS 15.x the newest Xcode that
 runs is 26.3; Xcode 26.4 and later need macOS Tahoe.
 
+Tested with Xcode 26.3 (17C529, from the Mac App Store) selected only for the build shell,
+so `xcode-select` stays on the Command Line Tools:
+
+```bash
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer   # before SDKROOT in env.sh
+cargo build --locked --release --features hwcodec,screencapturekit --bin rustdesk
+```
+
+It builds in about 3 minutes and the binary links `ScreenCaptureKit.framework`. `pomace`
+needs only the macOS SDK: no iOS platform, simulator or Metal toolchain. `xcodebuild`
+leaves a small `pomace-*` folder in `~/Library/Developer/Xcode/DerivedData` and creates
+`~/Library/Caches/org.swift.swiftpm`. Opening the Xcode app the first time does much
+more: it installs system packages into `/Library/Developer` and `/Library/Apple` (the
+latter protected by SIP, so it can't be removed by hand) and offers iOS and watchOS
+simulators (about 18 GB, not needed). To keep a Mac closer to how it was, accept the
+license with `sudo xcodebuild -license` instead of opening the app. Whether the build
+works without the first-launch packages wasn't tested here: they were already installed.
+
 ## Default codec: VP9 (server)
 
 Upstream's auto codec picks AV1 if the client supports it; on LAN that buys nothing and its decode at
