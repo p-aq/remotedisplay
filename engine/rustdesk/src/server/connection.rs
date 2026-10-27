@@ -73,6 +73,9 @@ use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use crate::virtual_display_manager;
 pub type Sender = mpsc::UnboundedSender<(Instant, Arc<Message>)>;
 
+// remotedisplay: the host plays a controller's audio only during an accepted call.
+mod audio_gate;
+
 lazy_static::lazy_static! {
     // remotedisplay: last accepted video refresh per display (-1 = all), see refresh_video_display.
     static ref REFRESH_LIMITER: Mutex<HashMap<i64, std::time::Instant>> = Default::default();
@@ -368,6 +371,8 @@ pub struct Connection {
     from_switch: bool,
     voice_call_request_timestamp: Option<NonZeroI64>,
     voice_calling: bool,
+    // remotedisplay: see audio_gate.rs.
+    audio_gate: audio_gate::AudioGate,
     options_in_login: Option<OptionMessage>,
     #[cfg(not(any(target_os = "ios")))]
     pressed_modifiers: HashSet<rdev::Key>,
@@ -563,6 +568,7 @@ impl Connection {
             audio_sender: None,
             voice_call_request_timestamp: None,
             voice_calling: false,
+            audio_gate: Default::default(),
             options_in_login: None,
             #[cfg(not(any(target_os = "ios")))]
             pressed_modifiers: Default::default(),
@@ -3561,7 +3567,8 @@ impl Connection {
                         _ => {}
                     },
                     Some(misc::Union::AudioFormat(format)) => {
-                        if !self.disable_audio {
+                        // remotedisplay: only during an accepted call, whatever disable_audio says.
+                        if self.audio_gate.accepts(self.voice_calling) {
                             // Drop the audio sender previously.
                             drop(std::mem::replace(&mut self.audio_sender, None));
                             self.audio_sender = Some(start_audio_thread());
@@ -3657,7 +3664,8 @@ impl Connection {
                     _ => {}
                 },
                 Some(message::Union::AudioFrame(frame)) => {
-                    if !self.disable_audio {
+                    // remotedisplay: only during an accepted call, whatever disable_audio says.
+                    if self.audio_gate.accepts(self.voice_calling) {
                         if let Some(sender) = &self.audio_sender {
                             allow_err!(sender.send(MediaData::AudioFrame(Box::new(frame))));
                         } else {
