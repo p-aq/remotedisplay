@@ -119,7 +119,7 @@ means a Phase 0 measurement exists; *built* means merged into the feature branch
 | Virtual mic, Option A (driver), **chosen** | 0 → 2 | Harness tested: installs, carries the signal bit-exact, input-only, uninstalls cleanly; Zoom/Teams and reboot still to check | `docs/tests/virtual-mic/harness/` (driver target) → `server-mac/AudioDriver/` |
 | Virtual mic, Option B (tap), fallback | 0 | Harness tested: works with `CATapMuted`, no prompts; device lives only with its process | `docs/tests/virtual-mic/harness/mic_sink.mm` |
 | Virtual-mic feeding | 0 → 2 | Harness tested for both options | `docs/tests/virtual-mic/harness/mic_sink.mm` → engine, behind the jitter buffer |
-| Messages 100–104 | 1 | Planned | `libs/hbb_common/protos/message.proto` |
+| Messages 200–204 | 1 | Built and tested (wire numbers, round trip, older peers ignore them); nothing sends or handles them yet | `libs/hbb_common/protos/message.proto`, tests in `tests/device_forward_messages.rs` |
 | Controller capture and encode | 1 | Encode tested in the harness (capture not yet) | `docs/tests/camera-extension/harness/camera_codec.mm` → `src/platform/macos_camera_capture.mm` |
 | Host decode (Annex B → frames) | 1 | Tested in the harness, incl. sanitizer fuzz | `docs/tests/camera-extension/harness/camera_codec.mm` → in front of `src/platform/macos_camera_sink.mm` |
 | Camera sender and channel | 1 | Planned | `src/client/device_forward.rs`, `io_loop.rs` hook |
@@ -142,9 +142,10 @@ Changes against the spec as first written (`4df72ed`). Each has a record.
 | Report state to the app "over the existing IPC" | User-level `--set-device-forward` plus status in `remotedisplay-perms.json` | No such IPC exists; this reuses the two patterns that do | [0009](decisions/0009-owner-switch-cli-and-status-file.md) |
 | Add the install entitlement to the app's entitlements | One entitlements file per binary; extension signed first | The Makefile signs every binary with one file | [0010](decisions/0010-entitlements-per-binary.md) |
 | The extension shows the card while the sink is idle | The extension owns the placeholder on a 500 ms timer, always drains the sink, shares no storage | A crashed feeder would leave a frozen frame; the extension runs as another user | [0011](decisions/0011-extension-owns-placeholder.md) |
-| Show each switch only when its capability flag is present | Devices menu always shown; status strings; `DeviceStatus` (104) | Flags are sent once and can't say why | [0012](decisions/0012-devices-menu-and-device-status.md) |
+| Show each switch only when its capability flag is present | Devices menu always shown; status strings; `DeviceStatus` (204) | Flags are sent once and can't say why | [0012](decisions/0012-devices-menu-and-device-status.md) |
 | Turn on `screencapturekit` | Turn it on and remove its fallback to the host's mic | The feature still falls back to the default input device | [0008](decisions/0008-mic-path.md) |
 | Build the extension with `xcodebuild` from its own target | Phase 0: `swiftc` and a Makefile, like `server-mac/Makefile`; Phase 1 decides | No Xcode project to maintain; matches how the server app is already built | [0014](decisions/0014-phase0-camera-harness.md) |
+| Reserve `Message.union` 100–119, pending upstream's maintainer | 200–219, decided in this fork; forwarding takes 200–204 | The fork owns its protocol; 100 is the obvious block for anyone else's additions, upstream Remote Display's included | [0017](decisions/0017-reserved-message-range-200.md) |
 | Option A: a driver "adapted from BlackHole" | BlackHole configured by its build constants, unmodified; fetched at a pinned commit for Phase 0 | Its constants already give the input-only layout; Phase 2 decides between vendoring and a pinned fetch | [0015](decisions/0015-virtual-mic-harness.md) |
 
 ## Change log
@@ -160,3 +161,4 @@ Changes against the spec as first written (`4df72ed`). Each has a record.
 | 2026-10-26 | Phase 3 engine side (issue #4): host sound never falls back to an input device; `screencapturekit` on for the server binary only, which needs full Xcode to build; gate tests in `docs/tests/system-sound/` pass | [0008](decisions/0008-mic-path.md) Phase 3 results |
 | 2026-10-26 | Host audio gate (issue #3): a controller's audio plays on the host only during an accepted call, independent of `disable_audio`; a Remote Display host drops it all until the mic forward exists | [0007](decisions/0007-host-audio-gate.md) implementation |
 | 2026-10-26 | Owner's switch (issue #2): `--set-device-forward on\|off`, `device_forward` in the perms file, the Settings toggle; the perms file stays booleans-only, so forwarding status will need its own file | [0009](decisions/0009-owner-switch-cli-and-status-file.md) implementation |
+| 2026-10-27 | Message range decided in the fork: Remote Display reserves `Message.union` 200–219, not 100–119 (issue #14 closed); the five forwarding messages added at 200–204 with tests (issue #2) | [0017](decisions/0017-reserved-message-range-200.md) supersedes [0002](decisions/0002-reserved-message-range.md) |

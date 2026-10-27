@@ -949,6 +949,36 @@ message TerminalResponse {
   }
 }
 
+// remotedisplay: camera and microphone forwarding (docs/specs/camera-audio-forwarding.md).
+// Message.union numbers 200-219 are reserved for Remote Display, so upstream additions
+// (33, 34, ...) never collide (decision 0017).
+message DeviceForwardRequest {          // controller -> host
+  enum Kind { CAMERA = 0; MICROPHONE = 1; }
+  Kind kind = 1;
+  bool on = 2;
+  int32 width = 3;                      // camera only
+  int32 height = 4;
+  int32 fps = 5;
+  string device_name = 6;               // shown in the host's menu
+}
+message DeviceForwardResponse {         // host -> controller
+  DeviceForwardRequest.Kind kind = 1;
+  bool accepted = 2;
+  string reason = 3;                    // "not-installed" | "not-approved" | "not-allowed" | "busy"
+}
+message DeviceStatus {                  // host -> controller, whenever it changes
+  DeviceForwardRequest.Kind kind = 1;
+  string status = 2;                    // "ready" | "not-installed" | "not-approved" | "not-allowed"
+}
+message CameraFrame {                   // controller -> host
+  VideoFrame frame = 1;                 // H.264 Annex B in h264s (decision 0005)
+  int64 capture_time_us = 2;            // controller clock, for latency and sync
+}
+message CameraControl {                 // host -> controller
+  bool key_frame_request = 1;           // at most one per 500 ms
+  int32 target_bitrate_kbps = 2;
+}
+
 message Message {
   oneof union {
     SignedId signed_id = 3;
@@ -981,5 +1011,11 @@ message Message {
     ScreenshotResponse screenshot_response= 30;
     TerminalAction terminal_action = 31;
     TerminalResponse terminal_response = 32;
+    // remotedisplay: 200-219 are Remote Display's (decision 0017).
+    DeviceForwardRequest device_forward_request = 200;
+    DeviceForwardResponse device_forward_response = 201;
+    CameraFrame camera_frame = 202;
+    CameraControl camera_control = 203;
+    DeviceStatus device_status = 204;
   }
 }
