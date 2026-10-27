@@ -62,6 +62,53 @@ codesign --force --sign RemoteDisplaySign --identifier app.remotedisplay.engine 
 With a stable identity, permissions are granted **only once** and survive rebuilds.
 There are 2 permissions, physically on the Mac: Screen Recording and Accessibility.
 
+## Building the macOS engine with only the Command Line Tools (tested recipe — October 2026)
+
+For a contributor Mac without Xcode or Homebrew build tools (tested on an M4 Mac mini,
+macOS 15.7.7, Command Line Tools with SDK 26.2). Builds the server engine,
+`target/release/rustdesk`, which is the `ENGINE_BIN` that `server-mac/Makefile` bundles.
+Everything goes into one folder, here called `$TOOLCHAINS`; nothing is written to the home
+folder, `/usr/local`, `/opt/homebrew` or shell profiles, so deleting the folder (plus
+`target/`) undoes it.
+
+| Piece | Version | Why this one |
+|---|---|---|
+| Rust (rustup, `--no-modify-path`, `RUSTUP_HOME`/`CARGO_HOME` inside `$TOOLCHAINS`) | 1.81.0 + rustfmt | Upstream's `MAC_RUST_VERSION` in `.github/workflows/flutter-build.yml` |
+| vcpkg, **full** clone, `bootstrap-vcpkg.sh -disableMetrics` | commit `120deac` | The manifest's baseline. A shallow clone can't resolve the manifest's version overrides |
+| NASM, built from the source release | 2.16.03 | aom's port requires it even on arm64. Upstream CI warns against NASM 3.x (Homebrew's), and nasm.us's macOS binary is Intel-only, so build it: `./configure && make nasm ndisasm` |
+| pkgconf as `pkg-config`, built from source (`--disable-shared`) | 3.0.10 | `vcpkg_fixup_pkgconfig` needs it after aom builds |
+| libclang for bindgen | the Command Line Tools' (Apple clang 17) | Works; no `llvm@17` needed (deprecated in Homebrew). The engine's codecs compile, so the aom/vpx structs come out right |
+
+nasm.us publishes no checksums; both source tarballs were checked against the SHA-256 in
+Homebrew's formula for the same version.
+
+```bash
+# env.sh, sourced in every build shell
+export RUSTUP_HOME=$TOOLCHAINS/rustup CARGO_HOME=$TOOLCHAINS/cargo
+export VCPKG_ROOT=$TOOLCHAINS/vcpkg VCPKG_DEFAULT_BINARY_CACHE=$TOOLCHAINS/vcpkg-cache VCPKG_DISABLE_METRICS=1
+export PATH="$TOOLCHAINS/bin:$CARGO_HOME/bin:$VCPKG_ROOT:$PATH"   # bin/ holds nasm and pkg-config
+export SDKROOT=$(xcrun --show-sdk-path)
+export LIBCLANG_PATH=/Library/Developer/CommandLineTools/usr/lib
+export BINDGEN_EXTRA_CLANG_ARGS="-isysroot $SDKROOT"
+
+# from engine/rustdesk/
+$VCPKG_ROOT/vcpkg install --x-install-root=$VCPKG_ROOT/installed --clean-buildtrees-after-build
+cargo build --locked --release --features hwcodec --bin rustdesk
+```
+
+Results: vcpkg builds aom, ffmpeg 7.1, libjpeg-turbo, libvpx, libyuv, opus and its helper
+ports (pkgconf, meson) for `arm64-osx`. The engine builds in 3 m 42 s with 53 upstream
+warnings. The binary (24 MB) links only system libraries and prints `1.4.9` for
+`--version`. Disk: 4.9 GB for `$TOOLCHAINS`, 1.7 GB for `target/`.
+
+Not covered yet: the Flutter client library (`--features flutter`) and the
+flutter_rust_bridge codegen, which need Flutter 3.24.5.
+
+**The `screencapturekit` feature needs full Xcode.** It pulls in `cidre`, whose build script
+compiles its Objective-C helpers (`pomace`) with `xcodebuild`; with only the Command Line
+Tools it stops at "tool 'xcodebuild' requires Xcode". On macOS 15.x the newest Xcode that
+runs is 26.3; Xcode 26.4 and later need macOS Tahoe.
+
 ## Default codec: VP9 (server)
 
 Upstream's auto codec picks AV1 if the client supports it; on LAN that buys nothing and its decode at
