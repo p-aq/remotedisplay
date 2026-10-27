@@ -27,3 +27,26 @@ and editing the TOML doesn't reach a running engine.
 
 - No new channel between app and engine; the app's model (poll, don't push) stays.
 - Status reaches the menu bar within about 2 s, which is enough for a badge.
+
+## Implementation (2026-10-26)
+
+- `remotedisplayd --set-device-forward on|off` in `core_main.rs`, next to
+  `--set-lan-password` (`HOOKS.md` E3). `on` stores `rd-allow-device-forward = "Y"`;
+  `off` removes the option, so off stays the default. It honours the same
+  CLI-settings policy check as `--set-lan-password`. The logic is in
+  `src/server/device_forward.rs`, the file the spec plans for host request handling.
+- The `--server` adds `"device_forward": true|false` to `remotedisplay-perms.json` on its
+  2 s loop. The app parses that file as `[String: Bool]`, so it can only hold booleans:
+  any other value makes the parse fail and the app fall back to its own permission
+  checks. The forwarding state (which device, which controller) therefore needs the
+  status file next to it, not new keys in this one.
+- The app's Settings gains *Let controllers share their camera and microphone*. It runs
+  the CLI, shows the chosen value until the engine's file agrees (up to 10 s), and is
+  disabled while the service is off, like the password.
+- "Stop every live forward and tell each controller `not-allowed`" waits for forwards to
+  exist (request handling, Phase 1).
+- Tested: the CLI against a scratch `HOME` with no server running (on stores the option,
+  off removes it, anything else is refused and changes nothing); unit test for the
+  argument; the engine and the app build. Not tested here: the switch against a live
+  `--server`. Running one would put this Mac on the LAN; the path is upstream's
+  `ipc::set_option`, the same one the client app uses for every option.
