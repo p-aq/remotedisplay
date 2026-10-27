@@ -15,3 +15,13 @@ Notes:
 - Everything else `client/` needs from the engine is consumed as a package
   (`flutter_hbb` by path) without modifying it: `RemotePage`, models, toolbar
   helpers (`toolbarImageQuality`/`toolbarCodec`), `handleUriLink`, etc.
+
+## Engine hooks for camera & audio forwarding
+
+Server-side hooks from the [camera & audio forwarding spec](docs/specs/camera-audio-forwarding.md),
+listed here as [decision 0008](docs/architecture/decisions/0008-mic-path.md) requires. Same
+rules: marked `remotedisplay:`, the logic in a new file, the upstream file only calls it.
+
+| # | File (engine/rustdesk/) | What | Why |
+|---|---|---|---|
+| E1 | `src/server/audio_service.rs` (`mod host_sound` and the `screencapturekit` `get_device()`), new `src/server/audio_service/host_sound.rs` | With `screencapturekit`, host sound is ScreenCaptureKit's system audio; when that is unavailable or the owner's named input is missing, capture fails instead of falling back to the default input. Voice calls keep upstream's behaviour | The fallback sends the host's microphone, i.e. the room, to every controller (issue #4). Without the feature (the client library) nothing changes |
