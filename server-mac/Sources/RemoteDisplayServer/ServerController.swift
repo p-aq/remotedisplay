@@ -31,6 +31,12 @@ final class ServerController {
     var sessions: [String] = []
     /// Whether a permanent password is set (RemoteDisplay.toml → password not empty).
     var passwordSet = false
+    /// The owner's switch for camera and microphone forwarding, as the engine reports it
+    /// in remotedisplay-perms.json (decision 0009). Off by default.
+    var deviceForwardOn = false
+    /// What the owner just chose, shown until the engine's file (rewritten every 2 s)
+    /// agrees, so the toggle doesn't flick back. After `until` the engine's value wins.
+    private var pendingDeviceForward: (value: Bool, until: Date)?
     var engineVersion = "—"
     /// Newer release published on GitHub (e.g. "1.0.3"), or nil. Checked at launch and
     /// every 6 hours; the update itself stays manual (the link opens the releases page).
@@ -178,9 +184,15 @@ final class ServerController {
         // so a 2s connect-probe kept the Mac awake forever and churned the engine's
         // connection handler (`Input thread exited` every 2s).
         serviceRunning = processRunning()
-        if let (s, a) = readEnginePerms() {
+        if let (s, a, f) = readEnginePerms() {
             screenOK = s
             accessibilityOK = a
+            if let p = pendingDeviceForward, p.value != f, Date() < p.until {
+                deviceForwardOn = p.value
+            } else {
+                pendingDeviceForward = nil
+                deviceForwardOn = f
+            }
         } else {
             screenOK = Permissions.screenRecording()
             accessibilityOK = Permissions.accessibility()
@@ -241,11 +253,11 @@ final class ServerController {
         }
     }
 
-    private func readEnginePerms() -> (screen: Bool, accessibility: Bool)? {
+    private func readEnginePerms() -> (screen: Bool, accessibility: Bool, deviceForward: Bool)? {
         guard let data = FileManager.default.contents(atPath: permsPath),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Bool]
         else { return nil }
-        return (obj["screen"] ?? false, obj["accessibility"] ?? false)
+        return (obj["screen"] ?? false, obj["accessibility"] ?? false, obj["device_forward"] ?? false)
     }
 
     private func processRunning() -> Bool { enginePid() != nil }
@@ -691,6 +703,35 @@ final class ServerController {
             DispatchQueue.main.async {
                 self.refresh()
                 completion(ok, msg)
+            }
+        }
+    }
+
+    // MARK: - Camera and microphone sharing
+
+    /// The owner's switch (decision 0009). `--set-device-forward` talks IPC to the
+    /// running engine, like the password; the engine reports the result back through
+    /// remotedisplay-perms.json.
+    func setDeviceForward(_ on: Bool) {
+        if let problem = engineProblem {
+            lastError = problem
+            return
+        }
+        guard serviceRunning else {
+            lastError = "Turn the service on first: the running engine keeps this setting."
+            return
+        }
+        pendingDeviceForward = (on, Date().addingTimeInterval(10))
+        deviceForwardOn = on
+        let path = enginePath
+        DispatchQueue.global().async {
+            let r = Self.runProcess(path, ["--set-device-forward", on ? "on" : "off"], timeout: 15, mergeStderr: true)
+            DispatchQueue.main.async {
+                if !r.output.contains("Done!") {
+                    self.pendingDeviceForward = nil
+                    self.lastError = r.failure ?? "Could not change camera and microphone sharing."
+                }
+                self.refresh()
             }
         }
     }

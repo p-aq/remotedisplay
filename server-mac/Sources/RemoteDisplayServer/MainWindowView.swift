@@ -229,6 +229,9 @@ struct MainWindowView: View {
                 Spacer()
                 Text("Password only · direct IP · LAN discovery").foregroundStyle(.secondary)
             }
+            Toggle("Let controllers share their camera and microphone", isOn: Binding(
+                get: { c.deviceForwardOn }, set: { c.setDeviceForward($0) }))
+                .disabled(!c.serviceRunning)
             if let err = c.lastError {
                 Text(err).font(.caption).foregroundStyle(.red)
             }
