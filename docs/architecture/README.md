@@ -91,7 +91,7 @@ flowchart LR
     gate["connection.rs<br/>owner switch, one sender, audio gate"]:::new
     sink["device_forward.rs +<br/>macos_camera_sink.mm<br/>Annex B → AVCC, decode, feed"]:::new
     ext["Camera extension<br/>Remote Display Camera,<br/>owns the placeholder"]:::new
-    vmic["Virtual mic<br/>input-only, low-latency buffer"]:::new
+    vmic["Virtual mic (driver, Option A)<br/>input-only, low-latency buffer"]:::new
     sck["ScreenCaptureKit loopback<br/>no mic fallback"]:::new
     app["Server app<br/>Setup rows, switch, badge"]:::new
     cli["--set-device-forward<br/>+ status in perms.json"]:::new
@@ -116,7 +116,9 @@ means a Phase 0 measurement exists; *built* means merged into the feature branch
 | Camera extension | 0 → 1 | Harness built; gate tests need a signed build | `docs/tests/camera-extension/harness/CameraExtension/` → `server-mac/CameraExtension/` |
 | Camera extension container (activate, remove) | 0 → 1 | Harness built; activation refused unsigned, as expected | `docs/tests/camera-extension/harness/ContainerApp/` → server app Setup row |
 | Camera sink feeder | 0 → 1 | Harness built; enumerates CoreMediaIO devices | `docs/tests/camera-extension/harness/camera_sink.mm` → `src/platform/macos_camera_sink.mm` |
-| Virtual mic | 0 → 2 | Planned | `server-mac/AudioDriver/` (Option A) |
+| Virtual mic, Option A (driver), **chosen** | 0 → 2 | Harness tested: installs, carries the signal bit-exact, input-only, uninstalls cleanly; Zoom/Teams and reboot still to check | `docs/tests/virtual-mic/harness/` (driver target) → `server-mac/AudioDriver/` |
+| Virtual mic, Option B (tap), fallback | 0 | Harness tested: works with `CATapMuted`, no prompts; device lives only with its process | `docs/tests/virtual-mic/harness/mic_sink.mm` |
+| Virtual-mic feeding | 0 → 2 | Harness tested for both options | `docs/tests/virtual-mic/harness/mic_sink.mm` → engine, behind the jitter buffer |
 | Messages 100–104 | 1 | Planned | `libs/hbb_common/protos/message.proto` |
 | Controller capture and encode | 1 | Planned | `src/platform/macos_camera_capture.mm` |
 | Camera sender and channel | 1 | Planned | `src/client/device_forward.rs`, `io_loop.rs` hook |
@@ -141,6 +143,7 @@ Changes against the spec as first written (`4df72ed`). Each has a record.
 | Show each switch only when its capability flag is present | Devices menu always shown; status strings; `DeviceStatus` (104) | Flags are sent once and can't say why | [0012](decisions/0012-devices-menu-and-device-status.md) |
 | Turn on `screencapturekit` | Turn it on and remove its fallback to the host's mic | The feature still falls back to the default input device | [0008](decisions/0008-mic-path.md) |
 | Build the extension with `xcodebuild` from its own target | Phase 0: `swiftc` and a Makefile, like `server-mac/Makefile`; Phase 1 decides | No Xcode project to maintain; matches how the server app is already built | [0014](decisions/0014-phase0-camera-harness.md) |
+| Option A: a driver "adapted from BlackHole" | BlackHole configured by its build constants, unmodified; fetched at a pinned commit for Phase 0 | Its constants already give the input-only layout; Phase 2 decides between vendoring and a pinned fetch | [0015](decisions/0015-virtual-mic-harness.md) |
 
 ## Change log
 
@@ -149,3 +152,5 @@ Changes against the spec as first written (`4df72ed`). Each has a record.
 | 2026-10-23 | Spec added (`4df72ed`) | [0001](decisions/0001-spec-first-gated-phases.md)–[0003](decisions/0003-cameraframe-message.md) |
 | 2026-10-24 | Spec revised after the review in PR #16 (`6731a75`…`8d0fc62`); this folder added | [0004](decisions/0004-camera-encode-videotoolbox.md)–[0013](decisions/0013-virtual-mic-input-only-driver.md) |
 | 2026-10-24 | Phase 0 camera harness in `docs/tests/camera-extension/` (issue #1): builds; gate tests wait for a signed build | [0014](decisions/0014-phase0-camera-harness.md) |
+| 2026-10-24 | Phase 0 virtual-mic harness in `docs/tests/virtual-mic/` (issue #1) | [0015](decisions/0015-virtual-mic-harness.md) |
+| 2026-10-24 | Mic gate tests run: both options carry the signal; Option A chosen; the coreaudiod restart is `killall`, since `launchctl kickstart` is refused under SIP | [0013](decisions/0013-virtual-mic-input-only-driver.md) accepted |

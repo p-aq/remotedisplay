@@ -1,0 +1,124 @@
+# Virtual microphone — Phase 0 (2026-10-24)
+
+Measures the two ways the host could publish "Remote Display Microphone", an input
+device Zoom, Teams and Dictation can pick (issue #1, [spec](../../specs/camera-audio-forwarding.md)
+Host side › Microphone, [decision 0013](../../architecture/decisions/0013-virtual-mic-input-only-driver.md)):
+
+- **Option A**: a HAL driver, built from BlackHole, with a visible input-only device and a
+  hidden output-only twin that `remotedisplayd` plays into.
+- **Option B**: no driver. `remotedisplayd` plays into the default output, taps its own
+  output with a Core Audio process tap, and publishes an aggregate device built on the tap.
+
+**Status:** both options work. Each carries the test signal bit-exact into an
+input-only "Remote Display Microphone" ([results](#phase-0-gate-tests)). Option A is
+chosen ([decision 0013](../../architecture/decisions/0013-virtual-mic-input-only-driver.md)).
+Still to run: Zoom and Teams picking the device (tests 4 and 8), and the reboot and
+restart tests (5 and 10).
+
+## What's here
+
+| Harness | What it is | Becomes in Phase 2 |
+|---|---|---|
+| `harness/mic_sink.mm`, `.h` | Opens either option and plays whatever a render callback supplies, once per I/O cycle. `extern "C"` `MacMicSink…` functions, `-std=c++17`, no ARC, like `src/platform/macos.mm`. | Engine code behind the host's mic routing; the callback reads the low-latency jitter buffer ([decision 0008](../../architecture/decisions/0008-mic-path.md)) |
+| `harness/mic_feeder.mm` | `rd-mic-feeder --option a\|b`: a 50 ms, 1 kHz burst at every whole second of host time. Option B takes `--mute muted\|when-tapped\|unmuted` and `--with-output-subdevice`. | Replaced by decoded controller audio |
+| `harness/mic_probe.mm` | `rd-mic-probe`: records from an input device like Zoom would, counts bursts and measures latency. Since bursts start on whole host seconds, each onset's time modulo one second is the latency, with no link between the two processes. Exits 0 on PASS. | A Phase 2 test |
+| `harness/driver/Info.plist` + Makefile `driver` | Option A: BlackHole v0.7.2 (commit `561d934`) fetched at build time and configured, not modified, with its own build constants ([decision 0015](../../architecture/decisions/0015-virtual-mic-harness.md)). | `server-mac/AudioDriver/` |
+| `harness/Makefile` | Builds everything with the Command Line Tools; `install-driver` / `uninstall-driver` need an admin and touch only our own bundle. | Folded into `server-mac/Makefile` |
+| `harness/gate.sh` | One command per gate test: starts the feeder, waits with nothing reading (phase 1), probes (phase 2), stops. `ANNOUNCE=1` speaks the phases aloud for listening tests. | — |
+
+## What was tested and the result
+
+On a Mac mini (Apple silicon, macOS 15.7.7, Command Line Tools with SDK 26.2), run from
+an agent's shell without microphone or audio-capture grants:
+
+1. **Build**: feeder and probe with no warnings; the driver as a universal bundle exporting
+   `BlackHole_Create`, with the device names and UIDs set by the constants. BlackHole.c
+   itself gives 7 `-Wformat-extra-args` warnings (device names without a `%i`), upstream
+   code left as it is. **PASS**
+2. **Device list**: `rd-mic-probe --list` shows every device with its input and output
+   channels (including Zoom's and Teams' own virtual devices on this Mac). **PASS**
+3. **Option A without the driver**: the feeder exits with `'!dev'` and a pointer to
+   `make install-driver`. **PASS**
+4. **Option B publishes the device**: with `--mute muted`, another process sees
+   "Remote Display Microphone" as **input-only** (2 in, 0 out). It disappears when the
+   feeder exits. **PASS**
+5. **Option B carries the signal**: the probe recorded 10 s from it and got only digital
+   silence. **INCONCLUSIVE**: neither process had a microphone or audio-capture grant
+   (see 6).
+6. **Recording a real microphone from the same shell**: `AudioDeviceCreateIOProcIDWithBlock`
+   blocks in coreaudiod's TCC check, waiting for a consent prompt (stack sampled). Stopped.
+
+### Phase 0 gate tests
+
+Run 2026-10-24 on the same Mac, from the Claude app's Terminal panel, with a person
+listening at the speakers and typing the admin password.
+
+| # | Test | How | Passes when | Result |
+|---|---|---|---|---|
+| 1 | B, muted | `ANNOUNCE=1 ./gate.sh b-muted` | Probe PASS; the speakers stay silent throughout | **PASS**: 10/10 bursts, peak 0.300 (as sent), silent in both phases |
+| 2 | B, muted when tapped | `ANNOUNCE=1 ./gate.sh b-when-tapped` | Record whether bursts are audible until something reads the device (the review's A-5 case) | **Confirmed**: beeps in phase 1 only, stopping once the probe reads; probe PASS. Option B must use `CATapMuted` |
+| 3 | B, permission | Tests 1–2 | Record which prompts appear | **No prompts** for the tap, the aggregate or reading it. Not yet tried on a Mac that never granted anything |
+| 4 | B in apps | Zoom, Teams, Dictation: pick Remote Display Microphone with the feeder running | The input meter jumps once a second | Not run; moot after decision 0013 |
+| 5 | B restart | Kill the feeder while Zoom uses the device, then restart it | Record what Zoom does | Not run; moot after decision 0013 |
+| 6 | A, install | `make && sudo make install-driver` | coreaudiod restarts without a reboot; Remote Display Microphone lists with 2 in, 0 out, and no feeder device | **PASS** after a fix: `launchctl kickstart -k` is refused with SIP on (error 150), `killall coreaudiod` works. The ad-hoc-signed driver loads; the feeder is hidden from the list and found by UID |
+| 7 | A, signal | `./gate.sh a-signal` | Probe PASS | **PASS**: 10/10 bursts, peak 0.300, exactly 24,000 non-zero samples |
+| 8 | A in apps | As test 4 | As test 4 | Pending |
+| 9 | A, never an output | system_profiler and CoreAudio | Remote Display Microphone has no output channels and can't become a default device | **PASS**: system_profiler shows 2 input channels and no output; `CanBeDefaultDevice` and `CanBeDefaultSystemDevice` are 0 on both devices; the feeder is hidden |
+| 10 | A, persistence | Stop the feeder; restart the Mac | The device stays (silent), so the choice in Zoom sticks | Pending (reboot) |
+| 11 | A, uninstall | `sudo make uninstall-driver` | The device is gone without a reboot; the HAL folder is as before | **PASS**: device gone; the HAL folder holds the same four third-party drivers as before the test |
+| 12 | Latency | Probe medians from tests 1 and 7 | Record per option | A: **0.0 ms**; B: **32 ms**, steady to 0.1 ms. These are timestamp offsets: they include buffering between devices but not the one I/O cycle (about 10 ms) every input path has |
+
+## Runtime findings
+
+- **`killall coreaudiod`, not `launchctl kickstart`.** With SIP on (macOS 15.7),
+  `launchctl kickstart -k system/com.apple.audio.coreaudiod` fails with error 150,
+  "Operation not permitted while System Integrity Protection is engaged". Killing
+  coreaudiod as root lets launchd restart it, which is what BlackHole's own installer
+  does. Audio drops for about a second.
+- **An ad-hoc-signed HAL driver loads.** coreaudiod loaded our unsigned-by-a-team build,
+  so contributor builds can test Option A without a developer account.
+- **`CATapMuted` keeps Option B silent; `CATapMutedWhenTapped` doesn't.** The SDK's
+  `CATapMuteBehavior` has three values. With muted-when-tapped the bursts played from
+  the speakers until the probe started reading (test 2), exactly the review's warning.
+  With muted they never reached the speakers while the tap still carried them (test 1).
+- **Reading a virtual input didn't prompt; opening a real microphone did.** From the
+  Terminal panel, neither the tap, the aggregate, nor reading Remote Display Microphone
+  asked for consent. From an agent's background shell, reading the aggregate gave digital
+  silence, and opening the USB microphone blocked in TCC.
+- **A tap-only aggregate is input-only.** Without the output subdevice that Apple's
+  sample adds for its clock, the aggregate has no output channels, so it can't be picked
+  as a speaker. Option B gets that property for free; test 9's question doesn't arise.
+- **Option B's device lives only as long as its process.** It vanished when the feeder
+  exited. The spec wants "the devices exist even between sessions, so the choice sticks":
+  `remotedisplayd` runs whenever the server runs, but an engine restart or crash takes
+  the device away mid-call. Test 5 measures how Zoom copes.
+- **Object IDs differ between processes.** The feeder reported aggregate 147; the probe
+  saw the same device as 113. Pass device UIDs between processes, never `AudioObjectID`s.
+- **Opening a real input blocks until TCC answers.** `remotedisplayd` and the client must
+  never open an input device on a thread that something else waits on.
+- **BlackHole already supports decision 0013's layout.** Its mirror constants
+  (`kDevice_HasOutput=false`, `kDevice2_IsHidden=true`, `kDevice2_HasInput=false`) give a
+  visible input-only device and a hidden output-only one sharing a buffer, with no code
+  changes; upstream documents this pairing.
+
+## Re-running
+
+In Terminal, from this folder:
+
+```sh
+cd harness
+make                                   # feeder, probe, driver (fetches BlackHole v0.7.2)
+
+# Option B: no install, nothing left behind when the feeder exits
+ANNOUNCE=1 ./gate.sh b-muted
+ANNOUNCE=1 ./gate.sh b-when-tapped     # listen: beeps in phase one only
+
+# Option A: needs an admin; uninstall restores the HAL folder
+./gate.sh a-install
+./gate.sh a-signal
+./gate.sh a-uninstall
+```
+
+`LEVEL` sets the burst volume (default 0.3, or 0.1 for muted-when-tapped), `LISTEN` the
+seconds with nothing reading, `DURATION` the probe's seconds. Before installing, note
+what's in `/Library/Audio/Plug-Ins/HAL/`; after `a-uninstall` it should match.
