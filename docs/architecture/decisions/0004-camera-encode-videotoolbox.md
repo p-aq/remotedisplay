@@ -26,3 +26,10 @@ hwcodec stays for Phase 4 (Windows).
 - Zero-copy capture to encode, and key frame and bitrate control without rebuilding.
 - One more `.mm` in `src/platform/`, listed in `engine/SYNC.md`.
 - The hwcodec check on a controller-only Mac (finding V-3) doesn't matter for camera.
+
+## Measured (2026-10-24)
+
+`docs/tests/camera-extension/` (`make codec-test`) confirms the decision on an Apple M4:
+`VTCompressionSession` takes the NV12 IOSurface buffers directly, forces key frames per
+frame, changes bitrate live (2,000 → 500 kbit/s tracked within 3%), and encodes a 720p
+frame in about 5 ms. Encoder mode and fallbacks: decision 0016.

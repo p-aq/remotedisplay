@@ -120,7 +120,8 @@ means a Phase 0 measurement exists; *built* means merged into the feature branch
 | Virtual mic, Option B (tap), fallback | 0 | Harness tested: works with `CATapMuted`, no prompts; device lives only with its process | `docs/tests/virtual-mic/harness/mic_sink.mm` |
 | Virtual-mic feeding | 0 → 2 | Harness tested for both options | `docs/tests/virtual-mic/harness/mic_sink.mm` → engine, behind the jitter buffer |
 | Messages 100–104 | 1 | Planned | `libs/hbb_common/protos/message.proto` |
-| Controller capture and encode | 1 | Planned | `src/platform/macos_camera_capture.mm` |
+| Controller capture and encode | 1 | Encode tested in the harness (capture not yet) | `docs/tests/camera-extension/harness/camera_codec.mm` → `src/platform/macos_camera_capture.mm` |
+| Host decode (Annex B → frames) | 1 | Tested in the harness, incl. sanitizer fuzz | `docs/tests/camera-extension/harness/camera_codec.mm` → in front of `src/platform/macos_camera_sink.mm` |
 | Camera sender and channel | 1 | Planned | `src/client/device_forward.rs`, `io_loop.rs` hook |
 | Host request handling and audio gate | 1–2 | Planned | `src/server/connection.rs`, `src/server/device_forward.rs` |
 | Owner's switch and status | 1 | Planned | `--set-device-forward`, `remotedisplay-perms.json` |
@@ -154,3 +155,4 @@ Changes against the spec as first written (`4df72ed`). Each has a record.
 | 2026-10-24 | Phase 0 camera harness in `docs/tests/camera-extension/` (issue #1): builds; gate tests wait for a signed build | [0014](decisions/0014-phase0-camera-harness.md) |
 | 2026-10-24 | Phase 0 virtual-mic harness in `docs/tests/virtual-mic/` (issue #1) | [0015](decisions/0015-virtual-mic-harness.md) |
 | 2026-10-24 | Mic gate tests run: both options carry the signal; Option A chosen; the coreaudiod restart is `killall`, since `launchctl kickstart` is refused under SIP | [0013](decisions/0013-virtual-mic-input-only-driver.md) accepted |
+| 2026-10-24 | Camera codec path measured in `docs/tests/camera-extension/` (issue #2): encode, Annex B, decode, limits and fuzz all pass; low-latency hardware encoder chosen | [0016](decisions/0016-camera-encoder-and-decoder-contract.md); notes in [0004](decisions/0004-camera-encode-videotoolbox.md), [0005](decisions/0005-annex-b-wire-format.md) |

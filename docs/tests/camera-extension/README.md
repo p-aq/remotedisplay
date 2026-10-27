@@ -5,8 +5,9 @@ Measures the risky macOS half of camera forwarding before any engine change (iss
 Display Camera, fed by a background process through its sink stream, and read by
 FaceTime, Zoom and other apps through its source stream.
 
-**Status:** the harness builds; the gate tests below haven't run yet, because they need
-an Apple Developer team to sign the extension. Results go in the tables as they come in.
+**Status:** the harness builds, and the codec path (encode, wire format, decode) passes
+every check. The extension's gate tests haven't run yet, because they need an Apple
+Developer team to sign the extension. Results go in the tables as they come in.
 
 ## What's here
 
@@ -15,7 +16,10 @@ an Apple Developer team to sign the extension. Results go in the tables as they 
 | `harness/CameraExtension/` | The extension (Swift): one device, a source and a sink stream at 1280×720, 30 fps, NV12. Forwards sink frames, drains the sink with or without readers, shows a placeholder card after 500 ms without frames, drops frames of the wrong size or format ([decision 0011](../../architecture/decisions/0011-extension-owns-placeholder.md)). | `server-mac/CameraExtension/` |
 | `harness/ContainerApp/` | The app that embeds the extension and asks macOS to activate or remove it (Swift). Window, or `--activate` / `--deactivate` from a terminal. | The Camera row's Install… and Remove buttons in Remote Display Server |
 | `harness/camera_sink.mm`, `.h` | Finds the device and pushes pixel buffers into its sink with the CoreMediaIO C API. `extern "C"` `MacCameraSink…` functions, `-std=c++17`, no ARC: the same shape and flags as `src/platform/macos.mm`. | `engine/rustdesk/src/platform/macos_camera_sink.mm`, plus decode ([decision 0005](../../architecture/decisions/0005-annex-b-wire-format.md)) |
-| `harness/feeder.mm` | `rd-camera-feeder`: a moving test card with a millisecond clock and colour bands, pushed at 30 fps. `--list`, `--seconds`, `--fps`, `--size`, `--snapshot`. Built twice: with a camera usage string and entitlement, and bare (`rd-camera-feeder-bare`), for issue #7. | Replaced by decoded `CameraFrame`s in `remotedisplayd` |
+| `harness/feeder.mm` | `rd-camera-feeder`: pushes the test card at 30 fps. `--list`, `--seconds`, `--fps`, `--size`, `--snapshot`. Built twice: with a camera usage string and entitlement, and bare (`rd-camera-feeder-bare`), for issue #7. | Replaced by decoded `CameraFrame`s in `remotedisplayd` |
+| `harness/test_card.mm`, `.h` | The test card: a moving bar, a millisecond clock and colour bands, drawn straight into NV12. Shared by the feeder and the codec test. | — |
+| `harness/camera_codec.mm`, `.h` | H.264 encode with `VTCompressionSession` → Annex B, and Annex B → AVCC → `VTDecompressionSession`, with input limits ([decisions 0004, 0005, 0016](../../architecture/decisions/README.md)). | Encoder: `src/platform/macos_camera_capture.mm`. Decoder: in front of `macos_camera_sink.mm` |
+| `harness/codec_test.mm` | `rd-camera-codec-test`: ten checks of the codec path in one process. Needs no camera, extension, signing or permission. | A Phase 1 test |
 | `harness/Makefile` | Builds and signs everything with the Command Line Tools ([decision 0014](../../architecture/decisions/0014-phase0-camera-harness.md)). | Folded into `server-mac/Makefile` |
 
 ## What was tested and the result
@@ -50,7 +54,42 @@ no signing identity):
 | 8 | Update | `make install activate VERSION=2` with Photo Booth open | Record what Photo Booth shows before and after it relaunches | Pending |
 | 9 | Tart image | Approve the extension once in a Tart VM through its window, then snapshot | The snapshot boots with the extension active | Pending |
 
+### Codec path (2026-10-24, issue #2)
+
+`make codec-test` and `make codec-test-asan` on the same Mac mini (Apple M4). 1280×720
+at 30 fps and 2 Mbit/s, a key frame at least every 2 s, 300 frames of the test card:
+
+| Check | What it shows | Result |
+|---|---|---|
+| annex-b-framing | Every access unit starts with a start code; SPS and PPS ride on exactly the key frames | **PASS** (300/300) |
+| key-frames | Key frames at the start, on demand, and never more than 2 s apart | **PASS**: 0, 60, 100 (forced), 160, 220, 280. A forced key frame resets the 2 s timer |
+| no-reordering | One frame out per frame in, in presentation order (no B-frames) | **PASS** |
+| encode-latency | Time from handing a frame to the encoder until its access unit arrives | **PASS**: median 5.1 ms, p95 5.6 ms; the session's first frame takes about 42 ms |
+| round-trip | Every frame decodes, and how close it is to the source | **PASS**: 300/300, luma PSNR median 60 dB, min 47 dB; decode median 0.9 ms |
+| join-mid-stream | A decoder that starts on a delta frame asks for a key frame until one comes | **PASS**: 50 requests, then 240/240 decoded |
+| resolution-change | New SPS/PPS rebuild the decoder, and back again | **PASS**: 640×360 then 1280×720 |
+| limits | Streams over 1920×1080, access units over 4 MB and empty input never reach VideoToolbox | **PASS**; a valid key frame decodes straight after |
+| bitrate-change | Lowering the target live (`CameraControl`) on noisy content | **PASS**: 1,895 → 488 kbit/s for a 2,000 → 500 target |
+| fuzz | Corrupted access units: flipped bytes, truncation, garbage, splices, stray start codes, broken SPS/PPS | **PASS**: 20,000 under AddressSanitizer and UndefinedBehaviorSanitizer, no memory errors; a clean key frame recovered the decoder 200/200 times |
+
+Encoder comparison (both pass every check):
+
+| | `h264.rtvc` (low-latency, hardware required) | `ave.avc` (`--no-low-latency`) |
+|---|---|---|
+| Encode latency, median / p95 / max | 5.1 / 5.6 / 42.6 ms | 5.6 / 6.2 / 11.2 ms |
+| Luma PSNR, median / min | 60 / 47 dB | 50 / 41 dB |
+| Bitrate after 2,000 → 500 | 488 kbit/s | 499 kbit/s |
+
 ## Runtime findings
+
+- **Low-latency mode uses a different encoder.** Asking VideoToolbox for low-latency
+  rate control selects `com.apple.videotoolbox.videoencoder.h264.rtvc`, Apple's real-time
+  conferencing encoder. It doesn't support `UsingHardwareAcceleratedVideoEncoder`
+  (−12900), so that property can't be used to check for hardware. It is still chosen
+  when hardware is *required*, so the encoder asks for hardware up front. A software
+  variant, `h264.rtvc.sw`, also exists and is what requiring hardware keeps us off.
+- **The first frame of a session is slow** (about 42 ms against about 5 ms afterwards).
+  Create the encoder when the camera is switched on, not on the first frame.
 
 - macOS refuses to activate a system extension from an app without
   `com.apple.developer.system-extension.install`, and that entitlement is restricted:
@@ -91,6 +130,14 @@ log stream --predicate 'subsystem == "app.remotedisplay.spike.camera"'
 ```
 
 5. Remove: `make deactivate`, then delete `/Applications/RDCameraSpike.app`.
+
+The codec checks need none of the above:
+
+```sh
+cd docs/tests/camera-extension/harness
+make codec-test        # both encoders
+make codec-test-asan   # sanitizers, 20,000 fuzzed access units
+```
 
 Not covered here: the two microphone options, which get their own harness in
 `docs/tests/virtual-mic/`.
