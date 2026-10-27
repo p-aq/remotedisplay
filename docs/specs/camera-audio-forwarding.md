@@ -118,7 +118,7 @@ Highlighted boxes are new in this spec. Not drawn: the Remote Display Server app
 | Devices menu | client/lib/session/session_toolbar.dart | New menu |
 | macOS camera capture and encode | src/platform/macos_camera_capture.mm | New file |
 | Camera sender | src/client/device_forward.rs, src/client/io_loop.rs | New file, hook |
-| Messages | libs/hbb_common/protos/message.proto | New fields 100–104 |
+| Messages | libs/hbb_common/protos/message.proto | New fields 200–204 |
 | Request handling, mic routing | src/server/connection.rs, src/server/device_forward.rs | Changed, new file |
 | Decode and sink feeder | src/platform/macos_camera_sink.mm | New file |
 | Camera extension | server-mac/CameraExtension/ | New Xcode target |
@@ -131,10 +131,12 @@ Highlighted boxes are new in this spec. Not drawn: the Remote Display Server app
 
 Five new messages carry the feature, and the mic reuses RustDesk's existing AudioFrame. Every change is additive, so peers that don't know the new messages ignore them.
 
+Reserved numbers. Remote Display reserves Message.union numbers 200–219 for its own messages ([decision 0017](../architecture/decisions/0017-reserved-message-range-200.md)). RustDesk adds its messages at the end of the oneof (34 on its master in October 2026), so the block stays clear of upstream. This feature takes 200–204; later Remote Display features take the next free numbers in the block.
+
 Proposed additions to libs/hbb_common/protos/message.proto:
 
 ```proto
-// remotedisplay: device forwarding. Message.union numbers 100–119 are reserved
+// remotedisplay: device forwarding. Message.union numbers 200–219 are reserved
 // for Remote Display, so upstream additions (33, 34, …) never collide.
 message DeviceForwardRequest {          // controller → host
   enum Kind { CAMERA = 0; MICROPHONE = 1; }
@@ -166,11 +168,11 @@ message CameraControl {                 // host → controller
 message Message {
   oneof union {
     // … existing fields 3–32 …
-    DeviceForwardRequest device_forward_request = 100;
-    DeviceForwardResponse device_forward_response = 101;
-    CameraFrame camera_frame = 102;
-    CameraControl camera_control = 103;
-    DeviceStatus device_status = 104;
+    DeviceForwardRequest device_forward_request = 200;
+    DeviceForwardResponse device_forward_response = 201;
+    CameraFrame camera_frame = 202;
+    CameraControl camera_control = 203;
+    DeviceStatus device_status = 204;
   }
 }
 ```
@@ -370,7 +372,7 @@ There are no dates yet; they depend on who picks up each phase.
 - Should the host delay mic audio to match video, or is unsynced good enough for calls?
 - One forwarded camera per host, or one per connected controller?
 - Does ScreenCaptureKit sound capture interfere with a call running on the host (echo, ducking)?
-- Is 100–119 acceptable to the maintainer as Remote Display's reserved range of message numbers?
+- ~~Is 100–119 acceptable to the maintainer as Remote Display's reserved range of message numbers?~~ Answered: this fork reserves 200–219 for its own messages without waiting on upstream ([decision 0017](../architecture/decisions/0017-reserved-message-range-200.md)).
 - Should any of this go upstream to RustDesk, for example macOS camera capture for "View camera"?
 
 ## How to contribute
