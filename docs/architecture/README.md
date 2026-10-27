@@ -123,7 +123,8 @@ means a Phase 0 measurement exists; *built* means merged into the feature branch
 | Controller capture and encode | 1 | Encode tested in the harness (capture not yet) | `docs/tests/camera-extension/harness/camera_codec.mm` → `src/platform/macos_camera_capture.mm` |
 | Host decode (Annex B → frames) | 1 | Tested in the harness, incl. sanitizer fuzz | `docs/tests/camera-extension/harness/camera_codec.mm` → in front of `src/platform/macos_camera_sink.mm` |
 | Camera sender and channel | 1 | Planned | `src/client/device_forward.rs`, `io_loop.rs` hook |
-| Host request handling and audio gate | 1–2 | Planned | `src/server/connection.rs`, `src/server/device_forward.rs` |
+| Host request handling | 1–2 | Planned | `src/server/connection.rs`, `src/server/device_forward.rs` |
+| Host audio gate | 2 | Built for voice calls (unit-tested); the mic forward joins it in Phase 2 | `src/server/connection.rs` + `connection/audio_gate.rs` |
 | Owner's switch and status | 1 | Planned | `--set-device-forward`, `remotedisplay-perms.json` |
 | Devices menu | 1 | Planned | `client/lib/session/session_toolbar.dart` |
 | System sound | 3 | Engine guard and release flag done; gate tests pass (the frames carry the tone, nothing is sent without Screen Recording); the switch waits for the Devices menu | `release/release-mac.sh`, `src/server/audio_service.rs` + `audio_service/host_sound.rs`; tests in `docs/tests/system-sound/` |
@@ -157,3 +158,4 @@ Changes against the spec as first written (`4df72ed`). Each has a record.
 | 2026-10-24 | Mic gate tests run: both options carry the signal; Option A chosen; the coreaudiod restart is `killall`, since `launchctl kickstart` is refused under SIP | [0013](decisions/0013-virtual-mic-input-only-driver.md) accepted |
 | 2026-10-24 | Camera codec path measured in `docs/tests/camera-extension/` (issue #2): encode, Annex B, decode, limits and fuzz all pass; low-latency hardware encoder chosen | [0016](decisions/0016-camera-encoder-and-decoder-contract.md); notes in [0004](decisions/0004-camera-encode-videotoolbox.md), [0005](decisions/0005-annex-b-wire-format.md) |
 | 2026-10-26 | Phase 3 engine side (issue #4): host sound never falls back to an input device; `screencapturekit` on for the server binary only, which needs full Xcode to build; gate tests in `docs/tests/system-sound/` pass | [0008](decisions/0008-mic-path.md) Phase 3 results |
+| 2026-10-26 | Host audio gate (issue #3): a controller's audio plays on the host only during an accepted call, independent of `disable_audio`; a Remote Display host drops it all until the mic forward exists | [0007](decisions/0007-host-audio-gate.md) implementation |
