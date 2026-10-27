@@ -104,6 +104,11 @@ warnings. The binary (24 MB) links only system libraries and prints `1.4.9` for
 Not covered yet: the Flutter client library (`--features flutter`) and the
 flutter_rust_bridge codegen, which need Flutter 3.24.5.
 
+**The `screencapturekit` feature needs full Xcode.** It pulls in `cidre`, whose build script
+compiles its Objective-C helpers (`pomace`) with `xcodebuild`; with only the Command Line
+Tools it stops at "tool 'xcodebuild' requires Xcode". On macOS 15.x the newest Xcode that
+runs is 26.3; Xcode 26.4 and later need macOS Tahoe.
+
 ## Default codec: VP9 (server)
 
 Upstream's auto codec picks AV1 if the client supports it; on LAN that buys nothing and its decode at
