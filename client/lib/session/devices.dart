@@ -144,6 +144,14 @@ class Camera {
   }
 }
 
+/// The engine's test card, listed as a camera when the app runs with
+/// `--camera-test-pattern` (src/platform/macos_camera_capture.rs).
+const kTestPatternCamera = 'remotedisplay-test-pattern';
+
+/// Whether sending camera [id] needs this Mac's camera access: every camera but
+/// the test card.
+bool needsCameraAccess(String id) => id != kTestPatternCamera;
+
 /// The camera to forward: the one on, else the one picked last time if it's
 /// still there, else the first.
 Camera? pickCamera(List<Camera> cameras, ForwardState state, String saved) {
