@@ -33,3 +33,29 @@ hwcodec stays for Phase 4 (Windows).
 `VTCompressionSession` takes the NV12 IOSurface buffers directly, forces key frames per
 frame, changes bitrate live (2,000 → 500 kbit/s tracked within 3%), and encodes a 720p
 frame in about 5 ms. Encoder mode and fallbacks: decision 0016.
+
+## Implementation (2026-10-27)
+
+`src/platform/macos_camera_capture.mm`, wrapped by `macos_camera_capture.rs` in the
+same folder (`HOOKS.md` E5). It compiles as its own `cc` library next to `macos.mm`,
+with the same flags. Tested with a USB camera in `docs/tests/camera-capture/`: 720p at
+29.8 fps, and the host's decoder decodes every unit.
+
+- **Encoder:** the harness encoder, unchanged in behaviour (decision 0016). The
+  encoder is created after the camera starts, at the size the camera actually
+  delivers. A frame of any other size is dropped and counted, so the encoder never
+  scales.
+- **Format:** the camera's own format closest in area to the request, up to the
+  host's 1920×1080, preferring one that reaches the frame rate. The frame duration
+  is one the format lists, because USB cameras often offer only fixed rates and any
+  other value throws.
+- **The one-frame slot (decision 0006)** holds at most one frame inside the encoder.
+  A frame that arrives while the encoder is busy is dropped before encoding. The
+  sender's backlog rule gets `set_skipping()`, and frames it has to drop after
+  encoding get `request_key_frame()`.
+- **Listing:** cameras are listed without Remote Display Camera (manufacturer
+  "Remote Display"), so a Mac that is both host and controller can't forward its own
+  virtual camera back.
+- **Client app:** it gains `NSCameraUsageDescription`, `com.apple.security.device.camera`
+  and `NSCameraUseContinuityCameraDeviceType`. Without the last one, AVFoundation
+  leaves Continuity Camera out of the list.

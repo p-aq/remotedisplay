@@ -213,7 +213,7 @@ Camera capture and encode on macOS (new). RustDesk's camera module uses nokhwa o
 - Force key frames per frame with kVTEncodeFrameOptionKey_ForceKeyFrame, and change bitrate live with AverageBitRate and DataRateLimits.
 - Convert the length-prefixed output to Annex B, adding SPS and PPS from the format description in front of each key frame.
 - hwcodec stays for Phase 4 (Windows), which already captures through nokhwa.
-- Add NSCameraUsageDescription to client/macos/Runner/Info.plist and com.apple.security.device.camera to both entitlements files; the microphone equivalents are already there.
+- Add NSCameraUsageDescription and NSCameraUseContinuityCameraDeviceType (without it AVFoundation leaves Continuity Camera out) to client/macos/Runner/Info.plist, and com.apple.security.device.camera to both entitlements files; the microphone equivalents are already there.
 
 Microphone capture (exists, needs fixes). start_voice_call() in src/client/io_loop.rs already captures the default input through audio_service and sends Opus AudioFrames. Reuse it, started by DeviceForwardResponse instead of VoiceCallResponse, with three fixes, each listed in HOOKS.md:
 
