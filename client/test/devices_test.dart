@@ -76,6 +76,8 @@ void main() {
           "This Mac didn't answer");
       expect(stopReason('camera-failed', 'camera', hostIsMac: true),
           "The camera didn't start");
+      expect(stopReason('camera-lost', 'camera', hostIsMac: true),
+          'The camera was disconnected or stopped working');
       expect(stopReason('not-allowed', 'camera', hostIsMac: true),
           hostReason('not-allowed', 'camera', hostIsMac: true));
       expect(stopReason('refused', 'camera', hostIsMac: true),
