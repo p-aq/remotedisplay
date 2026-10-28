@@ -31,8 +31,10 @@ fn build_mac() {
     }
     for framework in [
         "AVFoundation",
+        "CoreGraphics",
         "CoreMedia",
         "CoreMediaIO",
+        "CoreText",
         "CoreVideo",
         "VideoToolbox",
     ] {

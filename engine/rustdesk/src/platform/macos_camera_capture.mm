@@ -3,14 +3,20 @@
 // Captures with AVCaptureSession in NV12, encodes with VTCompressionSession and hands
 // out H.264 Annex B, one access unit per call, with SPS and PPS in front of key frames.
 // The encoder is the one measured in docs/tests/camera-extension/harness/camera_codec.mm.
+// With --camera-test-pattern, a generated test card takes the camera's place (spec,
+// Controller side › Testing without a camera): same encoder, same rules, no camera.
 // Same shape and flags as macos.mm: extern "C" functions named Mac…, -std=c++17, no ARC.
 // Called from macos_camera_capture.rs.
 
 #import <AVFoundation/AVFoundation.h>
+#include <CoreGraphics/CoreGraphics.h>
 #include <CoreMedia/CoreMedia.h>
+#include <CoreText/CoreText.h>
 #include <VideoToolbox/VideoToolbox.h>
 #include <atomic>
 #include <string.h>
+#include <sys/time.h>
+#include <time.h>
 #include <vector>
 
 enum {
@@ -32,6 +38,9 @@ static bool WithinLimits(int width, int height) {
 static NSString* const kOurManufacturer = @"Remote Display";
 static NSString* const kOurModel = @"Remote Display Camera";
 static const uint8_t kStartCode[4] = {0, 0, 0, 1};
+// The test card's camera ID and name; TEST_PATTERN_ID in macos_camera_capture.rs.
+static const char* const kTestPatternID = "remotedisplay-test-pattern";
+static const char* const kTestPatternName = "Test pattern";
 
 typedef void (*MacCameraEncoded)(void* ctx, const uint8_t* annexB, size_t length, bool keyFrame, int64_t ptsUs);
 typedef void (*MacCameraAccessDone)(void* ctx, bool granted);
@@ -63,6 +72,9 @@ struct MacCameraCapture;
 
 struct MacCameraCapture {
     AVCaptureSession* session = nil;
+    dispatch_source_t timer = NULL;      // the test card's frame clock, instead of a session
+    CVPixelBufferPoolRef pool = NULL;    // the test card's frames
+    uint64_t cardFrames = 0;             // the test card's frame counter
     AVCaptureVideoDataOutput* output = nil;
     RemoteDisplayCameraOutput* delegate = nil;
     dispatch_queue_t queue = NULL;  // serial: frames, encode calls and bitrate changes
@@ -304,24 +316,23 @@ static bool CreateEncoder(MacCameraCapture* c, int bitrateKbps, MacCameraCapture
     return true;
 }
 
-// On the capture queue. Frames are dropped here, before encoding, never after
-// (decision 0006): while starting, while the sender skips, and while the encoder still
-// has the previous frame.
-static void OnFrame(MacCameraCapture* c, CMSampleBufferRef sample) {
+// On the capture queue, for each frame. Frames are dropped here, before encoding, never
+// after (decision 0006): while starting, while the sender skips, and while the encoder
+// still has the previous frame.
+static bool Admit(MacCameraCapture* c) {
     c->captured++;
     if (!c->ready.load(std::memory_order_acquire) || c->skipping) {
         c->skipped++;
-        return;
+        return false;
     }
     if (c->inEncoder > 0) {
         c->busy++;
-        return;
+        return false;
     }
-    CVPixelBufferRef frame = CMSampleBufferGetImageBuffer(sample);
-    if (!frame || (int)CVPixelBufferGetWidth(frame) != c->width || (int)CVPixelBufferGetHeight(frame) != c->height) {
-        c->mismatched++;
-        return;
-    }
+    return true;
+}
+
+static void Encode(MacCameraCapture* c, CVPixelBufferRef frame, CMTime pts) {
     bool key = c->keyFrame.exchange(false);
     CFDictionaryRef props = NULL;
     if (key) {
@@ -330,13 +341,106 @@ static void OnFrame(MacCameraCapture* c, CMSampleBufferRef sample) {
         props = CFDictionaryCreate(NULL, k, v, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     }
     c->inEncoder++;
-    OSStatus err = VTCompressionSessionEncodeFrame(c->encoder, frame, CMSampleBufferGetPresentationTimeStamp(sample),
-                                                   CMTimeMake(1, c->fps), props, NULL, NULL);
+    OSStatus err = VTCompressionSessionEncodeFrame(c->encoder, frame, pts, CMTimeMake(1, c->fps), props, NULL, NULL);
     if (props) CFRelease(props);
     if (err != noErr) {
         c->inEncoder--;
         c->failed++;
         if (key) c->keyFrame = true;
+    }
+}
+
+static void OnFrame(MacCameraCapture* c, CMSampleBufferRef sample) {
+    if (!Admit(c)) return;
+    CVPixelBufferRef frame = CMSampleBufferGetImageBuffer(sample);
+    if (!frame || (int)CVPixelBufferGetWidth(frame) != c->width || (int)CVPixelBufferGetHeight(frame) != c->height) {
+        c->mismatched++;
+        return;
+    }
+    Encode(c, frame, CMSampleBufferGetPresentationTimeStamp(sample));
+}
+
+// The test card: 75% colour bars, a box that sweeps across and back every 4 seconds, and
+// a clock with milliseconds and a frame counter, so a frozen, late or jerky picture shows
+// on the host at a glance.
+static void DrawText(CGContextRef cg, const char* text, CGFloat size, CGFloat x, CGFloat y) {
+    CTFontRef font = CTFontCreateWithName(CFSTR("Menlo"), size, NULL);
+    CFStringRef string = CFStringCreateWithCString(NULL, text, kCFStringEncodingUTF8);
+    const void* keys[] = {kCTFontAttributeName, kCTForegroundColorFromContextAttributeName};
+    const void* values[] = {font, kCFBooleanTrue};
+    CFDictionaryRef attributes =
+        CFDictionaryCreate(NULL, keys, values, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFAttributedStringRef attributed = CFAttributedStringCreate(NULL, string, attributes);
+    CTLineRef line = CTLineCreateWithAttributedString(attributed);
+    // Centred on x.
+    CGContextSetTextPosition(cg, x - CTLineGetTypographicBounds(line, NULL, NULL, NULL) / 2, y);
+    CTLineDraw(line, cg);
+    CFRelease(line);
+    CFRelease(attributed);
+    CFRelease(attributes);
+    CFRelease(string);
+    CFRelease(font);
+}
+
+static void DrawCard(CVPixelBufferRef buffer, uint64_t frame, int fps) {
+    CVPixelBufferLockBaseAddress(buffer, 0);
+    const CGFloat w = CVPixelBufferGetWidth(buffer), h = CVPixelBufferGetHeight(buffer);
+    CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGContextRef cg = CGBitmapContextCreate(CVPixelBufferGetBaseAddress(buffer), w, h, 8,
+                                            CVPixelBufferGetBytesPerRow(buffer), space,
+                                            kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
+    if (cg) {
+        // Bars over the top two thirds (Core Graphics counts from the bottom).
+        static const CGFloat bars[7][3] = {{.75, .75, .75}, {.75, .75, 0}, {0, .75, .75}, {0, .75, 0},
+                                           {.75, 0, .75},   {.75, 0, 0},   {0, 0, .75}};
+        for (int i = 0; i < 7; i++) {
+            CGContextSetRGBFillColor(cg, bars[i][0], bars[i][1], bars[i][2], 1);
+            CGContextFillRect(cg, CGRectMake(floor(w * i / 7), h / 3, ceil(w / 7), h * 2 / 3));
+        }
+        // The bottom third: near black, with the sweeping box.
+        CGContextSetRGBFillColor(cg, .06, .06, .06, 1);
+        CGContextFillRect(cg, CGRectMake(0, 0, w, h / 3));
+        const CGFloat box = h / 9, period = 4.0 * fps;
+        const CGFloat phase = fmod((CGFloat)frame, period) / period;  // 0…1 over 4 s
+        const CGFloat travel = (phase < .5 ? phase * 2 : (1 - phase) * 2) * (w - box);
+        CGContextSetRGBFillColor(cg, 1, 1, 1, 1);
+        CGContextFillRect(cg, CGRectMake(travel, h / 3 - box * 1.5, box, box));
+
+        // The clock on a dark panel in the middle of the bars.
+        struct timeval now;
+        gettimeofday(&now, NULL);
+        struct tm local;
+        localtime_r(&now.tv_sec, &local);
+        char clock[32], caption[96];
+        snprintf(clock, sizeof(clock), "%02d:%02d:%02d.%03d", local.tm_hour, local.tm_min, local.tm_sec,
+                 (int)(now.tv_usec / 1000));
+        snprintf(caption, sizeof(caption), "Remote Display test pattern  ·  frame %llu  ·  %dx%d at %d fps",
+                 (unsigned long long)frame, (int)w, (int)h, fps);
+        CGContextSetRGBFillColor(cg, 0, 0, 0, .85);
+        CGContextFillRect(cg, CGRectMake(w * .15, h * .5, w * .7, h * .3));
+        CGContextSetRGBFillColor(cg, 1, 1, 1, 1);
+        DrawText(cg, clock, h / 8, w / 2, h * .6);
+        DrawText(cg, caption, h / 36, w / 2, h * .53);
+        CGContextRelease(cg);
+    }
+    CGColorSpaceRelease(space);
+    CVPixelBufferUnlockBaseAddress(buffer, 0);
+}
+
+// On the capture queue, at the card's frame rate.
+static void OnCardFrame(MacCameraCapture* c) {
+    @autoreleasepool {
+        uint64_t frame = c->cardFrames++;
+        if (!Admit(c)) return;
+        CVPixelBufferRef buffer = NULL;
+        if (CVPixelBufferPoolCreatePixelBuffer(NULL, c->pool, &buffer) != kCVReturnSuccess) {
+            c->failed++;
+            return;
+        }
+        DrawCard(buffer, frame, c->fps);
+        // Host time, like the camera's own timestamps.
+        Encode(c, buffer, CMClockGetTime(CMClockGetHostTimeClock()));
+        CVPixelBufferRelease(buffer);
     }
 }
 
@@ -379,6 +483,11 @@ static void Release(MacCameraCapture* c) {
         // The last frame callback has returned and no more are queued.
         dispatch_sync(c->queue, ^{});
     }
+    if (c->timer) {
+        dispatch_source_cancel(c->timer);
+        dispatch_sync(c->queue, ^{});
+        dispatch_release(c->timer);
+    }
     c->ready = false;
     if (c->encoder) {
         VTCompressionSessionCompleteFrames(c->encoder, kCMTimeInvalid);
@@ -389,12 +498,57 @@ static void Release(MacCameraCapture* c) {
     [c->output release];
     [c->delegate release];
     [c->session release];
+    if (c->pool) CVPixelBufferPoolRelease(c->pool);
     if (c->queue) dispatch_release(c->queue);
     delete c;
 }
 
-// Opens the camera (`uniqueID`, or the default one when NULL or empty) as close as it
-// offers to width×height at fps, and encodes it at bitrateKbps. `callback` runs on a
+// The test card at width×height (1280×720 outside the host's limits) and fps (30 outside
+// 1–60). Needs no camera and no camera access.
+static MacCameraCapture* StartTestPattern(int width, int height, int fps, int bitrateKbps, MacCameraEncoded callback,
+                                          void* ctx, MacCameraCaptureInfo* info, int* error) {
+    MacCameraCapture* c = new MacCameraCapture();
+    c->callback = callback;
+    c->ctx = ctx;
+    bool fits = WithinLimits(width, height);
+    c->width = fits ? width & ~1 : 1280;
+    c->height = fits ? height & ~1 : 720;
+    c->fps = fps >= 1 && fps <= 60 ? fps : 30;
+    c->queue = dispatch_queue_create("app.remotedisplay.camera", DISPATCH_QUEUE_SERIAL);
+    NSDictionary* attributes = @{
+        (id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
+        (id)kCVPixelBufferWidthKey : @(c->width),
+        (id)kCVPixelBufferHeightKey : @(c->height),
+        (id)kCVPixelBufferIOSurfacePropertiesKey : @{},
+    };
+    if (CVPixelBufferPoolCreate(NULL, NULL, (CFDictionaryRef)attributes, &c->pool) != kCVReturnSuccess) {
+        Release(c);
+        *error = kMacCameraSessionFailed;
+        return NULL;
+    }
+    if (!CreateEncoder(c, bitrateKbps, info)) {
+        Release(c);
+        *error = kMacCameraEncoderFailed;
+        return NULL;
+    }
+    strlcpy(info->deviceID, kTestPatternID, sizeof(info->deviceID));
+    strlcpy(info->deviceName, kTestPatternName, sizeof(info->deviceName));
+    info->width = c->width;
+    info->height = c->height;
+    info->fps = c->fps;
+    c->keyFrame = true;
+    c->ready.store(true, std::memory_order_release);
+    c->timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, c->queue);
+    dispatch_source_set_timer(c->timer, dispatch_time(DISPATCH_TIME_NOW, 0), NSEC_PER_SEC / c->fps, NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(c->timer, ^{
+      OnCardFrame(c);
+    });
+    dispatch_resume(c->timer);
+    return c;
+}
+
+// Opens the camera (`uniqueID`, or the default one when NULL or empty; kTestPatternID for
+// the test card) as close as it offers to width×height at fps, and encodes it at bitrateKbps. `callback` runs on a
 // VideoToolbox thread, one access unit at a time, until MacCameraCaptureStop returns;
 // its buffer is valid only during the call. The first frame is a key frame. Returns
 // NULL with `error` set on failure.
@@ -404,6 +558,8 @@ extern "C" MacCameraCapture* MacCameraCaptureStart(const char* uniqueID, int wid
     @autoreleasepool {
         memset(info, 0, sizeof(*info));
         *error = kMacCameraOK;
+        if (uniqueID && strcmp(uniqueID, kTestPatternID) == 0)
+            return StartTestPattern(width, height, fps, bitrateKbps, callback, ctx, info, error);
         if ([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo] != AVAuthorizationStatusAuthorized) {
             *error = kMacCameraNotAuthorized;
             return NULL;
