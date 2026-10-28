@@ -373,6 +373,8 @@ pub struct Connection {
     voice_calling: bool,
     // remotedisplay: see audio_gate.rs.
     audio_gate: audio_gate::AudioGate,
+    // remotedisplay: camera and microphone forwarding (device_forward.rs).
+    device_forward: super::device_forward::Forwards,
     options_in_login: Option<OptionMessage>,
     #[cfg(not(any(target_os = "ios")))]
     pressed_modifiers: HashSet<rdev::Key>,
@@ -569,6 +571,7 @@ impl Connection {
             voice_call_request_timestamp: None,
             voice_calling: false,
             audio_gate: Default::default(),
+            device_forward: super::device_forward::Forwards::new(id),
             options_in_login: None,
             #[cfg(not(any(target_os = "ios")))]
             pressed_modifiers: Default::default(),
@@ -1100,6 +1103,10 @@ impl Connection {
                     conn.file_remove_log_control.on_timer().drain(..).map(|x| conn.send_to_cm(x)).count();
                     #[cfg(feature = "hwcodec")]
                     conn.update_supported_encoding();
+                    // remotedisplay: the owner's switch and the sinks, once a second.
+                    for msg in conn.device_forward.on_tick() {
+                        conn.send(msg).await;
+                    }
                 }
                 _ = test_delay_timer.tick() => {
                     if last_recv_time.elapsed() >= SEC30 {
@@ -1812,6 +1819,10 @@ impl Connection {
         {
             platform_additions.insert("support_view_camera".into(), json!(true));
         }
+        // remotedisplay: the devices this host can receive (device_forward.rs; none
+        // unless it's a Mac).
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+        platform_additions.extend(self.device_forward.capabilities());
 
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         if !platform_additions.is_empty() {
@@ -3689,6 +3700,15 @@ impl Connection {
                 }
                 Some(message::Union::VoiceCallResponse(_response)) => {
                     // TODO: Maybe we can do a voice call from cm directly.
+                }
+                // remotedisplay: a controller's camera and microphone (device_forward.rs).
+                Some(
+                    union @ (message::Union::DeviceForwardRequest(_)
+                    | message::Union::CameraFrame(_)),
+                ) => {
+                    if let Some(msg) = self.device_forward.on_message(union) {
+                        self.send(msg).await;
+                    }
                 }
                 Some(message::Union::ScreenshotRequest(request)) => {
                     if let Some(tx) = self.inner.tx.clone() {

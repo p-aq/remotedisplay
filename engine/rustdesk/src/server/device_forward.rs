@@ -1,9 +1,29 @@
 // remotedisplay: camera and microphone forwarding on the host (camera & audio
-// forwarding spec, Host side). For now, the owner's switch (decision 0009): off by
-// default, and only the host owner turns it on, from the server app, which runs
-// `remotedisplayd --set-device-forward on|off`. Request handling joins it in Phase 1.
+// forwarding spec, Host side › Accepting requests).
+//
+// The owner's switch (decision 0009): off by default, and only the host owner turns it
+// on, from the server app, which runs `remotedisplayd --set-device-forward on|off`.
+//
+// [`Forwards`] is each connection's side of forwarding (`connection.rs`, `HOOKS.md` E7):
+// it advertises what this host can receive, answers `DeviceForwardRequest`, lets one
+// controller at a time send a device, passes that controller's `CameraFrame`s to the
+// camera sink, and stops a forward when the owner switches forwarding off or the sink
+// goes away. Dropping it, with the connection, ends its forwards.
 
-use hbb_common::config::Config;
+use hbb_common::{
+    config::Config,
+    log,
+    message_proto::{
+        device_forward_request::Kind, message, CameraControl, CameraFrame, DeviceForwardRequest,
+        DeviceForwardResponse, DeviceStatus, Message,
+    },
+    ResultType,
+};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 /// The engine option behind the owner's switch: "Y" when on, absent when off.
 pub const OPTION: &str = "rd-allow-device-forward";
@@ -23,9 +43,300 @@ pub fn option_value(arg: &str) -> Option<&'static str> {
     }
 }
 
+/// The protocol version in `rd_device_forward` (spec, Protocol changes › Capabilities).
+const PROTOCOL: i32 = 1;
+/// Device statuses (`DeviceStatus.status`, `rd_camera_sink`, `rd_mic_sink`) and the
+/// reasons in a refusing `DeviceForwardResponse`.
+pub const READY: &str = "ready";
+pub const NOT_INSTALLED: &str = "not-installed";
+pub const NOT_APPROVED: &str = "not-approved";
+pub const NOT_ALLOWED: &str = "not-allowed";
+pub const BUSY: &str = "busy";
+/// A request whose format is outside what the host accepts (decision 0016).
+pub const BAD_FORMAT: &str = "bad-format";
+/// The camera formats the host accepts (decision 0016).
+const MAX_WIDTH: i32 = 1920;
+const MAX_HEIGHT: i32 = 1080;
+const MAX_FPS: i32 = 60;
+/// Key frame requests to a controller, at most one per this (spec, Protocol changes › Rate).
+const KEY_FRAME_INTERVAL: Duration = Duration::from_millis(500);
+
+/// A running camera forward's way into Remote Display Camera. Dropping it stops
+/// feeding; the camera extension then shows its card (decision 0011).
+pub(crate) trait Feed: Send {
+    /// One access unit in Annex B. Returns false when nothing can be shown until a
+    /// key frame arrives, so the controller should send one.
+    fn feed(&mut self, annex_b: &[u8], key: bool, capture_time_us: i64) -> bool;
+}
+
+/// Where camera forwards go. The real one is the camera extension's sink
+/// (`macos_camera_sink.mm`); until that exists, the camera is not installed.
+pub(crate) struct Sinks {
+    camera_status: Box<dyn Fn() -> &'static str + Send + Sync>,
+    open_camera: Box<dyn Fn(i32, i32, i32) -> ResultType<Box<dyn Feed>> + Send + Sync>,
+    allowed: Box<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl Default for Sinks {
+    fn default() -> Self {
+        Self {
+            camera_status: Box::new(|| NOT_INSTALLED),
+            open_camera: Box::new(|_, _, _| hbb_common::bail!("no camera sink in this build")),
+            allowed: Box::new(is_allowed),
+        }
+    }
+}
+
+/// Which connection sends each device: one at a time, across all connections.
+type Senders = Arc<Mutex<HashMap<Kind, i32>>>;
+
+lazy_static::lazy_static! {
+    static ref SENDERS: Senders = Default::default();
+}
+
+pub struct Forwards {
+    conn_id: i32,
+    sinks: Sinks,
+    senders: Senders,
+    camera: Option<Box<dyn Feed>>,
+    /// What this controller last heard about each device; empty until the login
+    /// response advertised it.
+    told: HashMap<Kind, &'static str>,
+    last_key_request: Option<Instant>,
+    frames: u64,
+    dropped: u64,
+}
+
+fn response(kind: Kind, accepted: bool, reason: &str) -> Message {
+    let mut msg = Message::new();
+    msg.set_device_forward_response(DeviceForwardResponse {
+        kind: kind.into(),
+        accepted,
+        reason: reason.to_owned(),
+        ..Default::default()
+    });
+    msg
+}
+
+fn status(kind: Kind, status: &str) -> Message {
+    let mut msg = Message::new();
+    msg.set_device_status(DeviceStatus {
+        kind: kind.into(),
+        status: status.to_owned(),
+        ..Default::default()
+    });
+    msg
+}
+
+fn key_frame_request() -> Message {
+    let mut msg = Message::new();
+    msg.set_camera_control(CameraControl {
+        key_frame_request: true,
+        ..Default::default()
+    });
+    msg
+}
+
+fn valid_format(request: &DeviceForwardRequest) -> bool {
+    (16..=MAX_WIDTH).contains(&request.width)
+        && (16..=MAX_HEIGHT).contains(&request.height)
+        && (1..=MAX_FPS).contains(&request.fps)
+}
+
+impl Forwards {
+    pub fn new(conn_id: i32) -> Self {
+        Self::with(conn_id, Sinks::default(), SENDERS.clone())
+    }
+
+    fn with(conn_id: i32, sinks: Sinks, senders: Senders) -> Self {
+        Self {
+            conn_id,
+            sinks,
+            senders,
+            camera: None,
+            told: HashMap::new(),
+            last_key_request: None,
+            frames: 0,
+            dropped: 0,
+        }
+    }
+
+    fn status_of(&self, kind: Kind) -> &'static str {
+        if !(self.sinks.allowed)() {
+            return NOT_ALLOWED;
+        }
+        match kind {
+            Kind::CAMERA => (self.sinks.camera_status)(),
+            // Phase 2.
+            Kind::MICROPHONE => NOT_INSTALLED,
+        }
+    }
+
+    /// The `PeerInfo.platform_additions` keys for the login response. Only a Mac host
+    /// receives devices.
+    pub fn capabilities(&mut self) -> Vec<(String, serde_json::Value)> {
+        if !cfg!(target_os = "macos") {
+            return Vec::new();
+        }
+        let camera = self.status_of(Kind::CAMERA);
+        let mic = self.status_of(Kind::MICROPHONE);
+        self.told.insert(Kind::CAMERA, camera);
+        self.told.insert(Kind::MICROPHONE, mic);
+        vec![
+            ("rd_device_forward".to_owned(), PROTOCOL.into()),
+            ("rd_camera_sink".to_owned(), camera.into()),
+            ("rd_mic_sink".to_owned(), mic.into()),
+        ]
+    }
+
+    /// The controller's `DeviceForwardRequest` and `CameraFrame`; returns what to send
+    /// back.
+    pub fn on_message(&mut self, union: message::Union) -> Option<Message> {
+        match union {
+            message::Union::DeviceForwardRequest(request) => self.on_request(request),
+            message::Union::CameraFrame(frame) => self.on_frame(frame),
+            _ => None,
+        }
+    }
+
+    fn on_request(&mut self, request: DeviceForwardRequest) -> Option<Message> {
+        let kind = request.kind.enum_value().ok()?;
+        if !request.on {
+            if kind == Kind::CAMERA {
+                self.stop_camera("switched off by the controller");
+            }
+            return None;
+        }
+        let status = self.status_of(kind);
+        if status != READY {
+            return Some(response(kind, false, status));
+        }
+        // Only the camera can be READY until Phase 2.
+        if !valid_format(&request) {
+            log::warn!(
+                "Camera request refused: {}x{} at {} fps",
+                request.width,
+                request.height,
+                request.fps
+            );
+            return Some(response(kind, false, BAD_FORMAT));
+        }
+        {
+            let mut senders = self.senders.lock().unwrap();
+            match senders.get(&kind) {
+                Some(&other) if other != self.conn_id => {
+                    return Some(response(kind, false, BUSY));
+                }
+                _ => {
+                    senders.insert(kind, self.conn_id);
+                }
+            }
+        }
+        // A new request from the same controller (another camera) reopens the feed.
+        self.camera = None;
+        match (self.sinks.open_camera)(request.width, request.height, request.fps) {
+            Ok(feed) => {
+                log::info!(
+                    "Camera forward from connection {} started: {}x{} at {} fps",
+                    self.conn_id,
+                    request.width,
+                    request.height,
+                    request.fps
+                );
+                self.camera = Some(feed);
+                self.last_key_request = None;
+                Some(response(kind, true, ""))
+            }
+            Err(err) => {
+                log::warn!("Camera sink not opened: {}", err);
+                self.release(kind);
+                Some(response(kind, false, NOT_INSTALLED))
+            }
+        }
+    }
+
+    fn on_frame(&mut self, frame: CameraFrame) -> Option<Message> {
+        let Some(feed) = self.camera.as_mut() else {
+            // Not ours to show: no accepted camera forward on this connection.
+            self.dropped += 1;
+            return None;
+        };
+        let shown = match frame.frame.h264s().frames.first() {
+            Some(unit) => feed.feed(&unit.data, unit.key, frame.capture_time_us),
+            // Only H.264 is forwarded (decision 0005).
+            None => false,
+        };
+        self.frames += 1;
+        if shown {
+            return None;
+        }
+        let now = Instant::now();
+        if self
+            .last_key_request
+            .map_or(false, |last| now.duration_since(last) < KEY_FRAME_INTERVAL)
+        {
+            return None;
+        }
+        self.last_key_request = Some(now);
+        Some(key_frame_request())
+    }
+
+    /// Once a second: tells the controller when a device's status changed, and ends
+    /// the camera forward when the owner switched forwarding off or the sink went away.
+    pub fn on_tick(&mut self) -> Vec<Message> {
+        let mut out = Vec::new();
+        if self.told.is_empty() {
+            return out;
+        }
+        for kind in [Kind::CAMERA, Kind::MICROPHONE] {
+            let now = self.status_of(kind);
+            if self.told.get(&kind) != Some(&now) {
+                self.told.insert(kind, now);
+                out.push(status(kind, now));
+            }
+        }
+        let camera = self.status_of(Kind::CAMERA);
+        if self.camera.is_some() && camera != READY {
+            self.stop_camera(camera);
+            out.push(response(Kind::CAMERA, false, camera));
+        }
+        out
+    }
+
+    fn stop_camera(&mut self, why: &str) {
+        if self.camera.take().is_some() {
+            log::info!(
+                "Camera forward from connection {} stopped ({}): {} frames, {} dropped",
+                self.conn_id,
+                why,
+                self.frames,
+                self.dropped
+            );
+        }
+        self.release(Kind::CAMERA);
+        self.frames = 0;
+        self.dropped = 0;
+    }
+
+    fn release(&self, kind: Kind) {
+        let mut senders = self.senders.lock().unwrap();
+        if senders.get(&kind) == Some(&self.conn_id) {
+            senders.remove(&kind);
+        }
+    }
+}
+
+impl Drop for Forwards {
+    fn drop(&mut self) {
+        self.stop_camera("the connection closed");
+        self.release(Kind::MICROPHONE);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     #[test]
     fn on_and_off_only() {
@@ -34,5 +345,319 @@ mod tests {
         for arg in ["", "ON", "yes", "true", "1", "Y"] {
             assert_eq!(option_value(arg), None, "{arg:?}");
         }
+    }
+
+    /// The owner's switch, the sink's status and what reached the sink.
+    struct Host {
+        allowed: AtomicBool,
+        camera: Mutex<&'static str>,
+        opened: Mutex<Vec<(i32, i32, i32)>>,
+        open_feeds: AtomicUsize,
+        fed: Mutex<Vec<(bool, i64)>>,
+        shows: AtomicBool,
+    }
+
+    struct FakeFeed(Arc<Host>);
+
+    impl Feed for FakeFeed {
+        fn feed(&mut self, _: &[u8], key: bool, capture_time_us: i64) -> bool {
+            self.0.fed.lock().unwrap().push((key, capture_time_us));
+            self.0.shows.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Drop for FakeFeed {
+        fn drop(&mut self) {
+            self.0.open_feeds.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    fn host(allowed: bool, camera: &'static str) -> Arc<Host> {
+        Arc::new(Host {
+            allowed: AtomicBool::new(allowed),
+            camera: Mutex::new(camera),
+            opened: Default::default(),
+            open_feeds: AtomicUsize::new(0),
+            fed: Default::default(),
+            shows: AtomicBool::new(true),
+        })
+    }
+
+    fn connection(id: i32, host: &Arc<Host>, senders: &Senders) -> Forwards {
+        let (a, b, c) = (host.clone(), host.clone(), host.clone());
+        let sinks = Sinks {
+            camera_status: Box::new(move || *a.camera.lock().unwrap()),
+            open_camera: Box::new(move |w, h, fps| {
+                b.opened.lock().unwrap().push((w, h, fps));
+                b.open_feeds.fetch_add(1, Ordering::SeqCst);
+                Ok(Box::new(FakeFeed(b.clone())) as Box<dyn Feed>)
+            }),
+            allowed: Box::new(move || c.allowed.load(Ordering::SeqCst)),
+        };
+        Forwards::with(id, sinks, senders.clone())
+    }
+
+    fn ask(kind: Kind, on: bool, width: i32, height: i32, fps: i32) -> message::Union {
+        message::Union::DeviceForwardRequest(DeviceForwardRequest {
+            kind: kind.into(),
+            on,
+            width,
+            height,
+            fps,
+            device_name: "FaceTime HD Camera".into(),
+            ..Default::default()
+        })
+    }
+
+    fn camera_on() -> message::Union {
+        ask(Kind::CAMERA, true, 1280, 720, 30)
+    }
+
+    fn frame(key: bool, capture_time_us: i64) -> message::Union {
+        let mut frames = hbb_common::message_proto::EncodedVideoFrames::new();
+        frames
+            .frames
+            .push(hbb_common::message_proto::EncodedVideoFrame {
+                data: vec![0, 0, 0, 1, if key { 0x65 } else { 0x41 }].into(),
+                key,
+                ..Default::default()
+            });
+        let mut video = hbb_common::message_proto::VideoFrame::new();
+        video.set_h264s(frames);
+        message::Union::CameraFrame(CameraFrame {
+            frame: hbb_common::protobuf::MessageField::some(video),
+            capture_time_us,
+            ..Default::default()
+        })
+    }
+
+    /// (accepted, reason) of a DeviceForwardResponse.
+    fn answer(msg: Option<Message>) -> (bool, String) {
+        let msg = msg.expect("a response");
+        let r = msg.device_forward_response();
+        (r.accepted, r.reason.clone())
+    }
+
+    #[test]
+    fn advertises_what_it_can_receive() {
+        let senders = Senders::default();
+        let off = host(false, READY);
+        let caps = connection(1, &off, &senders).capabilities();
+        let caps: HashMap<String, serde_json::Value> = caps.into_iter().collect();
+        assert_eq!(caps["rd_device_forward"], 1);
+        assert_eq!(caps["rd_camera_sink"], NOT_ALLOWED);
+        assert_eq!(caps["rd_mic_sink"], NOT_ALLOWED);
+        let on = host(true, NOT_INSTALLED);
+        let caps: HashMap<_, _> = connection(2, &on, &senders)
+            .capabilities()
+            .into_iter()
+            .collect();
+        assert_eq!(caps["rd_camera_sink"], NOT_INSTALLED);
+        assert_eq!(caps["rd_mic_sink"], NOT_INSTALLED);
+    }
+
+    #[test]
+    fn refuses_unless_allowed_and_ready() {
+        let senders = Senders::default();
+        let off = host(false, READY);
+        let mut conn = connection(1, &off, &senders);
+        assert_eq!(
+            answer(conn.on_message(camera_on())),
+            (false, NOT_ALLOWED.into())
+        );
+        let missing = host(true, NOT_INSTALLED);
+        let mut conn = connection(2, &missing, &senders);
+        assert_eq!(
+            answer(conn.on_message(camera_on())),
+            (false, NOT_INSTALLED.into())
+        );
+        let unapproved = host(true, NOT_APPROVED);
+        let mut conn = connection(3, &unapproved, &senders);
+        assert_eq!(
+            answer(conn.on_message(camera_on())),
+            (false, NOT_APPROVED.into())
+        );
+        assert!(senders.lock().unwrap().is_empty());
+        assert_eq!(off.open_feeds.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn accepts_and_opens_the_sink_at_the_requested_format() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut conn = connection(1, &h, &senders);
+        assert_eq!(answer(conn.on_message(camera_on())), (true, String::new()));
+        assert_eq!(*h.opened.lock().unwrap(), [(1280, 720, 30)]);
+        assert_eq!(senders.lock().unwrap().get(&Kind::CAMERA), Some(&1));
+    }
+
+    #[test]
+    fn one_controller_at_a_time() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut first = connection(1, &h, &senders);
+        let mut second = connection(2, &h, &senders);
+        assert!(answer(first.on_message(camera_on())).0);
+        assert_eq!(answer(second.on_message(camera_on())), (false, BUSY.into()));
+        drop(first);
+        assert_eq!(
+            h.open_feeds.load(Ordering::SeqCst),
+            0,
+            "the first's feed ended"
+        );
+        assert!(
+            answer(second.on_message(camera_on())).0,
+            "free once the first left"
+        );
+    }
+
+    #[test]
+    fn refuses_formats_outside_the_limits() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut conn = connection(1, &h, &senders);
+        for (w, h_, fps) in [
+            (0, 0, 30),
+            (3840, 2160, 30),
+            (1280, 720, 0),
+            (1280, 720, 1000),
+            (8, 720, 30),
+        ] {
+            let reply = conn.on_message(ask(Kind::CAMERA, true, w, h_, fps));
+            assert_eq!(answer(reply), (false, BAD_FORMAT.into()), "{w}x{h_} {fps}");
+        }
+        assert!(h.opened.lock().unwrap().is_empty());
+        assert!(senders.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn frames_reach_the_sink_only_from_the_accepted_controller() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut sender = connection(1, &h, &senders);
+        let mut other = connection(2, &h, &senders);
+        assert!(other.on_message(frame(true, 1)).is_none());
+        assert!(h.fed.lock().unwrap().is_empty(), "nothing accepted yet");
+        sender.on_message(camera_on());
+        assert!(sender.on_message(frame(true, 10)).is_none());
+        assert!(other.on_message(frame(true, 20)).is_none());
+        assert_eq!(*h.fed.lock().unwrap(), [(true, 10)]);
+    }
+
+    #[test]
+    fn asks_for_key_frames_at_most_every_500_ms() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut conn = connection(1, &h, &senders);
+        conn.on_message(camera_on());
+        h.shows.store(false, Ordering::SeqCst);
+        let first = conn
+            .on_message(frame(false, 1))
+            .expect("a key frame request");
+        assert!(first.camera_control().key_frame_request);
+        assert!(conn.on_message(frame(false, 2)).is_none(), "within 500 ms");
+        std::thread::sleep(KEY_FRAME_INTERVAL + Duration::from_millis(20));
+        assert!(conn.on_message(frame(false, 3)).is_some());
+    }
+
+    #[test]
+    fn the_controller_switching_off_frees_the_camera() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut conn = connection(1, &h, &senders);
+        conn.on_message(camera_on());
+        assert!(conn.on_message(ask(Kind::CAMERA, false, 0, 0, 0)).is_none());
+        assert_eq!(h.open_feeds.load(Ordering::SeqCst), 0);
+        assert!(senders.lock().unwrap().is_empty());
+        conn.on_message(frame(true, 1));
+        assert!(h.fed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn switching_forwarding_off_stops_live_forwards_and_says_why() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut conn = connection(1, &h, &senders);
+        assert!(
+            conn.on_tick().is_empty(),
+            "nothing before the login response"
+        );
+        conn.capabilities();
+        conn.on_message(camera_on());
+        assert!(conn.on_tick().is_empty(), "nothing changed");
+        h.allowed.store(false, Ordering::SeqCst);
+        let out = conn.on_tick();
+        let statuses: Vec<(Kind, String)> = out
+            .iter()
+            .filter(|m| m.has_device_status())
+            .map(|m| {
+                (
+                    m.device_status().kind.enum_value().unwrap(),
+                    m.device_status().status.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            statuses,
+            [
+                (Kind::CAMERA, NOT_ALLOWED.into()),
+                (Kind::MICROPHONE, NOT_ALLOWED.into())
+            ]
+        );
+        let stop = out
+            .iter()
+            .find(|m| m.has_device_forward_response())
+            .expect("a stop");
+        assert!(!stop.device_forward_response().accepted);
+        assert_eq!(stop.device_forward_response().reason, NOT_ALLOWED);
+        assert_eq!(h.open_feeds.load(Ordering::SeqCst), 0);
+        assert!(senders.lock().unwrap().is_empty());
+        assert!(conn.on_tick().is_empty(), "said once");
+    }
+
+    #[test]
+    fn a_sink_that_goes_away_ends_the_forward() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut conn = connection(1, &h, &senders);
+        conn.capabilities();
+        conn.on_message(camera_on());
+        *h.camera.lock().unwrap() = NOT_APPROVED;
+        let out = conn.on_tick();
+        assert!(out
+            .iter()
+            .any(|m| m.has_device_status() && m.device_status().status == NOT_APPROVED));
+        assert!(out.iter().any(|m| m.has_device_forward_response()
+            && m.device_forward_response().reason == NOT_APPROVED));
+        assert_eq!(h.open_feeds.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn the_microphone_waits_for_phase_2() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut conn = connection(1, &h, &senders);
+        assert_eq!(
+            answer(conn.on_message(ask(Kind::MICROPHONE, true, 0, 0, 0))),
+            (false, NOT_INSTALLED.into())
+        );
+        assert!(conn
+            .on_message(ask(Kind::MICROPHONE, false, 0, 0, 0))
+            .is_none());
+    }
+
+    #[test]
+    fn another_camera_from_the_same_controller_reopens_the_sink() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut conn = connection(1, &h, &senders);
+        conn.on_message(camera_on());
+        assert!(answer(conn.on_message(ask(Kind::CAMERA, true, 1920, 1080, 30))).0);
+        assert_eq!(
+            *h.opened.lock().unwrap(),
+            [(1280, 720, 30), (1920, 1080, 30)]
+        );
+        assert_eq!(h.open_feeds.load(Ordering::SeqCst), 1);
+        assert_eq!(senders.lock().unwrap().get(&Kind::CAMERA), Some(&1));
     }
 }
