@@ -687,6 +687,18 @@ void wire_session_request_voice_call(int64_t port_, struct wire_uint_8_list *ses
 
 void wire_session_close_voice_call(int64_t port_, struct wire_uint_8_list *session_id);
 
+void wire_session_set_device_forward(int64_t port_,
+                                     struct wire_uint_8_list *session_id,
+                                     struct wire_uint_8_list *kind,
+                                     bool on,
+                                     struct wire_uint_8_list *device);
+
+WireSyncReturn wire_main_list_cameras(void);
+
+WireSyncReturn wire_main_get_capture_permission(struct wire_uint_8_list *kind);
+
+void wire_main_request_capture_permission(int64_t port_, struct wire_uint_8_list *kind);
+
 WireSyncReturn wire_session_get_conn_token(struct wire_uint_8_list *session_id);
 
 void wire_cm_handle_incoming_voice_call(int64_t port_, int32_t id, bool accept);
@@ -1266,6 +1278,10 @@ static int64_t dummy_method_to_enforce_bundling(void) {
     dummy_var ^= ((int64_t) (void*) wire_session_new_rdp);
     dummy_var ^= ((int64_t) (void*) wire_session_request_voice_call);
     dummy_var ^= ((int64_t) (void*) wire_session_close_voice_call);
+    dummy_var ^= ((int64_t) (void*) wire_session_set_device_forward);
+    dummy_var ^= ((int64_t) (void*) wire_main_list_cameras);
+    dummy_var ^= ((int64_t) (void*) wire_main_get_capture_permission);
+    dummy_var ^= ((int64_t) (void*) wire_main_request_capture_permission);
     dummy_var ^= ((int64_t) (void*) wire_session_get_conn_token);
     dummy_var ^= ((int64_t) (void*) wire_cm_handle_incoming_voice_call);
     dummy_var ^= ((int64_t) (void*) wire_cm_close_voice_call);

@@ -1114,6 +1114,11 @@ impl InvokeUiSession for FlutterHandler {
         self.push_event::<&str>("on_voice_call_waiting", &[], &[]);
     }
 
+    // remotedisplay: the Devices menu (decision 0018).
+    fn on_device_forward(&self, state: &str) {
+        self.push_event("rd_device_forward", &[("state", state)], &[]);
+    }
+
     fn on_voice_call_incoming(&self) {
         self.push_event::<&str>("on_voice_call_incoming", &[], &[]);
     }

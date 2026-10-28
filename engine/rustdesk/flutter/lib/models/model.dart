@@ -139,6 +139,10 @@ class FfiModel with ChangeNotifier {
 
   Timer? timerScreenshot;
 
+  // remotedisplay: the camera and microphone forwards' state as the engine last sent
+  // it (JSON, "" before the first change), for the client's Devices menu (HOOKS.md #3).
+  final deviceForward = ''.obs;
+
   Rect? get rect => _rect;
   bool get isOriginalResolutionSet =>
       _pi.tryGetDisplayIfNotAllDisplay()?.isOriginalResolutionSet ?? false;
@@ -554,6 +558,9 @@ class FfiModel with ChangeNotifier {
       } else if (name == 'exit_relative_mouse_mode') {
         // Handle exit shortcut from rdev grab loop (Ctrl+Alt on Win/Linux, Cmd+G on macOS)
         parent.target?.inputModel.exitRelativeMouseModeWithKeyRelease();
+      } else if (name == 'rd_device_forward') {
+        // remotedisplay: the client's Devices menu (HOOKS.md #3).
+        deviceForward.value = evt['state'] ?? '';
       } else {
         debugPrint('Event is not handled in the fixed branch: $name');
       }
