@@ -1,6 +1,6 @@
 #!/bin/sh
 # Phase 1 controller-camera tests in order (../README.md), after `make`. The camera's
-# light comes on for about 9 seconds in test 4.
+# light comes on for about 9 seconds in test 4 and 5 seconds in test 5.
 set -e
 cd "$(dirname "$0")"
 
@@ -16,6 +16,9 @@ make --no-print-directory ask
 
 echo "== 4. 720p H.264 from the camera, decoded by the host's decoder"
 make --no-print-directory sends
+
+echo "== 5. The controller's sender: CameraFrames only after the host accepts, none after it stops"
+make --no-print-directory forwards
 
 echo "== Cleaning up: revoking the grant and deleting build/ and the frames"
 make --no-print-directory clean

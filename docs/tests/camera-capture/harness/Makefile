@@ -1,5 +1,5 @@
 # Phase 1 controller-camera harness (issue #2): runs the engine's camera tests
-# (src/platform/macos_camera_capture.rs) from their own app bundle, so macOS asks about
+# (src/platform/macos_camera_capture.rs, src/client/device_forward.rs) from their own app bundle, so macOS asks about
 # the camera for the bundle, not the terminal, then decodes what they sent with the
 # host's decoder from ../../camera-extension/harness. See ../README.md.
 #
@@ -10,6 +10,7 @@
 #   make nothing    without camera access, nothing is captured
 #   make ask        macOS's camera prompt for the probe; waits up to 5 minutes for the answer
 #   make sends      720p H.264 from the camera, then decoded by the host's decoder
+#   make forwards   the controller's sender (src/client/device_forward.rs) with the camera
 #   make revoke     forget the probe's camera access
 #   make clean      revoke, unregister and delete build/ and the captured frames
 
@@ -28,7 +29,7 @@ LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/Launc
 # Same language mode as the engine's build.rs (no ARC).
 CXX       := xcrun clang++ -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -mmacosx-version-min=14.0
 
-.PHONY: all list nothing ask sends run revoke clean
+.PHONY: all list nothing ask sends forwards run revoke clean
 
 # cargo prints where it put the test binary; the bundle wraps that binary.
 all:
@@ -58,6 +59,9 @@ sends:
 	@$(MAKE) --no-print-directory run TEST=sends_the_camera_as_h264
 	$(DECODE) $(LOGS)/stream.bin $(LOGS)/frame.png
 	@echo "Last frame: $(LOGS)/frame.png (deleted by make clean)"
+
+forwards:
+	@$(MAKE) --no-print-directory run TESTS=client::device_forward::capture TEST=forwards_the_camera
 
 # `open` makes the bundle its own app, so macOS asks about the camera for it. The
 # bundle's LSEnvironment points HOME into build/, so the engine's config
