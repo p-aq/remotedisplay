@@ -1822,7 +1822,7 @@ impl Connection {
         // remotedisplay: the devices this host can receive (device_forward.rs; none
         // unless it's a Mac).
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
-        platform_additions.extend(self.device_forward.capabilities());
+        platform_additions.extend(self.device_forward.capabilities(&self.lr.my_name));
 
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         if !platform_additions.is_empty() {
