@@ -5,6 +5,8 @@
 // The encoder is the one measured in docs/tests/camera-extension/harness/camera_codec.mm.
 // With --camera-test-pattern, a generated test card takes the camera's place (spec,
 // Controller side › Testing without a camera): same encoder, same rules, no camera.
+// A camera that goes away mid-capture, unplugged or stopped by a runtime error, is
+// reported once (decision 0020).
 // Same shape and flags as macos.mm: extern "C" functions named Mac…, -std=c++17, no ARC.
 // Called from macos_camera_capture.rs.
 
@@ -45,6 +47,7 @@ static const char* const kTestPatternName = "Test pattern";
 typedef void (*MacCameraEncoded)(void* ctx, const uint8_t* annexB, size_t length, bool keyFrame, int64_t ptsUs);
 typedef void (*MacCameraAccessDone)(void* ctx, bool granted);
 typedef void (*MacCameraEach)(void* ctx, const char* uniqueID, const char* name);
+typedef void (*MacCameraLost)(void* ctx, const char* why);
 
 typedef struct {
     int width, height, fps;  // what the encoder sends
@@ -70,6 +73,15 @@ struct MacCameraCapture;
 @property(nonatomic, assign) MacCameraCapture* capture;
 @end
 
+// Tells the sender, once, that the camera went away. AVFoundation posts its
+// notifications on its own threads, and one can still be on its way while the capture
+// stops, so the observers hold this rather than the capture: Release clears `capture`
+// under the same lock before anything is freed.
+@interface RemoteDisplayCameraWatch : NSObject
+@property(nonatomic, assign) MacCameraCapture* capture;
+- (void)lost:(NSString*)why;
+@end
+
 struct MacCameraCapture {
     AVCaptureSession* session = nil;
     dispatch_source_t timer = NULL;      // the test card's frame clock, instead of a session
@@ -81,7 +93,10 @@ struct MacCameraCapture {
     VTCompressionSessionRef encoder = NULL;
     int width = 0, height = 0, fps = 30;
     MacCameraEncoded callback = NULL;
+    MacCameraLost lost = NULL;
     void* ctx = NULL;
+    RemoteDisplayCameraWatch* watch = nil;  // a camera's, not the test card's
+    NSArray* observers = nil;              // its notification observers
     std::atomic<bool> ready{false};      // set once the encoder exists
     std::atomic<bool> skipping{false};   // the sender's backlog is over 150 ms (decision 0006)
     std::atomic<bool> keyFrame{false};   // force one on the next encode
@@ -452,6 +467,41 @@ static void OnCardFrame(MacCameraCapture* c) {
 }
 @end
 
+@implementation RemoteDisplayCameraWatch
+- (void)lost:(NSString*)why {
+    @synchronized(self) {
+        MacCameraCapture* c = self.capture;
+        if (!c) return;
+        self.capture = NULL;  // once
+        c->lost(c->ctx, why.UTF8String ?: "");
+    }
+}
+@end
+
+// Watches for the camera being unplugged (a USB camera, an iPhone that leaves Continuity
+// Camera) and for the session stopping on a runtime error. Frames stop either way; the
+// sender decides what follows.
+static void Watch(MacCameraCapture* c, AVCaptureDevice* device) {
+    RemoteDisplayCameraWatch* watch = [[RemoteDisplayCameraWatch alloc] init];
+    watch.capture = c;
+    c->watch = watch;
+    NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+    id unplugged = [center addObserverForName:AVCaptureDeviceWasDisconnectedNotification
+                                       object:device
+                                        queue:nil
+                                   usingBlock:^(NSNotification*) {
+                                     [watch lost:@"disconnected"];
+                                   }];
+    id failed = [center addObserverForName:AVCaptureSessionRuntimeErrorNotification
+                                    object:c->session
+                                     queue:nil
+                                usingBlock:^(NSNotification* note) {
+                                  NSError* error = note.userInfo[AVCaptureSessionErrorKey];
+                                  [watch lost:error.localizedDescription ?: @"runtime error"];
+                                }];
+    c->observers = [[NSArray alloc] initWithObjects:unplugged, failed, nil];
+}
+
 // AVAuthorizationStatus: 0 not determined, 1 restricted, 2 denied, 3 authorized.
 extern "C" int MacCameraAuthorizationStatus(void) {
     @autoreleasepool {
@@ -478,6 +528,15 @@ extern "C" void MacCameraList(MacCameraEach each, void* ctx) {
 }
 
 static void Release(MacCameraCapture* c) {
+    if (c->watch) {
+        // No `lost` call is under way after this, and none can start.
+        @synchronized(c->watch) {
+            c->watch.capture = NULL;
+        }
+        for (id observer in c->observers) [[NSNotificationCenter defaultCenter] removeObserver:observer];
+        [c->observers release];
+        [c->watch release];
+    }
     if (c->session) {
         [c->session stopRunning];
         // The last frame callback has returned and no more are queued.
@@ -509,7 +568,7 @@ static MacCameraCapture* StartTestPattern(int width, int height, int fps, int bi
                                           void* ctx, MacCameraCaptureInfo* info, int* error) {
     MacCameraCapture* c = new MacCameraCapture();
     c->callback = callback;
-    c->ctx = ctx;
+    c->ctx = ctx;  // the card never goes away, so `lost` stays unset
     bool fits = WithinLimits(width, height);
     c->width = fits ? width & ~1 : 1280;
     c->height = fits ? height & ~1 : 720;
@@ -550,11 +609,12 @@ static MacCameraCapture* StartTestPattern(int width, int height, int fps, int bi
 // Opens the camera (`uniqueID`, or the default one when NULL or empty; kTestPatternID for
 // the test card) as close as it offers to width×height at fps, and encodes it at bitrateKbps. `callback` runs on a
 // VideoToolbox thread, one access unit at a time, until MacCameraCaptureStop returns;
-// its buffer is valid only during the call. The first frame is a key frame. Returns
-// NULL with `error` set on failure.
+// its buffer is valid only during the call. The first frame is a key frame. `lost` runs
+// at most once, on an AVFoundation thread, if the camera goes away before then; `why`
+// is valid only during the call. Returns NULL with `error` set on failure.
 extern "C" MacCameraCapture* MacCameraCaptureStart(const char* uniqueID, int width, int height, int fps,
-                                                   int bitrateKbps, MacCameraEncoded callback, void* ctx,
-                                                   MacCameraCaptureInfo* info, int* error) {
+                                                   int bitrateKbps, MacCameraEncoded callback, MacCameraLost lost,
+                                                   void* ctx, MacCameraCaptureInfo* info, int* error) {
     @autoreleasepool {
         memset(info, 0, sizeof(*info));
         *error = kMacCameraOK;
@@ -581,9 +641,12 @@ extern "C" MacCameraCapture* MacCameraCaptureStart(const char* uniqueID, int wid
 
         MacCameraCapture* c = new MacCameraCapture();
         c->callback = callback;
+        c->lost = lost;
         c->ctx = ctx;
         c->queue = dispatch_queue_create("app.remotedisplay.camera", DISPATCH_QUEUE_SERIAL);
         c->session = [[AVCaptureSession alloc] init];
+        // Before the session starts, so nothing is missed.
+        Watch(c, device);
         c->output = [[AVCaptureVideoDataOutput alloc] init];
         c->delegate = [[RemoteDisplayCameraOutput alloc] init];
         c->delegate.capture = c;
