@@ -230,6 +230,8 @@ Sending (new). A new src/client/device_forward.rs owns the camera thread: captur
 - Give camera frames their own bounded channel (2–4 frames) into the io loop, separate from the session's unbounded sender that carries input today, and poll it after input in a biased select!, so mouse and keyboard never wait behind video. Track the bytes and age of frames in flight; once more than 150 ms is waiting, skip capture frames until it drains. If an encoded frame still has to be dropped, force a key frame on the next encode. This is a hook in io_loop.rs, listed in HOOKS.md.
 - Stop capture the moment the user switches off, the host refuses, or the session ends; the camera light goes off with it.
 
+As built ([decision 0020](../architecture/decisions/0020-camera-lost-mid-forward.md)): capture also stops when the camera goes away, unplugged or stopped by a runtime error. The controller then sends on: false, so the host stops the sink at once, and the menu says the camera was disconnected or stopped working. The forward doesn't move to another camera, and doesn't restart when the camera is plugged back in.
+
 UI (new). client/lib/session/session_toolbar.dart gets the Devices menu, and drops the engine's Mute toggle from Input › Session. New FFI calls in src/flutter_ffi.rs back it:
 
 - session_set_device_forward(session_id, kind, on, device) and session_get_device_forward_state(session_id), which includes the host's latest status for each device.
