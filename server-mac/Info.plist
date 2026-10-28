@@ -35,6 +35,8 @@
     <string>14.0</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Remote Display Server answers discovery from clients on your local network and accepts their direct connections.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Remote Display Server shows a controller's camera on this Mac as Remote Display Camera, when you allow it in Settings.</string>
     <key>NSBonjourServices</key>
     <array>
         <string>_rdprobe._udp</string>

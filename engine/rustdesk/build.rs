@@ -20,14 +20,22 @@ fn build_mac() {
     }
     b.flag("-std=c++17").file(file).compile("macos");
     println!("cargo:rerun-if-changed={}", file);
-    // remotedisplay: the controller's camera for camera forwarding (decision 0004).
-    let camera = "src/platform/macos_camera_capture.mm";
-    cc::Build::new()
-        .flag("-std=c++17")
-        .file(camera)
-        .compile("macos_camera_capture");
-    println!("cargo:rerun-if-changed={}", camera);
-    for framework in ["AVFoundation", "CoreMedia", "CoreVideo", "VideoToolbox"] {
+    // remotedisplay: the controller's camera and the host's camera sink for camera
+    // forwarding (decisions 0004 and 0005).
+    for (camera, lib) in [
+        ("src/platform/macos_camera_capture.mm", "macos_camera_capture"),
+        ("src/platform/macos_camera_sink.mm", "macos_camera_sink"),
+    ] {
+        cc::Build::new().flag("-std=c++17").file(camera).compile(lib);
+        println!("cargo:rerun-if-changed={}", camera);
+    }
+    for framework in [
+        "AVFoundation",
+        "CoreMedia",
+        "CoreMediaIO",
+        "CoreVideo",
+        "VideoToolbox",
+    ] {
         println!("cargo:rustc-link-lib=framework={}", framework);
     }
 }

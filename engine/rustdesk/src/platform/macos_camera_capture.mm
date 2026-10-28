@@ -22,8 +22,11 @@ enum {
     kMacCameraEncoderFailed = 5,  // no H.264 encoder
 };
 
-// The host rejects streams outside 16×16…1920×1080 (decision 0016).
-static const int kMaxWidth = 1920, kMaxHeight = 1080;
+// The host rejects streams outside 16×16…1920×1080, in either orientation (decision 0016).
+static bool WithinLimits(int width, int height) {
+    int longSide = width > height ? width : height, shortSide = width > height ? height : width;
+    return shortSide >= 16 && longSide <= 1920 && shortSide <= 1080;
+}
 // The camera extension's device (docs/tests/camera-extension/harness/CameraExtension):
 // never offered for forwarding, or a host that is also a controller would loop.
 static NSString* const kOurManufacturer = @"Remote Display";
@@ -132,7 +135,7 @@ static AVCaptureDeviceFormat* PickFormat(AVCaptureDevice* d, int width, int heig
     double bestShort = 1e9;
     for (AVCaptureDeviceFormat* f in d.formats) {
         CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(f.formatDescription);
-        if (dims.width < 16 || dims.height < 16 || dims.width > kMaxWidth || dims.height > kMaxHeight) continue;
+        if (!WithinLimits(dims.width, dims.height)) continue;
         // The range that comes closest to fps without going over it.
         AVFrameRateRange* range = nil;
         double reach = 0;
@@ -467,7 +470,7 @@ extern "C" MacCameraCapture* MacCameraCaptureStart(const char* uniqueID, int wid
         c->width = dims.width;
         c->height = dims.height;
         c->fps = MAX(1, (int)(rate + 0.5));
-        if (c->width < 16 || c->height < 16 || c->width > kMaxWidth || c->height > kMaxHeight) {
+        if (!WithinLimits(c->width, c->height)) {
             Release(c);
             *error = kMacCameraNoFormat;
             return NULL;
