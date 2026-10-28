@@ -37,6 +37,13 @@ final class ServerController {
     /// What the owner just chose, shown until the engine's file (rewritten every 2 s)
     /// agrees, so the toggle doesn't flick back. After `until` the engine's value wins.
     private var pendingDeviceForward: (value: Bool, until: Date)?
+    /// The controller sending its camera, from remotedisplay-forwarding.json, which the
+    /// engine rewrites every 2 s (decision 0009). Nil when no one is, or the service is off.
+    var cameraSender: String?
+    /// The camera extension, bundled only in builds signed with its provisioning profile
+    /// (spec, Packaging). Without it, the Camera row says it isn't in this build.
+    let cameraExtensionBundled = FileManager.default.fileExists(atPath: Bundle.main.bundlePath
+        + "/Contents/Library/SystemExtensions/app.remotedisplay.server.camera.systemextension")
     var engineVersion = "—"
     /// Newer release published on GitHub (e.g. "1.0.3"), or nil. Checked at launch and
     /// every 6 hours; the update itself stays manual (the link opens the releases page).
@@ -107,6 +114,9 @@ final class ServerController {
     private var configDir: String { NSHomeDirectory() + "/Library/Preferences/RemoteDisplay" }
     private var configPath: String { configDir + "/RemoteDisplay2.toml" }
     private var permsPath: String { NSHomeDirectory() + "/Library/Application Support/remotedisplay-perms.json" }
+    private var forwardingPath: String {
+        NSHomeDirectory() + "/Library/Application Support/remotedisplay-forwarding.json"
+    }
     private var mainConfigPath: String { configDir + "/RemoteDisplay.toml" }
     private var guiDomain: String { "gui/\(getuid())" }
 
@@ -197,6 +207,8 @@ final class ServerController {
             screenOK = Permissions.screenRecording()
             accessibilityOK = Permissions.accessibility()
         }
+        // A file left behind by a stopped engine names no one.
+        cameraSender = serviceRunning ? readForwarding()["camera"] : nil
         // TCC caches Screen Recording per process: neither the already-running engine
         // nor this app sees a permission just granted. While something's missing, ask a
         // FRESH process (`remotedisplayd --check-perms`); if it's already granted,
@@ -258,6 +270,14 @@ final class ServerController {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Bool]
         else { return nil }
         return (obj["screen"] ?? false, obj["accessibility"] ?? false, obj["device_forward"] ?? false)
+    }
+
+    /// Who sends which device: {"camera": "<controller>"}; strings, unlike the perms file.
+    private func readForwarding() -> [String: String] {
+        guard let data = FileManager.default.contents(atPath: forwardingPath),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String]
+        else { return [:] }
+        return obj
     }
 
     private func processRunning() -> Bool { enginePid() != nil }
