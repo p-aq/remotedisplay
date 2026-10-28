@@ -89,6 +89,8 @@ use crate::ui_session_interface::SessionPermissionConfig;
 
 pub use super::lang::*;
 
+// remotedisplay: camera and microphone forwarding on the controller.
+pub mod device_forward;
 pub mod file_trait;
 pub mod helper;
 pub mod io_loop;
@@ -3959,6 +3961,8 @@ pub enum Data {
     ResetDecoder(Option<usize>),
     RenameFile((i32, String, String, bool)),
     TakeScreenshot((i32, String)),
+    // remotedisplay: the Devices menu turns a forwarded device on or off.
+    DeviceForward(device_forward::Switch),
 }
 
 pub async fn confirm_insecure_connection(
