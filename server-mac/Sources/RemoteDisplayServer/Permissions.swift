@@ -34,6 +34,16 @@ enum Permissions {
 
     // MARK: - Open the exact panel
 
+    /// Where an admin allows a camera extension: General › Login Items & Extensions on
+    /// macOS 15 and later, Privacy & Security on macOS 14 (spec, User experience).
+    static func openCameraExtensionSettings() {
+        if #available(macOS 15, *) {
+            open("x-apple.systempreferences:com.apple.LoginItems-Settings.extension")
+        } else {
+            open("x-apple.systempreferences:com.apple.preference.security?General")
+        }
+    }
+
     static func openScreenRecordingSettings() {
         open("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
     }
