@@ -3578,8 +3578,14 @@ impl Connection {
                         _ => {}
                     },
                     Some(misc::Union::AudioFormat(format)) => {
-                        // remotedisplay: only during an accepted call, whatever disable_audio says.
-                        if self.audio_gate.accepts(self.voice_calling) {
+                        // remotedisplay: only during an accepted call or microphone forward,
+                        // whatever disable_audio says; a microphone forward's audio goes to
+                        // Remote Display Microphone, not the speakers (device_forward.rs).
+                        let mic = self.device_forward.receiving_mic();
+                        let accepted = self.audio_gate.accepts(self.voice_calling || mic);
+                        if accepted && mic {
+                            self.device_forward.on_audio_format(format);
+                        } else if accepted {
                             // Drop the audio sender previously.
                             drop(std::mem::replace(&mut self.audio_sender, None));
                             self.audio_sender = Some(start_audio_thread());
@@ -3675,8 +3681,12 @@ impl Connection {
                     _ => {}
                 },
                 Some(message::Union::AudioFrame(frame)) => {
-                    // remotedisplay: only during an accepted call, whatever disable_audio says.
-                    if self.audio_gate.accepts(self.voice_calling) {
+                    // remotedisplay: as AudioFormat above.
+                    let mic = self.device_forward.receiving_mic();
+                    let accepted = self.audio_gate.accepts(self.voice_calling || mic);
+                    if accepted && mic {
+                        self.device_forward.on_audio_frame(frame);
+                    } else if accepted {
                         if let Some(sender) = &self.audio_sender {
                             allow_err!(sender.send(MediaData::AudioFrame(Box::new(frame))));
                         } else {

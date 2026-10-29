@@ -20,17 +20,19 @@ fn build_mac() {
     }
     b.flag("-std=c++17").file(file).compile("macos");
     println!("cargo:rerun-if-changed={}", file);
-    // remotedisplay: the controller's camera and the host's camera sink for camera
-    // forwarding (decisions 0004 and 0005).
+    // remotedisplay: the controller's camera, the host's camera sink and the host's virtual
+    // mic for camera and microphone forwarding (decisions 0004, 0005 and 0021).
     for (camera, lib) in [
         ("src/platform/macos_camera_capture.mm", "macos_camera_capture"),
         ("src/platform/macos_camera_sink.mm", "macos_camera_sink"),
+        ("src/platform/macos_mic_sink.mm", "macos_mic_sink"),
     ] {
         cc::Build::new().flag("-std=c++17").file(camera).compile(lib);
         println!("cargo:rerun-if-changed={}", camera);
     }
     for framework in [
         "AVFoundation",
+        "CoreAudio",
         "CoreGraphics",
         "CoreMedia",
         "CoreMediaIO",

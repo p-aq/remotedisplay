@@ -7,15 +7,16 @@
 // [`Forwards`] is each connection's side of forwarding (`connection.rs`, `HOOKS.md` E7):
 // it advertises what this host can receive, answers `DeviceForwardRequest`, lets one
 // controller at a time send a device, passes that controller's `CameraFrame`s to the
-// camera sink, and stops a forward when the owner switches forwarding off or the sink
-// goes away. Dropping it, with the connection, ends its forwards.
+// camera sink and its microphone audio to Remote Display Microphone (`mic.rs`), and stops
+// a forward when the owner switches forwarding off or the sink goes away. Dropping it,
+// with the connection, ends its forwards.
 
 use hbb_common::{
     config::Config,
     log,
     message_proto::{
-        device_forward_request::Kind, message, CameraControl, CameraFrame, DeviceForwardRequest,
-        DeviceForwardResponse, DeviceStatus, Message,
+        device_forward_request::Kind, message, AudioFormat, AudioFrame, CameraControl, CameraFrame,
+        DeviceForwardRequest, DeviceForwardResponse, DeviceStatus, Message,
     },
     ResultType,
 };
@@ -24,6 +25,8 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+
+pub(crate) mod mic;
 
 /// The engine option behind the owner's switch: "Y" when on, absent when off.
 pub const OPTION: &str = "rd-allow-device-forward";
@@ -71,11 +74,22 @@ pub(crate) trait Feed: Send {
     fn feed(&mut self, annex_b: &[u8], key: bool, capture_time_us: i64) -> bool;
 }
 
-/// Where camera forwards go: on a Mac, the camera extension's sink
-/// (`platform/macos_camera_sink.mm`); elsewhere, nowhere.
+/// A running microphone forward's way into Remote Display Microphone: the controller's
+/// `AudioFormat` and `AudioFrame`s, as for a voice call. Dropping it stops playing; the
+/// device then reads silence.
+pub(crate) trait MicFeed: Send {
+    fn format(&mut self, format: AudioFormat);
+    fn frame(&mut self, frame: AudioFrame);
+}
+
+/// Where forwards go: on a Mac, the camera extension's sink
+/// (`platform/macos_camera_sink.mm`) and the virtual mic's driver
+/// (`platform/macos_mic_sink.mm`); elsewhere, nowhere.
 pub(crate) struct Sinks {
     camera_status: Box<dyn Fn() -> &'static str + Send + Sync>,
     open_camera: Box<dyn Fn(i32, i32, i32) -> ResultType<Box<dyn Feed>> + Send + Sync>,
+    mic_status: Box<dyn Fn() -> &'static str + Send + Sync>,
+    open_mic: Box<dyn Fn() -> ResultType<Box<dyn MicFeed>> + Send + Sync>,
     allowed: Box<dyn Fn() -> bool + Send + Sync>,
 }
 
@@ -99,6 +113,14 @@ impl Default for Sinks {
                     })?) as Box<dyn Feed>,
                 )
             }),
+            mic_status: Box::new(|| {
+                if mic_sink_present() {
+                    READY
+                } else {
+                    NOT_INSTALLED
+                }
+            }),
+            open_mic: Box::new(|| Ok(Box::new(mic::open()?) as Box<dyn MicFeed>)),
             allowed: Box::new(is_allowed),
         }
     }
@@ -110,6 +132,8 @@ impl Default for Sinks {
         Self {
             camera_status: Box::new(|| NOT_INSTALLED),
             open_camera: Box::new(|_, _, _| hbb_common::bail!("only a Mac host receives a camera")),
+            mic_status: Box::new(|| NOT_INSTALLED),
+            open_mic: Box::new(|| hbb_common::bail!("only a Mac host receives a microphone")),
             allowed: Box::new(is_allowed),
         }
     }
@@ -122,11 +146,27 @@ fn camera_sink_present() -> bool {
     lazy_static::lazy_static! {
         static ref LAST: Mutex<Option<(Instant, bool)>> = Default::default();
     }
-    let mut last = LAST.lock().unwrap();
+    once_a_second(&LAST, crate::platform::macos_camera_sink::sink_present)
+}
+
+/// Whether Remote Display Microphone's feeder exists, asked of Core Audio the same way.
+#[cfg(target_os = "macos")]
+fn mic_sink_present() -> bool {
+    lazy_static::lazy_static! {
+        static ref LAST: Mutex<Option<(Instant, bool)>> = Default::default();
+    }
+    once_a_second(&LAST, || {
+        crate::platform::macos_mic_sink::feeder_format().is_some()
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn once_a_second(last: &Mutex<Option<(Instant, bool)>>, ask: impl FnOnce() -> bool) -> bool {
+    let mut last = last.lock().unwrap();
     match *last {
         Some((at, present)) if at.elapsed() < Duration::from_secs(1) => present,
         _ => {
-            let present = crate::platform::macos_camera_sink::sink_present();
+            let present = ask();
             *last = Some((Instant::now(), present));
             present
         }
@@ -261,12 +301,14 @@ pub struct Forwards {
     /// The controller's name, from its login.
     controller: String,
     camera: Option<Box<dyn Feed>>,
+    mic: Option<Box<dyn MicFeed>>,
     /// What this controller last heard about each device; empty until the login
     /// response advertised it.
     told: HashMap<Kind, &'static str>,
     last_key_request: Option<Instant>,
     frames: u64,
     dropped: u64,
+    mic_frames: u64,
 }
 
 fn response(kind: Kind, accepted: bool, reason: &str) -> Message {
@@ -320,10 +362,12 @@ impl Forwards {
             senders,
             controller: String::new(),
             camera: None,
+            mic: None,
             told: HashMap::new(),
             last_key_request: None,
             frames: 0,
             dropped: 0,
+            mic_frames: 0,
         }
     }
 
@@ -333,8 +377,7 @@ impl Forwards {
         }
         match kind {
             Kind::CAMERA => (self.sinks.camera_status)(),
-            // Phase 2.
-            Kind::MICROPHONE => NOT_INSTALLED,
+            Kind::MICROPHONE => (self.sinks.mic_status)(),
         }
     }
 
@@ -369,8 +412,9 @@ impl Forwards {
     fn on_request(&mut self, request: DeviceForwardRequest) -> Option<Message> {
         let kind = request.kind.enum_value().ok()?;
         if !request.on {
-            if kind == Kind::CAMERA {
-                self.stop_camera("switched off by the controller");
+            match kind {
+                Kind::CAMERA => self.stop_camera("switched off by the controller"),
+                Kind::MICROPHONE => self.stop_mic("switched off by the controller"),
             }
             return None;
         }
@@ -378,8 +422,8 @@ impl Forwards {
         if status != READY {
             return Some(response(kind, false, status));
         }
-        // Only the camera can be READY until Phase 2.
-        if !valid_format(&request) {
+        // The microphone's format comes later, as an AudioFormat.
+        if kind == Kind::CAMERA && !valid_format(&request) {
             log::warn!(
                 "Camera request refused: {}x{} at {} fps",
                 request.width,
@@ -399,6 +443,13 @@ impl Forwards {
                 }
             }
         }
+        Some(match kind {
+            Kind::CAMERA => self.start_camera(&request),
+            Kind::MICROPHONE => self.start_mic(),
+        })
+    }
+
+    fn start_camera(&mut self, request: &DeviceForwardRequest) -> Message {
         // A new request from the same controller (another camera) reopens the feed.
         self.camera = None;
         match (self.sinks.open_camera)(request.width, request.height, request.fps) {
@@ -412,13 +463,55 @@ impl Forwards {
                 );
                 self.camera = Some(feed);
                 self.last_key_request = None;
-                Some(response(kind, true, ""))
+                response(Kind::CAMERA, true, "")
             }
             Err(err) => {
                 log::warn!("Camera sink not opened: {}", err);
-                self.release(kind);
-                Some(response(kind, false, NOT_INSTALLED))
+                self.release(Kind::CAMERA);
+                response(Kind::CAMERA, false, NOT_INSTALLED)
             }
+        }
+    }
+
+    fn start_mic(&mut self) -> Message {
+        // Another microphone from the same controller starts afresh; its AudioFormat
+        // follows.
+        self.mic = None;
+        match (self.sinks.open_mic)() {
+            Ok(feed) => {
+                log::info!(
+                    "Microphone forward from connection {} started",
+                    self.conn_id
+                );
+                self.mic = Some(feed);
+                self.mic_frames = 0;
+                response(Kind::MICROPHONE, true, "")
+            }
+            Err(err) => {
+                log::warn!("Remote Display Microphone not opened: {}", err);
+                self.release(Kind::MICROPHONE);
+                response(Kind::MICROPHONE, false, NOT_INSTALLED)
+            }
+        }
+    }
+
+    /// Whether this controller has an accepted microphone forward. Its `AudioFormat` and
+    /// `AudioFrame`s then go to Remote Display Microphone through [`Self::on_audio_format`]
+    /// and [`Self::on_audio_frame`], not to the host's speakers (decision 0021).
+    pub fn receiving_mic(&self) -> bool {
+        self.mic.is_some()
+    }
+
+    pub fn on_audio_format(&mut self, format: AudioFormat) {
+        if let Some(mic) = self.mic.as_mut() {
+            mic.format(format);
+        }
+    }
+
+    pub fn on_audio_frame(&mut self, frame: AudioFrame) {
+        if let Some(mic) = self.mic.as_mut() {
+            self.mic_frames += 1;
+            mic.frame(frame);
         }
     }
 
@@ -448,8 +541,8 @@ impl Forwards {
         Some(key_frame_request())
     }
 
-    /// Once a second: tells the controller when a device's status changed, and ends
-    /// the camera forward when the owner switched forwarding off or the sink went away.
+    /// Once a second: tells the controller when a device's status changed, and ends a
+    /// forward when the owner switched forwarding off or its sink went away.
     pub fn on_tick(&mut self) -> Vec<Message> {
         let mut out = Vec::new();
         if self.told.is_empty() {
@@ -466,6 +559,11 @@ impl Forwards {
         if self.camera.is_some() && camera != READY {
             self.stop_camera(camera);
             out.push(response(Kind::CAMERA, false, camera));
+        }
+        let mic = self.status_of(Kind::MICROPHONE);
+        if self.mic.is_some() && mic != READY {
+            self.stop_mic(mic);
+            out.push(response(Kind::MICROPHONE, false, mic));
         }
         out
     }
@@ -485,6 +583,19 @@ impl Forwards {
         self.dropped = 0;
     }
 
+    fn stop_mic(&mut self, why: &str) {
+        if self.mic.take().is_some() {
+            log::info!(
+                "Microphone forward from connection {} stopped ({}): {} frames",
+                self.conn_id,
+                why,
+                self.mic_frames
+            );
+        }
+        self.release(Kind::MICROPHONE);
+        self.mic_frames = 0;
+    }
+
     fn release(&self, kind: Kind) {
         let mut senders = self.senders.lock().unwrap();
         if senders.get(&kind).map(|s| s.0) == Some(self.conn_id) {
@@ -496,7 +607,7 @@ impl Forwards {
 impl Drop for Forwards {
     fn drop(&mut self) {
         self.stop_camera("the connection closed");
-        self.release(Kind::MICROPHONE);
+        self.stop_mic("the connection closed");
     }
 }
 
@@ -522,9 +633,33 @@ mod tests {
         open_feeds: AtomicUsize,
         fed: Mutex<Vec<(bool, i64)>>,
         shows: AtomicBool,
+        mic: Mutex<&'static str>,
+        open_mics: AtomicUsize,
+        /// What reached Remote Display Microphone: formats' rates and frames' first bytes.
+        heard: Mutex<Vec<String>>,
     }
 
     struct FakeFeed(Arc<Host>);
+
+    struct FakeMic(Arc<Host>);
+
+    impl MicFeed for FakeMic {
+        fn format(&mut self, format: AudioFormat) {
+            let heard = format!("format {}", format.sample_rate);
+            self.0.heard.lock().unwrap().push(heard);
+        }
+
+        fn frame(&mut self, frame: AudioFrame) {
+            let heard = format!("frame {}", frame.data.first().copied().unwrap_or(0));
+            self.0.heard.lock().unwrap().push(heard);
+        }
+    }
+
+    impl Drop for FakeMic {
+        fn drop(&mut self) {
+            self.0.open_mics.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
 
     impl Feed for FakeFeed {
         fn feed(&mut self, _: &[u8], key: bool, capture_time_us: i64) -> bool {
@@ -547,17 +682,33 @@ mod tests {
             open_feeds: AtomicUsize::new(0),
             fed: Default::default(),
             shows: AtomicBool::new(true),
+            mic: Mutex::new(NOT_INSTALLED),
+            open_mics: AtomicUsize::new(0),
+            heard: Default::default(),
         })
+    }
+
+    /// A host whose owner allows forwarding and whose microphone driver is installed.
+    fn mic_host() -> Arc<Host> {
+        let h = host(true, READY);
+        *h.mic.lock().unwrap() = READY;
+        h
     }
 
     fn connection(id: i32, host: &Arc<Host>, senders: &Senders) -> Forwards {
         let (a, b, c) = (host.clone(), host.clone(), host.clone());
+        let (d, e) = (host.clone(), host.clone());
         let sinks = Sinks {
             camera_status: Box::new(move || *a.camera.lock().unwrap()),
             open_camera: Box::new(move |w, h, fps| {
                 b.opened.lock().unwrap().push((w, h, fps));
                 b.open_feeds.fetch_add(1, Ordering::SeqCst);
                 Ok(Box::new(FakeFeed(b.clone())) as Box<dyn Feed>)
+            }),
+            mic_status: Box::new(move || *d.mic.lock().unwrap()),
+            open_mic: Box::new(move || {
+                e.open_mics.fetch_add(1, Ordering::SeqCst);
+                Ok(Box::new(FakeMic(e.clone())) as Box<dyn MicFeed>)
             }),
             allowed: Box::new(move || c.allowed.load(Ordering::SeqCst)),
         };
@@ -578,6 +729,25 @@ mod tests {
 
     fn camera_on() -> message::Union {
         ask(Kind::CAMERA, true, 1280, 720, 30)
+    }
+
+    fn mic_on() -> message::Union {
+        ask(Kind::MICROPHONE, true, 0, 0, 0)
+    }
+
+    fn audio_format(sample_rate: u32) -> AudioFormat {
+        AudioFormat {
+            sample_rate,
+            channels: 1,
+            ..Default::default()
+        }
+    }
+
+    fn audio_frame(first: u8) -> AudioFrame {
+        AudioFrame {
+            data: vec![first, 0, 0].into(),
+            ..Default::default()
+        }
     }
 
     fn frame(key: bool, capture_time_us: i64) -> message::Union {
@@ -621,6 +791,11 @@ mod tests {
             .collect();
         assert_eq!(caps["rd_camera_sink"], NOT_INSTALLED);
         assert_eq!(caps["rd_mic_sink"], NOT_INSTALLED);
+        let caps: HashMap<_, _> = connection(3, &mic_host(), &senders)
+            .capabilities("Test Controller")
+            .into_iter()
+            .collect();
+        assert_eq!(caps["rd_mic_sink"], READY);
     }
 
     #[test]
@@ -829,17 +1004,143 @@ mod tests {
     }
 
     #[test]
-    fn the_microphone_waits_for_phase_2() {
+    fn the_microphone_needs_its_driver_and_the_owners_switch() {
         let senders = Senders::default();
         let h = host(true, READY);
         let mut conn = connection(1, &h, &senders);
         assert_eq!(
-            answer(conn.on_message(ask(Kind::MICROPHONE, true, 0, 0, 0))),
+            answer(conn.on_message(mic_on())),
             (false, NOT_INSTALLED.into())
         );
+        let off = mic_host();
+        off.allowed.store(false, Ordering::SeqCst);
+        let mut conn = connection(2, &off, &senders);
+        assert_eq!(
+            answer(conn.on_message(mic_on())),
+            (false, NOT_ALLOWED.into())
+        );
+        assert!(!conn.receiving_mic());
+        assert_eq!(h.open_mics.load(Ordering::SeqCst), 0);
+        assert!(senders.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_accepted_microphone_hears_only_its_controller() {
+        let senders = Senders::default();
+        let h = mic_host();
+        let mut sender = connection(1, &h, &senders);
+        let mut other = connection(2, &h, &senders);
+        sender.capabilities("Test Controller");
+        sender.on_audio_frame(audio_frame(1));
+        assert!(h.heard.lock().unwrap().is_empty(), "nothing accepted yet");
+        assert_eq!(answer(sender.on_message(mic_on())), (true, String::new()));
+        assert!(sender.receiving_mic());
+        assert!(!other.receiving_mic());
+        sender.on_audio_format(audio_format(48000));
+        sender.on_audio_frame(audio_frame(2));
+        other.on_audio_format(audio_format(16000));
+        other.on_audio_frame(audio_frame(3));
+        assert_eq!(*h.heard.lock().unwrap(), ["format 48000", "frame 2"]);
+        let json: serde_json::Value = serde_json::from_str(&forwarding_of(&senders)).unwrap();
+        assert_eq!(json["microphone"], "Test Controller", "for the server app");
+    }
+
+    #[test]
+    fn one_controller_at_a_time_for_the_microphone_too() {
+        let senders = Senders::default();
+        let h = mic_host();
+        let mut first = connection(1, &h, &senders);
+        let mut second = connection(2, &h, &senders);
+        assert!(answer(first.on_message(mic_on())).0);
+        assert_eq!(answer(second.on_message(mic_on())), (false, BUSY.into()));
+        assert!(
+            answer(second.on_message(camera_on())).0,
+            "the camera is another device"
+        );
+        drop(first);
+        assert_eq!(
+            h.open_mics.load(Ordering::SeqCst),
+            0,
+            "the first's feed ended"
+        );
+        assert!(
+            answer(second.on_message(mic_on())).0,
+            "free once the first left"
+        );
+    }
+
+    #[test]
+    fn the_controller_switching_the_microphone_off_frees_it_and_keeps_the_camera() {
+        let senders = Senders::default();
+        let h = mic_host();
+        let mut conn = connection(1, &h, &senders);
+        conn.on_message(camera_on());
+        conn.on_message(mic_on());
         assert!(conn
             .on_message(ask(Kind::MICROPHONE, false, 0, 0, 0))
             .is_none());
+        assert!(!conn.receiving_mic());
+        assert_eq!(h.open_mics.load(Ordering::SeqCst), 0);
+        conn.on_audio_frame(audio_frame(1));
+        assert!(h.heard.lock().unwrap().is_empty());
+        assert_eq!(h.open_feeds.load(Ordering::SeqCst), 1, "the camera goes on");
+        let senders = senders.lock().unwrap();
+        assert!(senders.get(&Kind::MICROPHONE).is_none());
+        assert!(senders.get(&Kind::CAMERA).is_some());
+    }
+
+    #[test]
+    fn another_microphone_from_the_same_controller_starts_afresh() {
+        let senders = Senders::default();
+        let h = mic_host();
+        let mut conn = connection(1, &h, &senders);
+        conn.on_message(mic_on());
+        assert!(answer(conn.on_message(mic_on())).0);
+        assert_eq!(h.open_mics.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn switching_forwarding_off_ends_the_microphone_forward() {
+        let senders = Senders::default();
+        let h = mic_host();
+        let mut conn = connection(1, &h, &senders);
+        conn.capabilities("Test Controller");
+        conn.on_message(mic_on());
+        assert!(conn.on_tick().is_empty(), "nothing changed");
+        h.allowed.store(false, Ordering::SeqCst);
+        let out = conn.on_tick();
+        let stop = out
+            .iter()
+            .find(|m| m.has_device_forward_response())
+            .expect("a stop");
+        let stop = stop.device_forward_response();
+        assert_eq!(stop.kind.enum_value(), Ok(Kind::MICROPHONE));
+        assert!(!stop.accepted);
+        assert_eq!(stop.reason, NOT_ALLOWED);
+        assert!(!conn.receiving_mic());
+        assert_eq!(h.open_mics.load(Ordering::SeqCst), 0);
+        assert!(senders.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_driver_going_away_ends_the_microphone_forward() {
+        let senders = Senders::default();
+        let h = mic_host();
+        let mut conn = connection(1, &h, &senders);
+        conn.capabilities("Test Controller");
+        conn.on_message(mic_on());
+        *h.mic.lock().unwrap() = NOT_INSTALLED;
+        let out = conn.on_tick();
+        assert!(out.iter().any(|m| m.has_device_status()
+            && m.device_status().kind.enum_value() == Ok(Kind::MICROPHONE)
+            && m.device_status().status == NOT_INSTALLED));
+        assert!(out.iter().any(|m| m.has_device_forward_response()
+            && m.device_forward_response().reason == NOT_INSTALLED));
+        assert_eq!(h.open_mics.load(Ordering::SeqCst), 0);
+        *h.mic.lock().unwrap() = READY;
+        let out = conn.on_tick();
+        assert_eq!(out.len(), 1, "back: only the status");
+        assert_eq!(out[0].device_status().status, READY);
     }
 
     #[test]

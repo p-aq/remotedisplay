@@ -22,6 +22,10 @@ pub mod macos_camera_capture;
 #[cfg(target_os = "macos")]
 pub mod macos_camera_sink;
 
+// remotedisplay: the host's virtual mic for microphone forwarding.
+#[cfg(target_os = "macos")]
+pub mod macos_mic_sink;
+
 #[cfg(target_os = "macos")]
 pub mod delegate;
 
