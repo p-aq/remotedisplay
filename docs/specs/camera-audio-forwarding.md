@@ -225,6 +225,8 @@ As built ([decision 0023](../architecture/decisions/0023-controller-microphone-c
 
 Echo. Without headphones, the far end's voice goes host → controller speakers → controller mic → host virtual mic → back into the call. The host app's echo canceller can't remove it: the speaker is on another machine and 100–300 ms away. Capture the controller mic with Apple's voice processing (AVAudioEngine's input node with voice processing on), which cancels echo against the controller's own speaker output. If Phase 2 shows that isn't enough, v1 asks for headphones, with a hint in the Devices menu when both Microphone and Play the Mac's sound here are on.
 
+As built ([decision 0026](../architecture/decisions/0026-echo-headphones-not-voice-processing.md)): no voice processing. Measured on a Mac mini with a Bluetooth headset, a USB microphone and the built-in speakers, it didn't start in any of four ways of picking its devices, the system's defaults included, and turning it on blocked for minutes each time. It would also follow the system's defaults, not the menu's pick. So v1 asks for headphones, with the hint. If that isn't enough, a software echo canceller with the host's sound as its reference is the way.
+
 Sending (new). A new src/client/device_forward.rs owns the camera thread: capture, encode, wrap in CameraFrame, hand to the session's sender. Its rules:
 
 - Send a key frame at start, every 2 seconds, and whenever CameraControl.key_frame_request arrives.
@@ -244,7 +246,7 @@ Adding FFI calls means regenerating the flutter_rust_bridge bindings (the Dart s
 
 As built ([decision 0018](../architecture/decisions/0018-devices-menu-state-and-ffi.md)): the forward's state, including the host's latest status, reaches the menu as an rd_device_forward session event on every change, the way the voice call reports its state, so there is no getter. The calls are session_set_device_forward, main_list_cameras, main_get_capture_permission and main_request_capture_permission. The camera list is read each time the menu opens; the hot-plug event comes with the microphone list in Phase 2.
 
-As built for the microphone ([decision 0024](../architecture/decisions/0024-devices-menu-microphone-row.md)): main_list_microphones lists the controller's inputs by name, without Remote Display Microphone. Like the camera list it's read each time the menu opens, so there's no plug-in event. While the microphone is on and Play the Mac's sound here is on, the row shows the headphones hint. It stays until voice processing has been measured. The row is disabled during a voice call, which would send the microphone a second time.
+As built for the microphone ([decision 0024](../architecture/decisions/0024-devices-menu-microphone-row.md)): main_list_microphones lists the controller's inputs by name, without Remote Display Microphone. Like the camera list it's read each time the menu opens, so there's no plug-in event. While the microphone is on and Play the Mac's sound here is on, the row shows the headphones hint, which is v1's answer to echo (decision 0026). The row is disabled during a voice call, which would send the microphone a second time.
 
 Testing without a camera. A --camera-test-pattern option sends a moving test card with a running clock, so the VM test bench can run the whole path without hardware.
 
