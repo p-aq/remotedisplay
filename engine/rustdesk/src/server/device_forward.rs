@@ -11,15 +11,11 @@
 // a forward when the owner switches forwarding off or the sink goes away. Dropping it,
 // with the connection, ends its forwards.
 
-use hbb_common::{
-    config::Config,
-    log,
-    message_proto::{
-        device_forward_request::Kind, message, AudioFormat, AudioFrame, CameraControl, CameraFrame,
-        DeviceForwardRequest, DeviceForwardResponse, DeviceStatus, Message,
-    },
-    ResultType,
+use base::message_proto::{
+    device_forward_request::Kind, message, AudioFormat, AudioFrame, CameraControl, CameraFrame,
+    DeviceForwardRequest, DeviceForwardResponse, DeviceStatus, Message,
 };
+use hbb_common::{config::Config, log, ResultType};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -300,8 +296,10 @@ pub struct Forwards {
     senders: Senders,
     /// The controller's name, from its login.
     controller: String,
-    camera: Option<Box<dyn Feed>>,
-    mic: Option<Box<dyn MicFeed>>,
+    // Used only through `&mut self`; the Mutex makes `Forwards` Sync, which the connection
+    // must be since 1.5.1 holds `&Connection` across awaits, and `get_mut` never locks.
+    camera: Option<Mutex<Box<dyn Feed>>>,
+    mic: Option<Mutex<Box<dyn MicFeed>>>,
     /// What this controller last heard about each device; empty until the login
     /// response advertised it.
     told: HashMap<Kind, &'static str>,
@@ -461,7 +459,7 @@ impl Forwards {
                     request.height,
                     request.fps
                 );
-                self.camera = Some(feed);
+                self.camera = Some(Mutex::new(feed));
                 self.last_key_request = None;
                 response(Kind::CAMERA, true, "")
             }
@@ -483,7 +481,7 @@ impl Forwards {
                     "Microphone forward from connection {} started",
                     self.conn_id
                 );
-                self.mic = Some(feed);
+                self.mic = Some(Mutex::new(feed));
                 self.mic_frames = 0;
                 response(Kind::MICROPHONE, true, "")
             }
@@ -503,20 +501,20 @@ impl Forwards {
     }
 
     pub fn on_audio_format(&mut self, format: AudioFormat) {
-        if let Some(mic) = self.mic.as_mut() {
+        if let Some(mic) = self.mic.as_mut().map(|m| m.get_mut().unwrap()) {
             mic.format(format);
         }
     }
 
     pub fn on_audio_frame(&mut self, frame: AudioFrame) {
-        if let Some(mic) = self.mic.as_mut() {
+        if let Some(mic) = self.mic.as_mut().map(|m| m.get_mut().unwrap()) {
             self.mic_frames += 1;
             mic.frame(frame);
         }
     }
 
     fn on_frame(&mut self, frame: CameraFrame) -> Option<Message> {
-        let Some(feed) = self.camera.as_mut() else {
+        let Some(feed) = self.camera.as_mut().map(|f| f.get_mut().unwrap()) else {
             // Not ours to show: no accepted camera forward on this connection.
             self.dropped += 1;
             return None;
@@ -751,15 +749,15 @@ mod tests {
     }
 
     fn frame(key: bool, capture_time_us: i64) -> message::Union {
-        let mut frames = hbb_common::message_proto::EncodedVideoFrames::new();
+        let mut frames = base::message_proto::EncodedVideoFrames::new();
         frames
             .frames
-            .push(hbb_common::message_proto::EncodedVideoFrame {
+            .push(base::message_proto::EncodedVideoFrame {
                 data: vec![0, 0, 0, 1, if key { 0x65 } else { 0x41 }].into(),
                 key,
                 ..Default::default()
             });
-        let mut video = hbb_common::message_proto::VideoFrame::new();
+        let mut video = base::message_proto::VideoFrame::new();
         video.set_h264s(frames);
         message::Union::CameraFrame(CameraFrame {
             frame: hbb_common::protobuf::MessageField::some(video),

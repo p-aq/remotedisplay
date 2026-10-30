@@ -6,11 +6,8 @@
 
 use super::MicFeed;
 use crate::client::jitter::{jitter, Stats, Writer};
-use hbb_common::{
-    log,
-    message_proto::{AudioFormat, AudioFrame},
-    ResultType,
-};
+use base::message_proto::{AudioFormat, AudioFrame};
+use hbb_common::{log, ResultType};
 use magnum_opus::{Channels, Decoder};
 use std::sync::{atomic::Ordering, mpsc, Arc};
 

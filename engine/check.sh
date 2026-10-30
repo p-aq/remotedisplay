@@ -47,6 +47,7 @@ LOG=$(mktemp -t rustdesk-apply.XXXXXX)
 export GIT_INDEX_FILE="$TMPIDX"
 stage_pristine_snapshot "$NEW" "$NEW_HBB" "$NEW_CPAL"
 PRISTINE=$(git write-tree)
+follow_moves "$OURS" "$PRISTINE"
 RC=0
 git apply --binary --cached --3way --directory=engine/rustdesk "$OURS" 2>"$LOG" || RC=$?
 CONFLICTS=$(git ls-files -u | awk '{print $4}' | sort -u)

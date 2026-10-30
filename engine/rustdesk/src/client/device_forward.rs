@@ -18,14 +18,14 @@
 //! FFI calls in `flutter_ffi.rs`.
 
 use crate::ui_session_interface::{InvokeUiSession, Session};
+use base::message_proto::{
+    device_forward_request::Kind, message, AudioFormat, AudioFrame, CameraControl, CameraFrame,
+    DeviceForwardRequest, DeviceForwardResponse, DeviceStatus, EncodedVideoFrame,
+    EncodedVideoFrames, Message, Misc, VideoFrame,
+};
 use hbb_common::{
     bytes::Bytes,
     log,
-    message_proto::{
-        device_forward_request::Kind, message, AudioFormat, AudioFrame, CameraControl, CameraFrame,
-        DeviceForwardRequest, DeviceForwardResponse, DeviceStatus, EncodedVideoFrame,
-        EncodedVideoFrames, Message, Misc, VideoFrame,
-    },
     protobuf::MessageField,
     tokio::{self, sync::mpsc},
     ResultType,

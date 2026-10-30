@@ -1,8 +1,10 @@
 // remotedisplay: the jitter buffer for real-time audio playback (camera & audio forwarding
 // spec, Host side › "The virtual-mic and speaker paths use a separate jitter buffer";
 // decisions 0021 and 0029). The host plays a controller's microphone through it into Remote
-// Display Microphone (src/server/device_forward/mic.rs), and every client plays the audio
-// it receives through it (AudioHandler in src/client.rs), such as a Mac host's sound.
+// Display Microphone (src/server/device_forward/mic.rs). Every client's AudioHandler, which
+// plays the audio it receives such as a Mac host's sound, keeps to its limits on upstream's
+// own playback buffer (AudioBuffer::keep_short in src/client.rs, the refill in
+// audio_playback.rs).
 //
 // It's the spec's, not upstream AudioHandler's (whose ring held 3 s, shrank only every 12 s
 // and slept in the callback): it starts playing once 40 ms are buffered, drops the oldest
@@ -16,9 +18,9 @@ use std::sync::{
 };
 
 /// Buffered before playing starts, and what is left after dropping the oldest.
-const TARGET_MS: usize = 40;
+pub(crate) const TARGET_MS: usize = 40;
 /// More than this waiting and the oldest is dropped.
-const MAX_MS: usize = 100;
+pub(crate) const MAX_MS: usize = 100;
 /// Room for a burst; only fills up if the device stops reading.
 const CAPACITY_MS: usize = 500;
 
@@ -195,55 +197,54 @@ mod tests {
         assert_eq!(r.waiting(), 2, "half a frame isn't kept");
     }
 
-    /// The client's playback through the Mac's default output: 3 s of silent 48 kHz
-    /// stereo Opus, 10 ms at a time in real time, as a host's sound arrives. Silent, so
-    /// nothing is heard. Needs an output device, so it's ignored by default.
+    /// The speaker path keeps 40–100 ms on upstream's buffer (decision 0029).
     #[cfg(not(target_os = "linux"))]
     #[test]
-    #[ignore]
-    fn plays_received_audio_without_running_dry() {
-        use crate::client::AudioHandler;
-        use hbb_common::message_proto::{AudioFormat, AudioFrame};
-        use std::time::{Duration, Instant};
-        let mut handler = AudioHandler::default();
-        handler.handle_format(AudioFormat {
+    fn the_speaker_path_keeps_40_to_100_ms() {
+        use ringbuf::ring_buffer::RbBase;
+        let mut buffer = crate::client::AudioBuffer::default();
+        buffer.resize(RATE as usize, 2);
+        buffer.append_pcm(&ramp(0, 150));
+        buffer.keep_short(2);
+        assert_eq!(buffer.0.lock().unwrap().occupied_len(), ms(40));
+        assert_eq!(buffer.3.load(Ordering::Relaxed), 1, "faded across the jump");
+        buffer.append_pcm(&ramp(0, 50));
+        buffer.keep_short(2);
+        assert_eq!(buffer.0.lock().unwrap().occupied_len(), ms(90), "90 ms stays");
+        assert_eq!(buffer.3.load(Ordering::Relaxed), 1);
+    }
+
+    /// Upstream's playback writer waits for 40 ms at the start and after running dry.
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn the_speaker_path_waits_for_40_ms_after_running_dry() {
+        use crate::client::audio_playback::{AudioPlaybackConfig, AudioPlaybackWriter};
+        use ringbuf::Rb;
+        use std::sync::{atomic::AtomicUsize, Mutex};
+        let ring = Arc::new(Mutex::new(ringbuf::HeapRb::<f32>::new(ms(1000))));
+        let config = AudioPlaybackConfig {
             sample_rate: RATE,
             channels: 2,
-            ..Default::default()
-        });
-        // Frames are dropped until the device's first cycle.
-        std::thread::sleep(Duration::from_millis(300));
-        let stats = handler.jitter_stats().expect("no output device");
-        let mut encoder = magnum_opus::Encoder::new(
-            RATE,
-            magnum_opus::Channels::Stereo,
-            magnum_opus::Application::LowDelay,
-        )
-        .unwrap();
-        let frame = encoder.encode_vec_float(&vec![0f32; ms(10)], 4000).unwrap();
-        let start = Instant::now();
-        for i in 0..300u64 {
-            let due = start + Duration::from_millis(10 * i);
-            if let Some(wait) = due.checked_duration_since(Instant::now()) {
-                std::thread::sleep(wait);
-            }
-            handler.handle_frame(AudioFrame {
-                data: frame.clone().into(),
-                ..Default::default()
-            });
+        };
+        let mut writer =
+            AudioPlaybackWriter::new(config, ring.clone(), Arc::new(AtomicUsize::new(0))).unwrap();
+        writer.refill_after_running_dry(ms(TARGET_MS));
+        let push = |ms: usize| ring.lock().unwrap().push_slice(&vec![0.5; self::ms(ms)]);
+        let mut out = vec![1.0f32; CYCLE];
+        push(30);
+        writer.write_output(&mut out);
+        assert!(out.iter().all(|&s| s == 0.0), "30 ms isn't enough");
+        push(10);
+        writer.write_output(&mut out);
+        assert_eq!(out[CYCLE - 1], 0.5, "plays once 40 ms are there");
+        for _ in 0..4 {
+            writer.write_output(&mut out);
         }
-        let underruns = stats.underruns.load(Ordering::Relaxed);
-        let dropped = stats.dropped.load(Ordering::Relaxed);
-        let played = stats.played.load(Ordering::Relaxed);
-        println!(
-            "{} samples played in {:?}, {} underruns, {} dropped",
-            played,
-            start.elapsed(),
-            underruns,
-            dropped
-        );
-        assert!(played > 0, "the device never played");
-        assert_eq!(underruns, 0, "ran dry while fed in real time");
-        assert_eq!(dropped, 0, "dropped while fed in real time");
+        push(20);
+        writer.write_output(&mut out);
+        assert!(out.iter().all(|&s| s == 0.0), "ran dry: waits for 40 ms again");
+        push(20);
+        writer.write_output(&mut out);
+        assert_eq!(out[CYCLE - 1], 0.5);
     }
 }

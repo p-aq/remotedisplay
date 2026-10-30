@@ -1,14 +1,12 @@
 //! remotedisplay: the camera and microphone forwarding messages in `message.proto`
 //! (docs/specs/camera-audio-forwarding.md, decision 0017).
 
-use hbb_common::{
-    message_proto::{
-        device_forward_request::Kind, message, video_frame, CameraControl, CameraFrame,
-        DeviceForwardRequest, DeviceForwardResponse, DeviceStatus, EncodedVideoFrame,
-        EncodedVideoFrames, Message, VideoFrame,
-    },
-    protobuf::{CodedOutputStream, Message as _, MessageField, MessageFull},
+use base::message_proto::{
+    device_forward_request::Kind, message, video_frame, CameraControl, CameraFrame,
+    DeviceForwardRequest, DeviceForwardResponse, DeviceStatus, EncodedVideoFrame,
+    EncodedVideoFrames, Message, VideoFrame,
 };
+use hbb_common::protobuf::{CodedOutputStream, Message as _, MessageField, MessageFull};
 
 const OURS: [(&str, i32); 5] = [
     ("device_forward_request", 200),

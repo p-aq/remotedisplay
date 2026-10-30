@@ -98,10 +98,8 @@ mod tests {
 #[cfg(all(test, feature = "screencapturekit"))]
 mod capture {
     use crate::server::{connection::ConnInner, service::Service};
-    use hbb_common::{
-        message_proto::{message, misc},
-        tokio::sync::mpsc,
-    };
+    use base::message_proto::{message, misc};
+    use hbb_common::tokio::sync::mpsc;
     use magnum_opus::{Channels, Decoder};
     use std::{
         f64::consts::PI,
