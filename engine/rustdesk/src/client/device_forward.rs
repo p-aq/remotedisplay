@@ -1680,6 +1680,17 @@ mod capture {
         }
     }
 
+    #[test]
+    #[ignore]
+    fn the_menu_lists_the_macs_microphones() {
+        let microphones: Vec<serde_json::Value> = serde_json::from_str(&ui::microphones()).unwrap();
+        assert!(!microphones.is_empty(), "no microphone");
+        for microphone in &microphones {
+            assert_eq!(microphone["id"], microphone["name"]);
+            assert_ne!(microphone["name"], "Remote Display Microphone");
+        }
+    }
+
     fn next(
         rt: &tokio::runtime::Runtime,
         fwd: &mut DeviceForward,
@@ -1706,12 +1717,137 @@ mod capture {
     }
 
     fn answer(accepted: bool, reason: &str) -> message::Union {
+        answer_for(Kind::CAMERA, accepted, reason)
+    }
+
+    fn answer_for(kind: Kind, accepted: bool, reason: &str) -> message::Union {
         message::Union::DeviceForwardResponse(DeviceForwardResponse {
-            kind: Kind::CAMERA.into(),
+            kind: kind.into(),
             accepted,
             reason: reason.into(),
             ..Default::default()
         })
+    }
+
+    fn microphone() -> Option<String> {
+        std::env::var("RD_MIC").ok().filter(|name| !name.is_empty())
+    }
+
+    /// The sender with the Mac's own microphone (`RD_MIC`, the default otherwise) and a
+    /// host played by the test (`make forwards`).
+    #[test]
+    #[ignore]
+    fn forwards_the_microphone() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let mut fwd = DeviceForward::with(
+            Box::new(start_camera),
+            Box::new(start_mic),
+            ANSWER_TIMEOUT,
+            Box::new(|_| {}),
+        );
+        let ask = fwd
+            .switch(Switch {
+                kind: Kind::MICROPHONE,
+                on: true,
+                device: microphone(),
+            })
+            .expect("microphone started (is microphone access allowed? make ask)");
+        let request = ask.device_forward_request();
+        println!("request: {:?}", request.device_name);
+        assert!(request.on && request.kind == Kind::MICROPHONE.into());
+        assert_eq!(request.device_name, microphone().unwrap_or_default());
+
+        assert!(
+            collect(&rt, &mut fwd, Duration::from_secs(1)).is_empty(),
+            "audio before the host accepted"
+        );
+        fwd.on_message(answer_for(Kind::MICROPHONE, true, ""));
+        let sent = collect(&rt, &mut fwd, Duration::from_secs(3));
+        fwd.on_message(answer_for(Kind::MICROPHONE, false, "not-allowed"));
+        let after = collect(&rt, &mut fwd, Duration::from_secs(1));
+
+        let format = sent[0].misc().audio_format();
+        let frames = sent[1..].iter().filter(|m| m.has_audio_frame()).count();
+        println!(
+            "AudioFormat {} Hz, {} channel(s), then {} AudioFrames in 3 s, {} after the host stopped it",
+            format.sample_rate,
+            format.channels,
+            frames,
+            after.len()
+        );
+        assert_eq!((format.sample_rate, format.channels), (48000, 1));
+        assert_eq!(frames, sent.len() - 1, "only AudioFrames after the format");
+        assert!(
+            (270..=330).contains(&frames),
+            "not 100 a second: {}",
+            frames
+        );
+        assert!(
+            after.is_empty(),
+            "audio after the host stopped the microphone"
+        );
+    }
+
+    /// Unplug the microphone, or turn the headset off, within a minute of the start
+    /// (`make unplug`).
+    #[test]
+    #[ignore]
+    fn tells_the_host_when_the_microphone_is_unplugged() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let states = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let ui = states.clone();
+        let mut fwd = DeviceForward::with(
+            Box::new(start_camera),
+            Box::new(start_mic),
+            ANSWER_TIMEOUT,
+            Box::new(move |state| ui.lock().unwrap().push(state.to_owned())),
+        );
+        fwd.switch(Switch {
+            kind: Kind::MICROPHONE,
+            on: true,
+            device: microphone(),
+        })
+        .expect("microphone started (is microphone access allowed? make ask)");
+        println!(
+            "{}: unplug it now",
+            microphone().as_deref().unwrap_or("the default microphone")
+        );
+        fwd.on_message(answer_for(Kind::MICROPHONE, true, ""));
+        let until = Instant::now() + Duration::from_secs(60);
+        let mut frames = 0;
+        let off = loop {
+            let left = until
+                .checked_duration_since(Instant::now())
+                .expect("not told within a minute");
+            match next(&rt, &mut fwd, left) {
+                Some(msg) if msg.has_audio_frame() || msg.has_misc() => frames += 1,
+                Some(msg) => break msg,
+                None => panic!("not told within a minute"),
+            }
+        };
+        let after = collect(&rt, &mut fwd, Duration::from_secs(1));
+        println!(
+            "{} AudioFrames, then {:?}, {} after; the menu heard {:?}",
+            frames,
+            off,
+            after.len(),
+            states.lock().unwrap().last()
+        );
+        assert!(frames >= 100, "the microphone was unplugged before it sent");
+        assert!(off.has_device_forward_request() && !off.device_forward_request().on);
+        assert!(after.is_empty(), "audio after the microphone went away");
+        assert!(states
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .contains(r#""reason":"microphone-lost""#));
     }
 
     #[test]
