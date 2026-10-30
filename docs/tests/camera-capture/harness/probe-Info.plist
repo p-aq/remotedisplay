@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- rd-camera-probe.app: the engine's test binary as its own app, so camera access is
+     asked for and granted to it alone. macOS ends an app that opens a camera without
+     NSCameraUsageDescription; it lists Continuity Camera only with
+     NSCameraUseContinuityCameraDeviceType. No Dock icon. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>app.remotedisplay.spike.camera-probe</string>
+    <key>CFBundleName</key>
+    <string>rd-camera-probe</string>
+    <key>CFBundleExecutable</key>
+    <string>rd-camera-probe</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSCameraUseContinuityCameraDeviceType</key>
+    <true/>
+    <key>NSCameraUsageDescription</key>
+    <string>Remote Display's camera test captures a few seconds from your camera and deletes them afterwards.</string>
+</dict>
+</plist>

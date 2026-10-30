@@ -20,6 +20,16 @@ fn build_mac() {
     }
     b.flag("-std=c++17").file(file).compile("macos");
     println!("cargo:rerun-if-changed={}", file);
+    // remotedisplay: the controller's camera for camera forwarding (decision 0004).
+    let camera = "src/platform/macos_camera_capture.mm";
+    cc::Build::new()
+        .flag("-std=c++17")
+        .file(camera)
+        .compile("macos_camera_capture");
+    println!("cargo:rerun-if-changed={}", camera);
+    for framework in ["AVFoundation", "CoreMedia", "CoreVideo", "VideoToolbox"] {
+        println!("cargo:rustc-link-lib=framework={}", framework);
+    }
 }
 
 #[cfg(all(windows, feature = "inline"))]

@@ -47,6 +47,10 @@
 	<string>MainMenu</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Record the sound from microphone for the purpose of the remote desktop.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Show your camera on the Mac you control, as Remote Display Camera, when you turn it on in the Devices menu.</string>
+	<key>NSCameraUseContinuityCameraDeviceType</key>
+	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

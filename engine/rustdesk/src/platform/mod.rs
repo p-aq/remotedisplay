@@ -14,6 +14,10 @@ pub mod win_device;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
+// remotedisplay: the controller's camera for camera forwarding.
+#[cfg(target_os = "macos")]
+pub mod macos_camera_capture;
+
 #[cfg(target_os = "macos")]
 pub mod delegate;
 
