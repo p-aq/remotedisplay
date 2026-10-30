@@ -44,8 +44,9 @@ Without this, an update would leave our old hbb_common underneath a new engine.
 Upstream's `Cargo.toml` takes cpal from the `osx-screencapturekit` branch of
 [rustdesk-org/cpal](https://github.com/rustdesk-org/cpal), and its `Cargo.lock` pins the
 commit. Here that commit is expanded at `libs/cpal` and `Cargo.toml` takes cpal from it,
-so one change to cpal can be carried
-([decision 0022](../docs/architecture/decisions/0022-vendored-cpal-excludes-own-audio.md)).
+so our changes to cpal can be carried
+([decision 0022](../docs/architecture/decisions/0022-vendored-cpal-excludes-own-audio.md),
+[decision 0025](../docs/architecture/decisions/0025-cpal-buffer-range-from-the-device.md)).
 It works as hbb_common does. Its baseline is **never written by hand**: it is the commit
 the tag's `Cargo.lock` pins (`cpal_commit_of`), fetched by SHA and pinned under
 `refs/cpal/<sha>`. `diff.sh` and `check.sh` diff `libs/cpal` against it, and `update.sh`
@@ -78,7 +79,7 @@ vendoring itself.
 | `src/server/connection.rs`, `src/server/device_forward.rs` | the host side of forwarding: capabilities, answering requests, one sender per device, `CameraFrame`s to the sink, a microphone forward's audio to the virtual mic, `DeviceStatus`, stopping on the owner's switch (`HOOKS.md` E7) |
 | `src/server/connection.rs`, `src/server/connection/audio_gate.rs` | the host plays a controller's audio only during an accepted voice call or microphone forward, independent of `disable_audio` (`HOOKS.md` E2) |
 | `src/server/audio_service.rs`, `src/server/audio_service/host_sound.rs` | with `screencapturekit`, host sound never falls back to an input device (`HOOKS.md` E1); the Phase 3 capture tests, `#[ignore]`d, run by `docs/tests/system-sound/` |
-| `Cargo.toml`, `Cargo.lock`, `libs/cpal` (vendored, diffed against its pinned commit) | cpal from `libs/cpal`, outside the workspace; its ScreenCaptureKit capture leaves out the process's own audio, so a forwarded microphone doesn't go back to its controller (`HOOKS.md` E11) |
+| `Cargo.toml`, `Cargo.lock`, `libs/cpal` (vendored, diffed against its pinned commit) | cpal from `libs/cpal`, outside the workspace; its ScreenCaptureKit capture leaves out the process's own audio, so a forwarded microphone doesn't go back to its controller (`HOOKS.md` E11); its CoreAudio host reads a device's buffer sizes from the device, so every output has configs and listing inputs doesn't wait on the microphone prompt (E13) |
 | `src/platform/macos_mic_sink.mm`, `src/platform/macos_mic_sink.rs`, `src/server/device_forward/mic.rs` (and `build.rs`, `src/platform/mod.rs`, `src/server/connection.rs`) | the host's microphone path: decode, jitter buffer, Remote Display Microphone's feeder (`HOOKS.md` E10); its device test, `#[ignore]`d, runs from `docs/tests/virtual-mic/` |
 | `src/client.rs`, `src/client/io_loop.rs`, `src/client/device_forward.rs` | the controller's camera and microphone senders: request, `CameraFrame`s or audio once accepted, `CameraControl`, their own queues into the io loop, ending the forward when the device goes away (`HOOKS.md` E6) |
 | `src/client/device_forward/mic.rs`, `src/platform/macos_mic_capture.mm`, `src/platform/macos_mic_capture.rs` (and `build.rs`, `src/platform/mod.rs`) | the controller's microphone capture for a forward and macOS's microphone access (`HOOKS.md` E12) |
