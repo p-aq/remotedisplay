@@ -858,7 +858,10 @@ class _SessionToolbarState extends State<SessionToolbar> {
     }
 
     // The engine's Mute toggle, the other way round (Input no longer shows it).
-    final soundAllowed = ffi.ffiModel.permissions['audio'] != false;
+    // The host may not allow its sound, or may not be able to capture it.
+    final soundWhy = soundReason(
+        audioAllowed: ffi.ffiModel.permissions['audio'] != false,
+        hostSound: pi.platformAdditions['rd_host_sound']);
     // The session toggle the engine's Mute uses (toolbarDisplayToggle).
     const mute = 'disable-audio';
     final muted =
@@ -884,7 +887,7 @@ class _SessionToolbarState extends State<SessionToolbar> {
     final micSending = mic.on || mic.asking;
     if (micSending) {
       items.add(_deviceRow(true, 'Microphone',
-          note: echoHint(micOn: true, soundOn: soundAllowed && !muted) ??
+          note: echoHint(micOn: true, soundOn: soundWhy == null && !muted) ??
               (mics.length > 1 ? null : pickedMic?.name),
           detail: mic.asking ? 'Starting…' : 'On',
           onTap: () => _setMicrophone(false, '')));
@@ -917,12 +920,12 @@ class _SessionToolbarState extends State<SessionToolbar> {
     items.add(_sep());
     items.add(_header('SOUND'));
     items.add(_deviceRow(
-        soundAllowed && !muted,
+        soundWhy == null && !muted,
         hostIsMac
             ? "Play the Mac's sound here"
             : "Play the computer's sound here",
-        note: soundAllowed ? null : "This computer doesn't share its sound",
-        onTap: soundAllowed
+        note: soundWhy,
+        onTap: soundWhy == null
             ? () => bind.sessionToggleOption(sessionId: sessionId, value: mute)
             : null));
     await _showItemsMenu(anchor, items);

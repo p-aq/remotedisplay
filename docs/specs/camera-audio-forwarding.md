@@ -280,6 +280,8 @@ Speakers: turn on the existing ScreenCaptureKit path. RustDesk captures system s
 
 As built ([decision 0022](../architecture/decisions/0022-vendored-cpal-excludes-own-audio.md)): the capture leaves out remotedisplayd's own audio. ScreenCaptureKit captures by process, so without that the microphone remotedisplayd plays into Remote Display Microphone went back to the controller. cpal is vendored into the engine to carry the change.
 
+As built ([decision 0028](../architecture/decisions/0028-host-sound-status.md)): "reports itself unavailable" is a login key, rd_host_sound, "ready" or "unavailable". ScreenCaptureKit counts as ready only with Screen Recording, and an owner's named input counts as ready. Play the Mac's sound here is shown off and disabled when it says unavailable, with "This Mac can't share its sound until Screen Recording is on there". There's no DeviceStatus for sound, since granting Screen Recording restarts the engine.
+
 Accepting requests. src/server/connection.rs handles the new messages:
 
 - Check the owner's setting, a new engine option rd-allow-device-forward, and that the pieces are installed.

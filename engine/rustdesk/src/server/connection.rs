@@ -1823,6 +1823,13 @@ impl Connection {
         // unless it's a Mac).
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         platform_additions.extend(self.device_forward.capabilities(&self.lr.my_name));
+        // remotedisplay: whether the controller can hear this Mac's sound, for its
+        // Devices menu (decision 0028).
+        #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+        platform_additions.insert(
+            "rd_host_sound".into(),
+            json!(super::audio_service::host_sound_status()),
+        );
 
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         if !platform_additions.is_empty() {
