@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- The app's entitlements in builds that bundle Remote Display Camera (decision 0010):
+     Entitlements.plist plus what installing the extension needs. remotedisplayd and
+     builds without the provisioning profiles keep Entitlements.plist. -->
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    <!-- Restricted: needs the embedded provisioning profile, or macOS kills the app at launch. -->
+    <key>com.apple.developer.system-extension.install</key>
+    <true/>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>@TEAM_ID@.app.remotedisplay.server</string>
+    </array>
+    <key>com.apple.application-identifier</key>
+    <string>@TEAM_ID@.app.remotedisplay.server</string>
+    <key>com.apple.developer.team-identifier</key>
+    <string>@TEAM_ID@</string>
+</dict>
+</plist>

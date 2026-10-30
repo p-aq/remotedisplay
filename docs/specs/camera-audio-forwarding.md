@@ -318,6 +318,8 @@ The camera extension is what changes how Remote Display Server is built and sign
 - Removal. A Remove camera and microphone button deactivates the extension (OSSystemExtensionRequest.deactivationRequest) and deletes the driver.
 - Forks. Anyone building their own copy needs their own Apple Developer team and profiles. Apple's camera extension guide links to development-mode steps for testing builds that aren't notarized.
 
+As built ([decision 0019](../architecture/decisions/0019-camera-extension-in-the-server-app.md)): server-mac/Makefile builds the extension with swiftc rather than xcodebuild, as the Phase 0 harness did, and bundles it only when SIGN_ID, APP_PROFILE and EXT_PROFILE are all given; release-mac.sh passes the profiles from RD_SERVER_PROFILE and RD_CAMERA_PROFILE. The extension accepts a sink client only when it is remotedisplayd signed by the extension's own team. The Remove camera and microphone button is in Settings, shown while the extension is installed or waiting for approval.
+
 ## Testing plan
 
 Every test runs against real apps on macOS 14 and macOS 26 hosts, on the project's Tart VM bench where no hardware is needed and on two physical Macs where it is.

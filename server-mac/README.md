@@ -20,15 +20,18 @@ all the configuration and status:
 - Status + service switch.
 - **Setup** (what's done and what's missing, with a button on each pending item): Service running,
   Screen Recording, Accessibility, Permanent password. "N to do / All set" counter. Camera and
-  Microphone rows follow, optional and not counted: *Not available in this build* until the
-  camera extension and the virtual mic are bundled.
+  Microphone rows follow, optional and not counted. Camera shows where Remote Display Camera
+  stands, from macOS: *Install…*, an admin's approval in System Settings (*Open Settings…*),
+  *Installed*; or *Not available in this build* when the build has no provisioning profiles
+  (decision 0019). Microphone is *Not available in this build* until the virtual mic (Phase 2).
 - **Connect from another device**: LAN and Tailscale `ip:port` with copy.
 - **Active sessions**: connected peers (lsof on the engine, port 21118) + *Disconnect all*
   (restarts the engine).
 - **Settings**: Open at Login, password (Set…/Change…), access mode, *Let controllers share their
   camera and microphone* (off by default; `remotedisplayd --set-device-forward on|off` over IPC,
   state read back from `remotedisplay-perms.json`'s `device_forward`). Forwarding itself comes with
-  the camera & audio forwarding spec's Phases 1 and 2.
+  the camera & audio forwarding spec's Phases 1 and 2. *Remove Camera and Microphone* shows while
+  Remote Display Camera is installed or waiting for approval.
 - **About**: engine version, open logs, reveal configuration.
 
 Opens by itself on startup if setup or password is missing; also on double-click on the app
@@ -77,9 +80,14 @@ engine isn't running (it died, or never started), relaunches it every ≥10 s; t
 A single bundle, two executables:
 
 ```
-Remote Display Server.app/Contents/MacOS/
-├── RemoteDisplayServer   ← SwiftUI UI (MenuBarExtra)
-└── remotedisplayd        ← Rust engine (cargo, no flutter) = the `rustdesk` binary
+Remote Display Server.app/Contents/
+├── MacOS/
+│   ├── RemoteDisplayServer   ← SwiftUI UI (MenuBarExtra)
+│   └── remotedisplayd        ← Rust engine (cargo, no flutter) = the `rustdesk` binary
+└── Library/SystemExtensions/
+    └── app.remotedisplay.server.camera.systemextension
+                              ← Remote Display Camera (CameraExtension/), only in builds
+                                signed with its provisioning profiles
 ```
 
 The engine runs via a LaunchAgent (`~/Library/LaunchAgents/app.remotedisplay.server.plist`,
@@ -109,6 +117,17 @@ as the UI, they share TCC permission attribution.
 `make sign` signs with the personal-team identity chosen by `sign-identity.sh` (see
 *Signing* below), so TCC permissions survive rebuilds; without one it signs ad-hoc and the
 permissions have to be granted again after every rebuild.
+
+To bundle Remote Display Camera, give the two provisioning profiles that match that
+identity's certificate, one for the app (`app.remotedisplay.server`, with the System
+Extension capability and the app group) and one for the extension
+(`app.remotedisplay.server.camera`, with the app group):
+
+```sh
+make sign ENGINE_BIN=… APP_PROFILE=server.provisionprofile EXT_PROFILE=camera.provisionprofile
+```
+
+Without both, or without an identity, the build leaves the extension out and says so.
 
 ## Installing
 
@@ -192,6 +211,14 @@ the certificate *kind*, and TCC stores the requirement when a permission is gran
 the explicit one a development build and a notarized Developer ID build satisfy the same
 Screen Recording and Accessibility grants. Releases up to 1.0.3 carried the default
 requirement, so the first Developer ID build asks for both permissions once more.
+
+Each binary has its own entitlements (decision 0010): `remotedisplayd` always gets
+`Entitlements.plist`. In a build with the camera, the extension is signed first, on its own,
+with `CameraExtension/Extension.entitlements` (sandbox, app group), and the app gets
+`App.entitlements`: `Entitlements.plist` plus the restricted system-extension install
+entitlement and the app group. Nothing is signed with `--deep`. Without the profiles the app
+keeps `Entitlements.plist`, as before. Only `remotedisplayd` from the same team may feed the
+camera; the extension checks every sink client (decision 0019).
 
 Release builds (`release/release-mac.sh`) are notarized with Apple and stapled; the
 Developer ID identity lives in a dedicated keychain on the build Mac, see

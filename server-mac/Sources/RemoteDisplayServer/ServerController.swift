@@ -40,10 +40,12 @@ final class ServerController {
     /// The controller sending its camera, from remotedisplay-forwarding.json, which the
     /// engine rewrites every 2 s (decision 0009). Nil when no one is, or the service is off.
     var cameraSender: String?
-    /// The camera extension, bundled only in builds signed with its provisioning profile
-    /// (spec, Packaging). Without it, the Camera row says it isn't in this build.
-    let cameraExtensionBundled = FileManager.default.fileExists(atPath: Bundle.main.bundlePath
-        + "/Contents/Library/SystemExtensions/app.remotedisplay.server.camera.systemextension")
+    /// Remote Display Camera, the camera extension: bundled only in builds signed with its
+    /// provisioning profiles (decision 0019). Setup's Camera row shows its state.
+    var cameraState: CameraExtension.State = CameraExtension.bundled ? .notInstalled : .notBundled
+    /// Why the last install or removal failed, until the next one.
+    var cameraError: String?
+    @ObservationIgnored private let cameraExtension = CameraExtension()
     var engineVersion = "—"
     /// Newer release published on GitHub (e.g. "1.0.3"), or nil. Checked at launch and
     /// every 6 hours; the update itself stays manual (the link opens the releases page).
@@ -145,6 +147,14 @@ final class ServerController {
         engineProblem = Self.checkEngine(at: enginePath)
         if let problem = engineProblem { NSLog("[remotedisplay] engine problem: %@", problem) }
         engineVersion = readEngineVersion()
+        cameraExtension.onChange = { [weak self] state, error in
+            // macOS answers whenever it likes, possibly while the menu is open (menuOpenSince).
+            self?.whenMenuClosed {
+                guard let self else { return }
+                if self.cameraState != state { self.cameraState = state }
+                if let error { self.cameraError = error }
+            }
+        }
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.refresh()
@@ -227,6 +237,7 @@ final class ServerController {
         launchAtLogin = SMAppService.mainApp.status == .enabled
         passwordSet = readPasswordSet()
         sessions = serviceRunning ? readSessions() : []
+        cameraExtension.refresh()
 
         // If a permission flipped from NO to YES, restart the engine so it starts with
         // the permission already in effect.
@@ -754,6 +765,19 @@ final class ServerController {
                 self.refresh()
             }
         }
+    }
+
+    /// Setup's Install… for Camera. macOS then wants an admin to allow it in System Settings.
+    func installCamera() {
+        cameraError = nil
+        cameraExtension.install()
+    }
+
+    /// Remove camera and microphone (spec, Packaging): deactivates the camera extension;
+    /// the microphone's driver joins it in Phase 2.
+    func removeCameraAndMicrophone() {
+        cameraError = nil
+        cameraExtension.remove()
     }
 
 }

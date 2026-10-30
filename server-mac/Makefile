@@ -29,16 +29,47 @@ CODE_ID := app.remotedisplay.server
 # are interchangeable. --timestamp: secure timestamp, required by notarization.
 SIGN_FLAGS := --sign "$(SIGN_ID)" --identifier "$(CODE_ID)" --options runtime --timestamp \
   --requirements '=designated => identifier "$(CODE_ID)" and anchor apple generic and certificate leaf[subject.OU] = "$(TEAM_ID)"' \
-  --entitlements Entitlements.plist --force
+  --force
 
-.PHONY: all build bundle sign run clean
+# Remote Display Camera, the camera extension (spec, Packaging; decisions 0010, 0019).
+# Installing it takes a restricted entitlement, which works only with a provisioning
+# profile, and each profile matches one kind of certificate. So the extension is bundled
+# only when both profiles for SIGN_ID's certificate are given:
+#   make APP_PROFILE=server.provisionprofile EXT_PROFILE=camera.provisionprofile
+# Without them the build leaves it out, and Setup's Camera row says so.
+APP_PROFILE ?=
+EXT_PROFILE ?=
+EXT_ID      := $(CODE_ID).camera
+EXT_BUNDLE   = $(CONTENTS)/Library/SystemExtensions/$(EXT_ID).systemextension
+CAMERA_DIR   = $(OUT_DIR)/camera
+CAMERA_BIN   = $(CAMERA_DIR)/$(EXT_ID)
+CAMERA      := $(if $(and $(strip $(SIGN_ID)),$(APP_PROFILE),$(EXT_PROFILE)),yes,no)
+# The app takes the install entitlement only in builds that bundle the extension.
+APP_ENTITLEMENTS = $(if $(filter yes,$(CAMERA)),$(CAMERA_DIR)/app.entitlements,Entitlements.plist)
+# The extension carries the app's version, so a new app version updates it.
+VERSION       := $(shell /usr/libexec/PlistBuddy -c 'Print CFBundleVersion' $(INFO_PLIST))
+SHORT_VERSION := $(shell /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' $(INFO_PLIST))
+# $(call fill,template,output): substitute the team and version placeholders.
+fill = sed -e 's/@TEAM_ID@/$(TEAM_ID)/g' -e 's/@VERSION@/$(VERSION)/g' \
+  -e 's/@SHORT_VERSION@/$(SHORT_VERSION)/g' "$(1)" > "$(2)"
+
+.PHONY: all build camera bundle sign run clean
 
 all: sign
 
 build:
 	@swift build -c release --arch arm64 --arch x86_64
 
-bundle: build
+# The extension, universal like the app, built with swiftc as in the Phase 0 harness.
+camera:
+	@mkdir -p "$(CAMERA_DIR)"
+	@for arch in arm64 x86_64; do \
+	  swiftc -O -target $$arch-apple-macos14.0 -module-name RemoteDisplayCamera \
+	    -o "$(CAMERA_DIR)/camera-$$arch" CameraExtension/*.swift || exit 1; \
+	done
+	@lipo -create -output "$(CAMERA_BIN)" "$(CAMERA_DIR)/camera-arm64" "$(CAMERA_DIR)/camera-x86_64"
+
+bundle: build $(if $(filter yes,$(CAMERA)),camera)
 	@rm -rf "$(APP_BUNDLE)"
 	@mkdir -p "$(MACOS_DIR)" "$(RES_DIR)"
 	@cp "$(BINARY)" "$(MACOS_DIR)/$(APP_NAME)"
@@ -47,6 +78,20 @@ bundle: build
 	@chmod +x "$(MACOS_DIR)/remotedisplayd"
 	@cp "$(INFO_PLIST)" "$(CONTENTS)/Info.plist"
 	@test -f AppIcon.icns && cp AppIcon.icns "$(RES_DIR)/AppIcon.icns" || true
+ifeq ($(CAMERA),yes)
+	@test -f "$(APP_PROFILE)" || { echo "ERROR: APP_PROFILE=$(APP_PROFILE) does not exist"; exit 1; }
+	@test -f "$(EXT_PROFILE)" || { echo "ERROR: EXT_PROFILE=$(EXT_PROFILE) does not exist"; exit 1; }
+	@mkdir -p "$(EXT_BUNDLE)/Contents/MacOS"
+	@cp "$(CAMERA_BIN)" "$(EXT_BUNDLE)/Contents/MacOS/$(EXT_ID)"
+	@$(call fill,CameraExtension/Info.plist,$(EXT_BUNDLE)/Contents/Info.plist)
+	@cp "$(EXT_PROFILE)" "$(EXT_BUNDLE)/Contents/embedded.provisionprofile"
+	@cp "$(APP_PROFILE)" "$(CONTENTS)/embedded.provisionprofile"
+	@echo "Bundled Remote Display Camera ($(EXT_ID))"
+else ifneq ($(APP_PROFILE)$(EXT_PROFILE),)
+	@echo "WARNING: Remote Display Camera needs SIGN_ID, APP_PROFILE and EXT_PROFILE together; left out of this build"
+else
+	@echo "No provisioning profiles: Remote Display Camera is left out of this build"
+endif
 	@echo "Built $(APP_BUNDLE)"
 
 sign: bundle
@@ -56,9 +101,16 @@ ifeq ($(strip $(SIGN_ID)),)
 else
 	@echo "Signing with stable identity: $(SIGN_ID)  (id=$(CODE_ID))"
 	@./unlock-signing-keychain.sh || true
-	@codesign $(SIGN_FLAGS) "$(MACOS_DIR)/remotedisplayd"
-	@codesign $(SIGN_FLAGS) "$(MACOS_DIR)/$(APP_NAME)"
-	@codesign $(SIGN_FLAGS) "$(APP_BUNDLE)"
+ifeq ($(CAMERA),yes)
+	@$(call fill,CameraExtension/Extension.entitlements,$(CAMERA_DIR)/camera.entitlements)
+	@$(call fill,App.entitlements,$(CAMERA_DIR)/app.entitlements)
+	@# The extension first, on its own, with its own identifier; never --deep (decision 0010).
+	@codesign --sign "$(SIGN_ID)" --identifier "$(EXT_ID)" --options runtime --timestamp \
+	  --entitlements "$(CAMERA_DIR)/camera.entitlements" --force "$(EXT_BUNDLE)"
+endif
+	@codesign $(SIGN_FLAGS) --entitlements Entitlements.plist "$(MACOS_DIR)/remotedisplayd"
+	@codesign $(SIGN_FLAGS) --entitlements "$(APP_ENTITLEMENTS)" "$(MACOS_DIR)/$(APP_NAME)"
+	@codesign $(SIGN_FLAGS) --entitlements "$(APP_ENTITLEMENTS)" "$(APP_BUNDLE)"
 	@codesign --verify --deep --strict "$(APP_BUNDLE)"
 endif
 	@xattr -dr com.apple.quarantine "$(APP_BUNDLE)" 2>/dev/null || true

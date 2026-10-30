@@ -9,6 +9,12 @@ FaceTime, Zoom and other apps through its source stream.
 every check. The extension's gate tests haven't run yet, because they need an Apple
 Developer team to sign the extension. Results go in the tables as they come in.
 
+**Phase 1:** the extension and the container app's install and remove are now in Remote
+Display Server (`server-mac/CameraExtension/`, Setup's Camera row; [decision
+0019](../../architecture/decisions/0019-camera-extension-in-the-server-app.md)). Its sink
+accepts only `remotedisplayd`, so the feeder here works only with the harness's own
+extension, which keeps its `app.remotedisplay.spike` identifiers.
+
 ## What's here
 
 | Harness | What it is | Becomes in Phase 1 |
