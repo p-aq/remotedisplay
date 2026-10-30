@@ -1,6 +1,7 @@
 # 0002. Reserve `Message.union` 100–119 for Remote Display
 
-- **Status:** Proposed, 2026-10-23. Needs the maintainer's agreement (issue #14).
+- **Status:** Superseded by [0017](0017-reserved-message-range-200.md), 2026-10-27. Was
+  Proposed, 2026-10-23, pending the maintainer's agreement (issue #14).
 - **Original design:** Follows the spec. Follows "additive protobuf changes only".
 
 ## Context

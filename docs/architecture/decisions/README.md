@@ -16,7 +16,7 @@ architecture README's change log (and its departures table, if it departs).
 | # | Decision | Status | Original design |
 |---|---|---|---|
 | [0001](0001-spec-first-gated-phases.md) | Spec first, delivered in gated phases | Accepted | Follows |
-| [0002](0002-reserved-message-range.md) | Reserve `Message.union` 100–119 for Remote Display | Proposed | Follows |
+| [0002](0002-reserved-message-range.md) | Reserve `Message.union` 100–119 for Remote Display | Superseded by 0017 | Follows |
 | [0003](0003-cameraframe-message.md) | Camera rides the session as its own `CameraFrame` message | Accepted | Follows |
 | [0004](0004-camera-encode-videotoolbox.md) | Encode the controller's camera with `VTCompressionSession` | Accepted | Departs |
 | [0005](0005-annex-b-wire-format.md) | H.264 Annex B on the wire | Accepted | Extends |
@@ -31,3 +31,4 @@ architecture README's change log (and its departures table, if it departs).
 | [0014](0014-phase0-camera-harness.md) | The camera harness follows the repo's harness, engine and server-app patterns | Accepted (Phase 0) | Departs (build only) |
 | [0015](0015-virtual-mic-harness.md) | Virtual-mic harness: BlackHole configured, not modified; one engine-side module for both options | Accepted (Phase 0) | Extends; departs from vendoring for Phase 0 |
 | [0016](0016-camera-encoder-and-decoder-contract.md) | Camera encoder settings (low-latency, hardware required) and decoder contract (limits, outcomes, sanitizer fuzz) | Accepted | Extends |
+| [0017](0017-reserved-message-range-200.md) | Reserve `Message.union` 200–219 for Remote Display | Accepted | Departs |
