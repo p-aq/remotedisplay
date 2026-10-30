@@ -303,6 +303,7 @@ class _ConnectionPageState extends State<ConnectionPage>
 
   @override
   Widget build(BuildContext context) {
+    final isOutgoingOnly = bind.isOutgoingOnly();
     return Column(
       children: [
         Expanded(
@@ -318,7 +319,8 @@ class _ConnectionPageState extends State<ConnectionPage>
             Expanded(child: PeerTabPage()),
           ],
         ).paddingOnly(left: 12.0)),
-        // remotedisplay: "Connecting to the RustDesk network" status bar removed (LAN only)
+        if (!isOutgoingOnly) const Divider(height: 1),
+        if (!isOutgoingOnly) OnlineStatusWidget()
       ],
     );
   }
@@ -328,12 +330,14 @@ class _ConnectionPageState extends State<ConnectionPage>
   void onConnect(
       {bool isFileTransfer = false,
       bool isViewCamera = false,
-      bool isTerminal = false}) {
+      bool isTerminal = false,
+      bool isTcpTunneling = false}) {
     var id = _idController.id;
     connect(context, id,
         isFileTransfer: isFileTransfer,
         isViewCamera: isViewCamera,
-        isTerminal: isTerminal);
+        isTerminal: isTerminal,
+        isTcpTunneling: isTcpTunneling);
   }
 
   /// UI for the remote ID TextField.
@@ -566,6 +570,14 @@ class _ConnectionPageState extends State<ConnectionPage>
                                       '${translate('Terminal')} (beta)',
                                       () => onConnect(isTerminal: true)
                                     ),
+                                    // `connect` routes this through the
+                                    // desktop path only; the peer card gates
+                                    // it the same way.
+                                    if (isDesktop)
+                                      (
+                                        'TCP tunneling',
+                                        () => onConnect(isTcpTunneling: true)
+                                      ),
                                   ]
                                       .map((e) => MenuEntryButton<String>(
                                             childBuilder: (TextStyle? style) =>

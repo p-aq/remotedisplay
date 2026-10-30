@@ -1,8 +1,8 @@
 import 'package:bot_toast/bot_toast.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
-import 'package:flutter_hbb/common/widgets/simple_display.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/peer_tab_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
@@ -63,6 +63,8 @@ class _PeerCardState extends State<_PeerCard>
     final PeerTabModel peerTabModel = Provider.of(context);
     final peer = super.widget.peer;
     return GestureDetector(
+        // Web card actions have their own semantics; preserve pointer double-clicks.
+        excludeFromSemantics: isWebDesktop,
         onDoubleTap: peerTabModel.multiSelectionMode
             ? null
             : () => widget.connect(context, peer.id),
@@ -424,7 +426,7 @@ class _PeerCardState extends State<_PeerCard>
     final PeerTabModel peerTabModel = Provider.of(context);
     final selected = peerTabModel.isPeerSelected(peer.id);
     if (peerTabModel.multiSelectionMode) {
-      return Padding(
+      final checkbox = Padding(
         padding: const EdgeInsets.all(12),
         child: selected
             ? Icon(
@@ -433,7 +435,16 @@ class _PeerCardState extends State<_PeerCard>
               )
             : Icon(Icons.check_box_outline_blank),
       );
+      return isWebDesktop
+          ? Semantics(
+              container: true,
+              label: formatID(peer.id),
+              checked: selected,
+              onTap: () => peerTabModel.select(peer),
+              child: checkbox)
+          : checkbox;
     } else {
+      if (isWebDesktop) return _actionMoreWeb(peer);
       return InkWell(
           child: const Padding(
               padding: EdgeInsets.all(12), child: Icon(Icons.more_vert)),
@@ -458,19 +469,27 @@ class _PeerCardState extends State<_PeerCard>
               color: MyTheme.accent,
             )
           : Icon(Icons.check_box_outline_blank);
+      final checkbox = isWebDesktop
+          ? Semantics(
+              container: true,
+              label: formatID(peer.id),
+              checked: selected,
+              onTap: () => peerTabModel.select(peer),
+              child: icon)
+          : icon;
       bool last = peerTabModel.isShiftDown && peer.id == peerTabModel.lastId;
       double right = isTile ? 4 : 0;
       if (last) {
         return Container(
           decoration: BoxDecoration(
               border: Border.all(color: MyTheme.accent, width: 1)),
-          child: icon,
+          child: checkbox,
         ).marginOnly(right: right);
       } else {
-        return icon.marginOnly(right: right);
+        return checkbox.marginOnly(right: right);
       }
     } else {
-      return _actionMore(peer);
+      return isWebDesktop ? _actionMoreWeb(peer) : _actionMore(peer);
     }
   }
 
@@ -482,6 +501,20 @@ class _PeerCardState extends State<_PeerCard>
       },
       onPointerUp: (_) => _showPeerMenu(peer.id),
       child: build_more(context));
+
+  Widget _actionMoreWeb(Peer peer) => Semantics(
+      container: true,
+      button: true,
+      label: translate('More'),
+      child: Builder(
+          builder: (context) => build_more(context, onTap: () {
+                final box = context.findRenderObject() as RenderBox;
+                final position =
+                    box.localToGlobal(box.size.center(Offset.zero));
+                _menuPos = RelativeRect.fromLTRB(
+                    position.dx, position.dy, position.dx, position.dy);
+                _showPeerMenu(peer.id);
+              })));
 
   bool _shouldBuildPasswordIcon(Peer peer) {
     if (gFFI.peerTabModel.currentTab != PeerTabIndex.ab.index) return false;
@@ -626,22 +659,6 @@ abstract class BasePeerCard extends StatelessWidget {
       context,
       translate('TCP tunneling'),
       isTcpTunneling: true,
-    );
-  }
-
-  // remotedisplay: control of virtual displays (SimpleDisplay) on the Mac via SSH
-  @protected
-  MenuEntryBase<String> _simpleDisplayAction(BuildContext context) {
-    return MenuEntryButton<String>(
-      childBuilder: (TextStyle? style) => Text(
-        'Displays (SimpleDisplay)',
-        style: style,
-      ),
-      proc: () {
-        showSimpleDisplayDialog(context, peer.id);
-      },
-      padding: menuPadding,
-      dismissOnClicked: true,
     );
   }
 
@@ -994,11 +1011,6 @@ class RecentPeerCard extends BasePeerCard {
       menuItems.add(_terminalRunAsAdminAction(context));
     }
 
-    // remotedisplay: control of virtual displays (SimpleDisplay) on the Mac via SSH
-    if (!isWeb) {
-      menuItems.add(_simpleDisplayAction(context));
-    }
-
     final List favs = (await bind.mainGetFav()).toList();
 
     if (isDesktop && peer.platform != kPeerPlatformAndroid) {
@@ -1122,11 +1134,6 @@ class DiscoveredPeerCard extends BasePeerCard {
 
     if (peer.platform == kPeerPlatformWindows) {
       menuItems.add(_terminalRunAsAdminAction(context));
-    }
-
-    // remotedisplay: control of virtual displays (SimpleDisplay) on the Mac via SSH
-    if (!isWeb) {
-      menuItems.add(_simpleDisplayAction(context));
     }
 
     final List favs = (await bind.mainGetFav()).toList();
@@ -1501,11 +1508,12 @@ Widget getOnline(double rightPadding, bool online) {
               radius: 3, backgroundColor: online ? Colors.green : kColorWarn)));
 }
 
-Widget build_more(BuildContext context, {bool invert = false}) {
+Widget build_more(BuildContext context,
+    {bool invert = false, VoidCallback? onTap}) {
   final RxBool hover = false.obs;
-  return InkWell(
+  final button = InkWell(
       borderRadius: BorderRadius.circular(14),
-      onTap: () {},
+      onTap: onTap ?? () {},
       onHover: (value) => hover.value = value,
       child: Obx(() => CircleAvatar(
           radius: 14,
@@ -1525,6 +1533,19 @@ Widget build_more(BuildContext context, {bool invert = false}) {
                       .titleLarge
                       ?.color
                       ?.withOpacity(0.5)))));
+  if (onTap == null) return button;
+  // Serial taps preserve cancellation without waiting for the card's double tap.
+  return RawGestureDetector(
+      excludeFromSemantics: true,
+      gestures: {
+        SerialTapGestureRecognizer:
+            GestureRecognizerFactoryWithHandlers<SerialTapGestureRecognizer>(
+                () => SerialTapGestureRecognizer(
+                    allowedButtonsFilter: (buttons) =>
+                        buttons == kPrimaryButton),
+                (recognizer) => recognizer.onSerialTapUp = (_) => onTap()),
+      },
+      child: button);
 }
 
 class TagPainter extends CustomPainter {

@@ -11,13 +11,11 @@ import 'package:flutter_hbb/common/widgets/custom_password.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
-import 'package:flutter_hbb/desktop/pages/remotedisplay_home.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/widgets/update_progress.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
-import 'package:flutter_hbb/plugin/ui_manager.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/utils/platform_channel.dart';
 import 'package:get/get.dart';
@@ -60,9 +58,16 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    // remotedisplay: our own home (modern UI). RustDesk's old layout
-    // (buildLeftPane/buildRightPane) remains available but unused.
-    return _buildBlock(child: const RemoteDisplayHome());
+    final isIncomingOnly = bind.isIncomingOnly();
+    return _buildBlock(
+        child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        buildLeftPane(context),
+        if (!isIncomingOnly) const VerticalDivider(width: 1),
+        if (!isIncomingOnly) Expanded(child: buildRightPane(context)),
+      ],
+    ));
   }
 
   Widget _buildBlock({required Widget child}) {
@@ -85,7 +90,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         child: loadLogo(),
       ),
       buildTip(context),
-      // remotedisplay: ID system removed (direct IP + LAN discovery only)
+      if (!isOutgoingOnly) buildIDBoard(context),
+      if (!isOutgoingOnly) buildPasswordBoard(context),
       FutureBuilder<Widget>(
         future: Future.value(
             Obx(() => buildHelpCards(stateGlobal.updateUrl.value))),
@@ -104,9 +110,21 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           }
         },
       ),
-      buildPluginEntry(),
     ];
-    // remotedisplay: OnlineStatusWidget (ID server status / "Not ready") removed
+    if (isIncomingOnly) {
+      children.addAll([
+        Divider(),
+        OnlineStatusWidget(
+          onSvcStatusChanged: () {
+            if (isInHomePage()) {
+              Future.delayed(Duration(milliseconds: 300), () {
+                _updateWindowSize();
+              });
+            }
+          },
+        ).marginOnly(bottom: 6, right: 6)
+      ]);
+    }
     final textColor = Theme.of(context).textTheme.titleLarge?.color;
     return ChangeNotifierProvider.value(
       value: gFFI.serverModel,
@@ -383,7 +401,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    "remotedisplay · LAN",
+                    translate("Your Desktop"),
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                 ),
@@ -394,8 +412,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           ),
           if (!isOutgoingOnly)
             Text(
-              "LAN-only mode. Other devices control you via direct IP "
-              "on this network (port 21118), with no ID or server.",
+              translate("desk_tip"),
               overflow: TextOverflow.clip,
               style: Theme.of(context).textTheme.bodySmall,
             ),
@@ -463,6 +480,10 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         return buildInstallCard("Permissions", "config_screen", "Configure",
             () async {
           bind.mainIsCanScreenRecording(prompt: true);
+          // macOS shows the request prompt only once per app, so later
+          // presses would do nothing without opening the settings pane.
+          launchUrl(Uri.parse(
+              'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'));
           watchIsCanScreenRecording = true;
         }, help: 'Help', link: translate("doc_mac_permission"));
       } else if (!isOutgoingOnly && !bind.mainIsProcessTrusted(prompt: false)) {
@@ -763,13 +784,6 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         windowOnTop(null);
       } else if (call.method == kWindowRefreshCurrentUser) {
         gFFI.userModel.refreshCurrentUser();
-      } else if (call.method == kWindowGetWindowInfo) {
-        final screen = (await window_size.getWindowInfo()).screen;
-        if (screen == null) {
-          return '';
-        } else {
-          return jsonEncode(screenToMap(screen));
-        }
       } else if (call.method == kWindowGetScreenList) {
         return jsonEncode(
             (await window_size.getScreenList()).map(screenToMap).toList());
@@ -870,21 +884,6 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     if (state == AppLifecycleState.resumed) {
       shouldBeBlocked(_block, canBeBlocked);
     }
-  }
-
-  Widget buildPluginEntry() {
-    final entries = PluginUiManager.instance.entries.entries;
-    return Offstage(
-      offstage: entries.isEmpty,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ...entries.map((entry) {
-            return entry.value;
-          })
-        ],
-      ),
-    );
   }
 }
 

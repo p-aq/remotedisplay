@@ -2,7 +2,12 @@
 fn build_windows() {
     let file = "src/platform/windows.cc";
     let file2 = "src/platform/windows_delete_test_cert.cc";
-    cc::Build::new().file(file).file(file2).compile("windows");
+    let mut build = cc::Build::new();
+    if !cfg!(feature = "flutter") {
+        build.cpp(true).std("c++17").define("RUSTDESK_SCITER", None);
+        println!("cargo:rerun-if-changed=flutter/windows/runner/service_control.h");
+    }
+    build.file(file).file(file2).compile("windows");
     println!("cargo:rustc-link-lib=WtsApi32");
     println!("cargo:rerun-if-changed={}", file);
     println!("cargo:rerun-if-changed={}", file2);
@@ -20,30 +25,6 @@ fn build_mac() {
     }
     b.flag("-std=c++17").file(file).compile("macos");
     println!("cargo:rerun-if-changed={}", file);
-    // remotedisplay: the controller's camera and microphone access, the host's camera sink
-    // and the host's virtual mic for camera and microphone forwarding (decisions 0004,
-    // 0005, 0021 and 0023).
-    for (camera, lib) in [
-        ("src/platform/macos_camera_capture.mm", "macos_camera_capture"),
-        ("src/platform/macos_mic_capture.mm", "macos_mic_capture"),
-        ("src/platform/macos_camera_sink.mm", "macos_camera_sink"),
-        ("src/platform/macos_mic_sink.mm", "macos_mic_sink"),
-    ] {
-        cc::Build::new().flag("-std=c++17").file(camera).compile(lib);
-        println!("cargo:rerun-if-changed={}", camera);
-    }
-    for framework in [
-        "AVFoundation",
-        "CoreAudio",
-        "CoreGraphics",
-        "CoreMedia",
-        "CoreMediaIO",
-        "CoreText",
-        "CoreVideo",
-        "VideoToolbox",
-    ] {
-        println!("cargo:rustc-link-lib=framework={}", framework);
-    }
 }
 
 #[cfg(all(windows, feature = "inline"))]
@@ -65,6 +46,15 @@ fn build_manifest() {
             Ok(_) => {}
         }
     }
+}
+
+// bionic only exports getifaddrs()/freeifaddrs() from API 24, while the jniLibs
+// are built against the API 21 sysroot (flutter/ndk_*.sh). webrtc-util calls
+// them, so without this the android link fails on undefined symbols.
+fn build_android_ifaddrs() {
+    let file = "src/platform/android_ifaddrs.c";
+    cc::Build::new().file(file).compile("android_ifaddrs");
+    println!("cargo:rerun-if-changed={}", file);
 }
 
 fn install_android_deps() {
@@ -96,7 +86,6 @@ fn install_android_deps() {
         path.join("lib").to_str().unwrap()
     );
     println!("cargo:rustc-link-lib=ndk_compat");
-    println!("cargo:rustc-link-lib=oboe");
     println!("cargo:rustc-link-lib=c++");
     println!("cargo:rustc-link-lib=OpenSLES");
 }
@@ -113,7 +102,9 @@ fn main() {
         #[cfg(target_os = "macos")]
         build_mac();
         println!("cargo:rustc-link-lib=framework=ApplicationServices");
-        println!("cargo:rustc-link-lib=framework=ColorSync");
+    }
+    if target_os == "android" {
+        build_android_ifaddrs();
     }
     println!("cargo:rerun-if-changed=build.rs");
 }

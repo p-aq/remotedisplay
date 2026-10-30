@@ -191,7 +191,6 @@ extern "C" {
     pub fn CGDisplayIsMain(display: u32) -> i32;
     pub fn CGDisplayIsActive(display: u32) -> i32;
     pub fn CGDisplayIsOnline(display: u32) -> i32;
-    pub fn CGDisplayMirrorsDisplay(display: u32) -> u32;
 
     pub fn CGDisplayBounds(display: u32) -> CGRect;
     pub fn BackingScaleFactor(display: u32) -> f32;

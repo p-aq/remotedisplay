@@ -41,9 +41,8 @@ class PeerTabModel with ChangeNotifier {
     true,
     true,
     !isWeb && bind.mainGetLocalOption(key: "disable-discovery-panel") != "Y",
-    // remotedisplay: Address Book and Group need a RustDesk account/server → disabled
-    false,
-    false,
+    !(bind.isDisableAb() || bind.isDisableAccount()),
+    !(bind.isDisableGroupPanel() || bind.isDisableAccount()),
   ]);
   final List<bool> _isVisible = List.filled(maxTabCount, true, growable: false);
   List<bool> get isVisibleEnabled => () {

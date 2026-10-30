@@ -1,19 +1,14 @@
 #import <AVFoundation/AVFoundation.h>
 #import <AppKit/AppKit.h>
 #import <IOKit/hidsystem/IOHIDLib.h>
-#import <IOKit/IOKitLib.h>
-#import <IOKit/graphics/IOGraphicsLib.h>
 #include <Security/Authorization.h>
 #include <Security/AuthorizationTags.h>
 
 #include <CoreGraphics/CoreGraphics.h>
-#include <ColorSync/ColorSync.h>
-#include <dlfcn.h>
 #include <vector>
 #include <map>
 #include <set>
 #include <mutex>
-#include <atomic>
 #include <string>
 
 extern "C" bool CanUseNewApiForScreenCaptureCheck() {
@@ -123,16 +118,18 @@ extern "C" bool MacCheckAdminAuthorization() {
 
 // https://gist.github.com/briankc/025415e25900750f402235dbf1b74e42
 extern "C" float BackingScaleFactor(uint32_t display) {
-    NSArray<NSScreen *> *screens = [NSScreen screens];
-    for (NSScreen *screen in screens) {
-        NSDictionary *deviceDescription = [screen deviceDescription];
-        NSNumber *screenNumber = [deviceDescription objectForKey:@"NSScreenNumber"];
-        CGDirectDisplayID screenDisplayID = [screenNumber unsignedIntValue];
-        if (screenDisplayID == display) {
-            return [screen backingScaleFactor];
+    @autoreleasepool {
+        NSArray<NSScreen *> *screens = [NSScreen screens];
+        for (NSScreen *screen in screens) {
+            NSDictionary *deviceDescription = [screen deviceDescription];
+            NSNumber *screenNumber = [deviceDescription objectForKey:@"NSScreenNumber"];
+            CGDirectDisplayID screenDisplayID = [screenNumber unsignedIntValue];
+            if (screenDisplayID == display) {
+                return [screen backingScaleFactor];
+            }
         }
+        return 1;
     }
-    return 1;
 }
 
 // https://github.com/jhford/screenresolution/blob/master/cg_utils.c
@@ -911,178 +908,4 @@ extern "C" bool MacSetPrivacyMode(bool on) {
     } else {
         return TurnOffPrivacyModeInternal();
     }
-}
-
-// ==================== remotedisplay: headless server main loop ====================
-//
-// The headless server runs an NSApplication with no UI (Prohibited) so that AppKit pumps
-// CGS events. Without it, after a display configuration change the process's
-// CGGetOnlineDisplayList stops seeing new displays (verified with
-// harness/mirror_enum_test2.mm: only NSApp's event loop refreshes them; CFRunLoopRunInMode
-// does not). [NSApp run] also drains the GCD main queue, which input injection uses.
-extern "C" void MacRunHeadlessAppLoop() {
-    @autoreleasepool {
-        NSApplication *app = [NSApplication sharedApplication];
-        [app setActivationPolicy:NSApplicationActivationPolicyProhibited];
-        [app finishLaunching];
-    }
-    [NSApp run];
-}
-
-// ==================== remotedisplay: display topology fingerprint ====================
-//
-// Fingerprint of the display topology (ids, active/main, mirror, bounds and pixel mode).
-// The display service ignores reconfiguration notifications that do not change it (a
-// hardware mirror, e.g. SimpleDisplay's, emits them about once a second), and the video
-// service recreates its capturer once when it changes: a CGDisplayStream can go silent
-// after a reconfiguration that does not move the captured display's bounds (the mode
-// change of a physical mirroring it), and scrap never notices.
-extern "C" uint64_t MacDisplayTopologyHash() {
-    uint64_t h = 1469598103934665603ULL; // FNV-1a
-    auto mix = [&h](uint64_t v) { h ^= v; h *= 1099511628211ULL; };
-    uint32_t count = 0;
-    CGDirectDisplayID online[16];
-    CGGetOnlineDisplayList(16, online, &count);
-    mix(count);
-    for (uint32_t i = 0; i < count; i++) {
-        CGDirectDisplayID d = online[i];
-        CGRect b = CGDisplayBounds(d);
-        mix(d);
-        mix(CGDisplayIsActive(d));
-        mix(CGDisplayIsMain(d));
-        mix(CGDisplayMirrorsDisplay(d));
-        mix((uint64_t)(int64_t)b.origin.x);
-        mix((uint64_t)(int64_t)b.origin.y);
-        mix((uint64_t)(int64_t)b.size.width);
-        mix((uint64_t)(int64_t)b.size.height);
-        CGDisplayModeRef m = CGDisplayCopyDisplayMode(d);
-        if (m) {
-            mix(CGDisplayModeGetPixelWidth(m));
-            mix(CGDisplayModeGetPixelHeight(m));
-            mix((uint64_t)(CGDisplayModeGetRefreshRate(m) * 100));
-            CGDisplayModeRelease(m);
-        }
-    }
-    return h;
-}
-
-// ==================== remotedisplay: virtual vs physical display ====================
-//
-// "Virtual" = a display created with CGVirtualDisplay by some app (SimpleDisplay,
-// BetterDisplay, ...): it may be given whatever size that app offers, while a physical
-// panel must keep its own modes. macOS has no public API for the distinction. What is
-// reliable (measured on macOS 26, Apple silicon — a real Mac and the test VM): every
-// physical display has an IOMobileFramebuffer service whose DisplayAttributes carry the
-// panel's EDID identity (ProductAttributes.LegacyManufacturerID / ProductID), equal to
-// CGDisplayVendorNumber / CGDisplayModelNumber; a CGVirtualDisplay has no such service.
-// On Intel Macs IODisplayConnect + IODisplayCreateInfoDictionary play the same role.
-// Anything that cannot be classified is treated as physical: it is never resized.
-static bool rdDictNumber(CFDictionaryRef d, CFStringRef key, uint32_t *out) {
-    CFTypeRef v = CFDictionaryGetValue(d, key);
-    if (!v || CFGetTypeID(v) != CFNumberGetTypeID()) return false;
-    int64_t n = 0;
-    if (!CFNumberGetValue((CFNumberRef)v, kCFNumberSInt64Type, &n)) return false;
-    *out = (uint32_t)n;
-    return true;
-}
-
-extern "C" bool MacDisplayIsVirtual(uint32_t displayID) {
-    if (CGDisplayIsBuiltin(displayID)) return false;
-    uint32_t vendor = CGDisplayVendorNumber(displayID);
-    uint32_t product = CGDisplayModelNumber(displayID);
-    // No EDID identity at all (e.g. the paravirtual display of a VM): not something an
-    // app created with an identity of its own; leave it alone.
-    if (vendor == 0 && product == 0) return false;
-    bool anyService = false, matched = false;
-    io_iterator_t it = IO_OBJECT_NULL;
-    if (IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOMobileFramebuffer"), &it) == KERN_SUCCESS) {
-        io_service_t s;
-        while ((s = IOIteratorNext(it))) {
-            CFTypeRef attrs = IORegistryEntryCreateCFProperty(s, CFSTR("DisplayAttributes"), kCFAllocatorDefault, 0);
-            if (attrs) {
-                if (CFGetTypeID(attrs) == CFDictionaryGetTypeID()) {
-                    anyService = true;
-                    CFTypeRef pa = CFDictionaryGetValue((CFDictionaryRef)attrs, CFSTR("ProductAttributes"));
-                    if (pa && CFGetTypeID(pa) == CFDictionaryGetTypeID()) {
-                        uint32_t v = 0, p = 0;
-                        rdDictNumber((CFDictionaryRef)pa, CFSTR("LegacyManufacturerID"), &v);
-                        rdDictNumber((CFDictionaryRef)pa, CFSTR("ProductID"), &p);
-                        if (v == vendor && p == product) matched = true;
-                    }
-                }
-                CFRelease(attrs);
-            }
-            IOObjectRelease(s);
-        }
-        IOObjectRelease(it);
-    }
-    if (!matched && IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IODisplayConnect"), &it) == KERN_SUCCESS) {
-        io_service_t s;
-        while ((s = IOIteratorNext(it))) {
-            CFDictionaryRef info = IODisplayCreateInfoDictionary(s, kIODisplayOnlyPreferredName);
-            if (info) {
-                anyService = true;
-                uint32_t v = 0, p = 0;
-                rdDictNumber(info, CFSTR(kDisplayVendorID), &v);
-                rdDictNumber(info, CFSTR(kDisplayProductID), &p);
-                if (v == vendor && p == product) matched = true;
-                CFRelease(info);
-            }
-            IOObjectRelease(s);
-        }
-        IOObjectRelease(it);
-    }
-    if (!anyService) return false;
-    return !matched;
-}
-
-// ==================== remotedisplay: nearest mode for a virtual display ====================
-//
-// The client's Fit asks for its window's size in PIXELS. A virtual display only offers the
-// modes its creator declared plus the generic ones macOS adds (800x600, 1024x768, 1600x1200,
-// each at 1x and 2x), so an exact match is rare. Choose the mode whose pixel size best fills
-// the window: aspect ratio first (a 4:3 mode on an ultrawide window is useless however big),
-// then size. Returns the chosen pixel size; a no-op when the display is already in that mode.
-extern "C" bool MacSetNearestMode(CGDirectDisplayID display, uint32_t wantW, uint32_t wantH,
-                                  uint32_t *chosenW, uint32_t *chosenH) {
-    if (wantW == 0 || wantH == 0) return false;
-    CGDisplayModeRef current = CGDisplayCopyDisplayMode(display);
-    if (!current) return false;
-    const void *keys[] = { kCGDisplayShowDuplicateLowResolutionModes };
-    const void *vals[] = { kCFBooleanTrue };
-    CFDictionaryRef opts = CFDictionaryCreate(NULL, keys, vals, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    CFArrayRef modes = CGDisplayCopyAllDisplayModes(display, opts);
-    CFRelease(opts);
-    if (!modes) { CGDisplayModeRelease(current); return false; }
-    double wantAspect = (double)wantW / (double)wantH;
-    double wantArea = (double)wantW * (double)wantH;
-    CGDisplayModeRef best = NULL; double bestScore = 1e30;
-    long n = CFArrayGetCount(modes);
-    for (long i = 0; i < n; i++) {
-        CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
-        if (!CGDisplayModeIsUsableForDesktopGUI(m)) continue;
-        double pw = (double)CGDisplayModeGetPixelWidth(m), ph = (double)CGDisplayModeGetPixelHeight(m);
-        if (pw < 1 || ph < 1) continue;
-        double score = 3.0 * fabs(log((pw / ph) / wantAspect)) + fabs(log((pw * ph) / wantArea));
-        // Prefer the current refresh rate among equals (avoids a needless rate change).
-        if (CGDisplayModeGetRefreshRate(m) != CGDisplayModeGetRefreshRate(current)) score += 0.01;
-        // Prefer the 2x variant among equal pixel sizes (sharper text on the client).
-        if (CGDisplayModeGetPixelWidth(m) == CGDisplayModeGetWidth(m)) score += 0.001;
-        if (score < bestScore) { bestScore = score; best = m; }
-    }
-    bool ok = false;
-    if (best) {
-        *chosenW = (uint32_t)CGDisplayModeGetPixelWidth(best);
-        *chosenH = (uint32_t)CGDisplayModeGetPixelHeight(best);
-        if (CGDisplayModeGetPixelWidth(best) == CGDisplayModeGetPixelWidth(current) &&
-            CGDisplayModeGetPixelHeight(best) == CGDisplayModeGetPixelHeight(current) &&
-            CGDisplayModeGetWidth(best) == CGDisplayModeGetWidth(current)) {
-            ok = true; // already there
-        } else {
-            ok = setDisplayToMode(display, best);
-        }
-    }
-    CFRelease(modes);
-    CGDisplayModeRelease(current);
-    return ok;
 }

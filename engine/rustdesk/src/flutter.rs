@@ -10,9 +10,10 @@ use hbb_common::dlopen::{
     Error as LibError,
 };
 use hbb_common::{
-    anyhow::anyhow, bail, config::LocalConfig, get_version_number, log, message_proto::*,
+    anyhow::anyhow, bail, config::LocalConfig, get_version_number, log,
     rendezvous_proto::ConnType, ResultType,
 };
+use base::message_proto::*;
 use serde::Serialize;
 use serde_json::json;
 #[cfg(target_os = "windows")]
@@ -35,6 +36,11 @@ pub(crate) const APP_TYPE_MAIN: &str = "main";
 pub(crate) const APP_TYPE_CM: &str = "cm";
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub(crate) const APP_TYPE_CM: &str = "main";
+
+#[cfg(target_os = "macos")]
+const CORE_MAIN_EXIT_SUCCESS: i32 = 0;
+#[cfg(target_os = "macos")]
+const CORE_MAIN_EXIT_FAILURE: i32 = 1;
 
 // Do not remove the following constants.
 // Uncomment them when they are used.
@@ -101,15 +107,34 @@ fn load_plugin_in_app_path(dll_name: &str) -> Result<Library, LibError> {
 
 /// FFI for rustdesk core's main entry.
 /// Return true if the app should continue running with UI(possibly Flutter), false if the app should exit.
+/// On macOS, command-only paths exit here because the Swift caller ignores
+/// the return value; update failures must therefore use a non-zero exit status.
 #[cfg(not(windows))]
 #[no_mangle]
 pub extern "C" fn rustdesk_core_main() -> bool {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        use hbb_common::libc;
+
+        // Native runners bypass Rust's startup, which normally ignores SIGPIPE.
+        if unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) } == libc::SIG_ERR {
+            eprintln!("Failed to ignore SIGPIPE: {}", std::io::Error::last_os_error());
+            std::process::exit(1);
+        }
+    }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    if crate::core_main::core_main().is_some() {
-        return true;
-    } else {
-        #[cfg(target_os = "macos")]
-        std::process::exit(0);
+    match crate::core_main::core_main() {
+        Some(crate::core_main::CoreMainAction::StartUi(_)) => return true,
+        Some(crate::core_main::CoreMainAction::ExitFailure(err)) => {
+            eprintln!("Command failed: {err}");
+            log::error!("Command failed: {err}");
+            #[cfg(target_os = "macos")]
+            std::process::exit(CORE_MAIN_EXIT_FAILURE);
+        }
+        None => {
+            #[cfg(target_os = "macos")]
+            std::process::exit(CORE_MAIN_EXIT_SUCCESS);
+        }
     }
     #[cfg(not(target_os = "macos"))]
     false
@@ -127,13 +152,25 @@ pub extern "C" fn rustdesk_core_main_args(args_len: *mut c_int) -> *mut *mut c_c
     unsafe { std::ptr::write(args_len, 0) };
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        if let Some(args) = crate::core_main::core_main() {
-            return rust_args_to_c_args(args, args_len);
+        match crate::core_main::core_main() {
+            Some(crate::core_main::CoreMainAction::StartUi(args)) => {
+                return rust_args_to_c_args(args, args_len);
+            }
+            Some(crate::core_main::CoreMainAction::ExitFailure(err)) => {
+                log::error!("Command failed: {err}");
+            }
+            None => {}
         }
         return std::ptr::null_mut() as _;
     }
     #[cfg(any(target_os = "android", target_os = "ios"))]
     return std::ptr::null_mut() as _;
+}
+
+#[cfg(windows)]
+#[no_mangle]
+pub extern "C" fn rustdesk_is_disable_installation() -> c_int {
+    hbb_common::config::is_disable_installation() as c_int
 }
 
 // https://gist.github.com/iskakaushik/1c5b8aa75c77479c33c4320913eebef6
@@ -219,8 +256,6 @@ pub struct FlutterHandler {
     session_handlers: Arc<RwLock<HashMap<SessionID, SessionHandler>>>,
     display_rgbas: Arc<RwLock<HashMap<usize, RgbaData>>>,
     peer_info: Arc<RwLock<PeerInfo>>,
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    hooks: Arc<RwLock<HashMap<String, SessionHook>>>,
     use_texture_render: Arc<AtomicBool>,
 }
 
@@ -230,8 +265,6 @@ impl Default for FlutterHandler {
             session_handlers: Default::default(),
             display_rgbas: Default::default(),
             peer_info: Default::default(),
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            hooks: Default::default(),
             use_texture_render: Arc::new(
                 AtomicBool::new(crate::ui_interface::use_texture_render()),
             ),
@@ -279,9 +312,6 @@ struct DisplaySessionInfo {
 struct VideoRenderer {
     is_support_multi_ui_session: bool,
     map_display_sessions: Arc<RwLock<HashMap<usize, DisplaySessionInfo>>>,
-    // remotedisplay: consecutive frames per display refused because their size did not
-    // match the announced display size (see on_rgba); cleared when a frame is drawn.
-    size_mismatches: Arc<RwLock<HashMap<usize, usize>>>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     on_rgba_func: Option<Symbol<'static, FlutterRgbaRendererPluginOnRgba>>,
     #[cfg(feature = "vram")]
@@ -333,7 +363,6 @@ impl Default for VideoRenderer {
 
         Self {
             map_display_sessions: Default::default(),
-            size_mismatches: Default::default(),
             is_support_multi_ui_session: false,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             on_rgba_func,
@@ -344,16 +373,6 @@ impl Default for VideoRenderer {
 }
 
 impl VideoRenderer {
-    // remotedisplay: see InvokeUiSession::rgba_size_mismatches.
-    fn size_mismatches(&self, display: usize) -> usize {
-        self.size_mismatches
-            .read()
-            .unwrap()
-            .get(&display)
-            .copied()
-            .unwrap_or(0)
-    }
-
     #[inline]
     fn set_size(&mut self, display: usize, width: usize, height: usize) {
         let mut sessions_lock = self.map_display_sessions.write().unwrap();
@@ -483,18 +502,9 @@ impl VideoRenderer {
             // Peer info's handling is async and may be late than video frame's handling
             // Allow peer info not set, but not allow wrong width/height for correct local cursor position
             if info.size != (0, 0) {
-                // remotedisplay: counted so the video thread can tell a decoder stuck
-                // on an old picture size from the transient case above.
-                *self
-                    .size_mismatches
-                    .write()
-                    .unwrap()
-                    .entry(display)
-                    .or_default() += 1;
                 return false;
             }
         }
-        self.size_mismatches.write().unwrap().remove(&display);
         if let Some(func) = &self.on_rgba_func {
             unsafe {
                 func(
@@ -653,30 +663,6 @@ impl FlutterHandler {
         serde_json::ser::to_string(&msg_vec).unwrap_or("".to_owned())
     }
 
-    #[cfg(feature = "plugin_framework")]
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    pub(crate) fn add_session_hook(&self, key: String, hook: SessionHook) -> bool {
-        let mut hooks = self.hooks.write().unwrap();
-        if hooks.contains_key(&key) {
-            // Already has the hook with this key.
-            return false;
-        }
-        let _ = hooks.insert(key, hook);
-        true
-    }
-
-    #[cfg(feature = "plugin_framework")]
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    pub(crate) fn remove_session_hook(&self, key: &String) -> bool {
-        let mut hooks = self.hooks.write().unwrap();
-        if !hooks.contains_key(key) {
-            // The hook with this key does not found.
-            return false;
-        }
-        let _ = hooks.remove(key);
-        true
-    }
-
     pub fn update_use_texture_render(&self) {
         self.use_texture_render
             .store(crate::ui_interface::use_texture_render(), Ordering::Relaxed);
@@ -685,23 +671,21 @@ impl FlutterHandler {
 }
 
 impl InvokeUiSession for FlutterHandler {
+    // On the event stream, so that it keeps its order with the cursor_id events around it.
     fn set_cursor_data(&self, cd: CursorData) {
-        let colors = hbb_common::compress::decompress(&cd.colors);
-        self.push_event(
-            "cursor_data",
-            &[
-                ("id", &cd.id.to_string()),
-                ("hotx", &cd.hotx.to_string()),
-                ("hoty", &cd.hoty.to_string()),
-                ("width", &cd.width.to_string()),
-                ("height", &cd.height.to_string()),
-                (
-                    "colors",
-                    &serde_json::ser::to_string(&colors).unwrap_or("".to_owned()),
-                ),
-            ],
-            &[],
-        );
+        let colors = cd.colors.to_vec();
+        for session in self.session_handlers.read().unwrap().values() {
+            if let Some(stream) = &session.event_stream {
+                stream.add(EventToUI::Cursor {
+                    id: cd.id.to_string(),
+                    hotx: cd.hotx,
+                    hoty: cd.hoty,
+                    width: cd.width,
+                    height: cd.height,
+                    colors: colors.clone(),
+                });
+            }
+        }
     }
 
     fn set_cursor_id(&self, id: String) {
@@ -882,17 +866,6 @@ impl InvokeUiSession for FlutterHandler {
     // unused in flutter
     fn adapt_size(&self) {}
 
-    // remotedisplay: see InvokeUiSession::rgba_size_mismatches.
-    fn rgba_size_mismatches(&self, display: usize) -> usize {
-        self.session_handlers
-            .read()
-            .unwrap()
-            .values()
-            .map(|s| s.renderer.size_mismatches(display))
-            .max()
-            .unwrap_or(0)
-    }
-
     #[inline]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn on_rgba(&self, display: usize, rgba: &mut scrap::ImageRgb) {
@@ -1020,6 +993,19 @@ impl InvokeUiSession for FlutterHandler {
     fn on_connected(&self, _conn_type: ConnType) {}
 
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str, retry: bool) {
+        if msgtype == "custom-error-trusted-device" {
+            const ERROR_DURATION_MS: u32 = 10_000;
+            self.push_event(
+                "toast",
+                &[
+                    ("type", json!("error")),
+                    ("text", json!(text)),
+                    ("dur_msec", json!(ERROR_DURATION_MS)),
+                ],
+                &[],
+            );
+            return;
+        }
         let has_retry = if retry { "true" } else { "" };
         self.push_event(
             "msgbox",
@@ -1114,11 +1100,6 @@ impl InvokeUiSession for FlutterHandler {
         self.push_event::<&str>("on_voice_call_waiting", &[], &[]);
     }
 
-    // remotedisplay: the Devices menu (decision 0018).
-    fn on_device_forward(&self, state: &str) {
-        self.push_event("rd_device_forward", &[("state", state)], &[]);
-    }
-
     fn on_voice_call_incoming(&self) {
         self.push_event::<&str>("on_voice_call_incoming", &[], &[]);
     }
@@ -1163,7 +1144,7 @@ impl InvokeUiSession for FlutterHandler {
     }
 
     fn handle_terminal_response(&self, response: TerminalResponse) {
-        use hbb_common::message_proto::terminal_response::Union;
+        use base::message_proto::terminal_response::Union;
 
         match response.union {
             Some(Union::Opened(opened)) => {
@@ -1227,15 +1208,6 @@ impl InvokeUiSession for FlutterHandler {
 impl FlutterHandler {
     #[inline]
     fn on_rgba_soft_render(&self, display: usize, rgba: &mut scrap::ImageRgb) {
-        // Give a chance for plugins or etc to hook a rgba data.
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        for (key, hook) in self.hooks.read().unwrap().iter() {
-            match hook {
-                SessionHook::OnSessionRgba(cb) => {
-                    cb(key.to_owned(), rgba);
-                }
-            }
-        }
         // If the current rgba is not fetched by flutter, i.e., is valid.
         // We give up sending a new event to flutter.
         let mut rgba_write_lock = self.display_rgbas.write().unwrap();
@@ -1381,7 +1353,6 @@ pub fn session_add(
         None
     };
 
-    let remember_preset = !preset_password.is_empty();
     let session: Session<FlutterHandler> = Session {
         password: preset_password,
         server_keyboard_enabled: Arc::new(RwLock::new(true)),
@@ -1406,22 +1377,6 @@ pub fn session_add(
         shared_password,
         conn_token,
     );
-
-    // remotedisplay: a password preset by the client's connect sheet is remembered, or not,
-    // as the per-peer option `rd-remember` says (the client sets Y/N right before connecting).
-    // Without it the default stays: remember only when one was already saved.
-    if remember_preset {
-        let flag = hbb_common::config::PeerConfig::load(&id)
-            .options
-            .get("rd-remember")
-            .cloned()
-            .unwrap_or_default();
-        match flag.as_str() {
-            "Y" => session.lc.write().unwrap().remember = true,
-            "N" => session.lc.write().unwrap().remember = false,
-            _ => {}
-        }
-    }
 
     let session = Arc::new(session.clone());
     sessions::insert_session(session_id.to_owned(), conn_type, session.clone());
@@ -1493,6 +1448,7 @@ fn try_send_close_event(event_stream: &Option<StreamSink<EventToUI>>) {
 pub fn update_text_clipboard_required() {
     let is_required = sessions::get_sessions()
         .iter()
+        .filter(|s| s.connection_round_state.lock().unwrap().is_connected())
         .any(|s| s.is_default() && s.is_text_clipboard_required());
     #[cfg(target_os = "android")]
     let _ = scrap::android::ffi::call_clipboard_manager_enable_client_clipboard(is_required);
@@ -1503,15 +1459,32 @@ pub fn update_text_clipboard_required() {
 pub fn update_file_clipboard_required() {
     let is_required = sessions::get_sessions()
         .iter()
+        .filter(|s| s.connection_round_state.lock().unwrap().is_connected())
         .any(|s| s.is_default() && s.is_file_clipboard_required());
     Client::set_is_file_clipboard_required(is_required);
 }
 
 #[cfg(not(target_os = "ios"))]
 pub fn send_clipboard_msg(msg: Message, _is_file: bool) {
+    send_clipboard_msg_impl(msg, _is_file, None);
+}
+
+// `except_session_id` is the session the content came from, to avoid sending it back.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn send_clipboard_msg_to_other_sessions(msg: Message, except_session_id: u64) {
+    send_clipboard_msg_impl(msg, false, Some(except_session_id));
+}
+
+#[cfg(not(target_os = "ios"))]
+fn send_clipboard_msg_impl(msg: Message, _is_file: bool, except_session_id: Option<u64>) {
     for s in sessions::get_sessions() {
         if !s.is_default() {
             continue;
+        }
+        if let Some(except_session_id) = except_session_id {
+            if s.lc.read().unwrap().session_id == except_session_id {
+                continue;
+            }
         }
         #[cfg(feature = "unix-file-copy-paste")]
         if _is_file {
@@ -1639,20 +1612,8 @@ pub mod connection_manager {
         }
     }
 
-    #[inline]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    pub fn start_cm_no_ui() {
-        start_listen_ipc(false);
-    }
-
-    #[inline]
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn start_listen_ipc_thread() {
-        start_listen_ipc(true);
-    }
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn start_listen_ipc(new_thread: bool) {
+    fn start_listen_ipc() {
         use crate::ui_cm_interface::{start_ipc, ConnectionManager};
 
         #[cfg(target_os = "linux")]
@@ -1661,17 +1622,13 @@ pub mod connection_manager {
         let cm = ConnectionManager {
             ui_handler: FlutterHandler {},
         };
-        if new_thread {
-            std::thread::spawn(move || start_ipc(cm));
-        } else {
-            start_ipc(cm);
-        }
+        std::thread::spawn(move || start_ipc(cm));
     }
 
     #[inline]
     pub fn cm_init() {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        start_listen_ipc_thread();
+        start_listen_ipc();
     }
 
     #[cfg(target_os = "android")]
@@ -1727,8 +1684,10 @@ pub fn get_cur_peer_id() -> String {
 }
 
 pub fn set_cur_session_id(session_id: SessionID) {
-    if get_cur_session_id() != session_id {
-        *CUR_SESSION_ID.write().unwrap() = session_id;
+    let mut current = CUR_SESSION_ID.write().unwrap();
+    if *current != session_id {
+        crate::keyboard::shortcuts::transfer_released_modifiers(&current, &session_id);
+        *current = session_id;
     }
 }
 
@@ -2013,12 +1972,6 @@ pub fn session_on_waiting_for_image_dialog_show(session_id: SessionID) {
     }
 }
 
-/// Hooks for session.
-#[derive(Clone)]
-pub enum SessionHook {
-    OnSessionRgba(fn(String, &mut scrap::ImageRgb)),
-}
-
 #[inline]
 pub fn get_cur_session() -> Option<FlutterSession> {
     sessions::get_session_by_session_id(&*CUR_SESSION_ID.read().unwrap())
@@ -2181,6 +2134,45 @@ pub mod sessions {
         s
     }
 
+    /// Close every client session, returning how many peer sessions were closed.
+    ///
+    /// Used when the UI is gone but the process keeps running, e.g. the Android
+    /// task is swiped away from recents while a foreground service keeps the
+    /// process alive. The orphaned `io_loop` would otherwise keep answering
+    /// `TestDelay`, so the peer never hits its inactivity timeout and the
+    /// session stays established with no way to close it.
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    pub fn close_all_sessions() -> usize {
+        // Release held keys before draining: the release path sends through
+        // `get_cur_session()`, which resolves against SESSIONS, so draining
+        // first would take TO_RELEASE and then silently drop every key-up,
+        // leaving the key stuck on the controlled side. A no-op when nothing
+        // is held.
+        crate::keyboard::release_remote_keys("map");
+        // Drain so the map lock is released before closing each session.
+        let sessions: Vec<FlutterSession> = SESSIONS
+            .write()
+            .unwrap()
+            .drain()
+            .map(|(_, session)| session)
+            .collect();
+        for session in sessions.iter() {
+            let session_ids: Vec<SessionID> = session
+                .ui_handler
+                .session_handlers
+                .read()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect();
+            for session_id in session_ids {
+                session.close_event_stream(session_id);
+            }
+            session.close();
+        }
+        sessions.len()
+    }
+
     /// Check if removing a session by session_id would result in removing the entire peer.
     ///
     /// Returns:
@@ -2237,14 +2229,6 @@ pub mod sessions {
     pub fn session_switch_display(is_desktop: bool, session_id: SessionID, value: Vec<i32>) {
         for s in SESSIONS.read().unwrap().values() {
             let mut write_lock = s.ui_handler.session_handlers.write().unwrap();
-            // remotedisplay: displays that OTHER ui-sessions of this peer are still
-            // showing (mobile multi-session: iPad + external monitor). On mobile the
-            // exclusive set below would cut off their capture.
-            let other_displays: Vec<i32> = write_lock
-                .iter()
-                .filter(|(k, _)| **k != session_id)
-                .flat_map(|(_, h2)| h2.displays.iter().map(|d| *d as i32))
-                .collect();
             if let Some(h) = write_lock.get_mut(&session_id) {
                 h.displays = value.iter().map(|x| *x as usize).collect::<_>();
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2258,21 +2242,7 @@ pub mod sessions {
                     s.next_rgba(value[0] as usize);
 
                     if !is_desktop {
-                        if other_displays.is_empty() {
-                            s.capture_displays(vec![], vec![], value);
-                        } else {
-                            // remotedisplay: union with the other ui-sessions' displays
-                            // (same semantics as desktop's else branch, which
-                            // doesn't apply on mobile because it uses the texture
-                            // renderer's maps, empty under soft render).
-                            let mut caps = value.clone();
-                            for d in other_displays.iter() {
-                                if !caps.contains(d) {
-                                    caps.push(*d);
-                                }
-                            }
-                            s.capture_displays(vec![], vec![], caps);
-                        }
+                        s.capture_displays(vec![], vec![], value);
                     } else {
                         // Check if other displays are needed.
                         if value.len() == 1 {

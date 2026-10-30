@@ -36,6 +36,7 @@ const kUCKeyActionDisplay: u16 = 3;
 #[allow(non_upper_case_globals)]
 const kUCKeyTranslateDeadKeysBit: OptionBits = 1 << 31;
 const BUF_LEN: usize = 4;
+const KEYBOARD_ERROR_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 const MOUSE_EVENT_BUTTON_NUMBER_BACK: i64 = 3;
 const MOUSE_EVENT_BUTTON_NUMBER_FORWARD: i64 = 4;
@@ -87,8 +88,6 @@ extern "C" {
         ...
     ) -> *mut MyCGEvent;
     fn CGEventSourceKeyState(stateID: i32, key: u16) -> bool;
-    fn CGEventCreate(source: *const c_void) -> *mut MyCGEvent;
-    fn CGEventGetLocation(event: *mut MyCGEvent) -> CGPoint;
 }
 
 #[repr(C)]
@@ -182,23 +181,13 @@ impl Default for Enigo {
             }
         }
         Self {
-            // remotedisplay: CGEventSource::new(CombinedSessionState) can return Err
-            // on recent macOS → event_source None → injection silently became a
-            // no-op (the mouse wouldn't move). Try several states as a fallback.
-            event_source: {
-                let mut src = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).ok();
-                if src.is_none() {
-                    src = CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok();
-                }
-                if src.is_none() {
-                    src = CGEventSource::new(CGEventSourceStateID::Private).ok();
-                }
-                if src.is_none() {
-                    log::error!("remotedisplay: CGEventSource::new failed on ALL states — there will be no input injection");
-                } else {
-                    log::info!("remotedisplay: CGEventSource created OK");
-                }
-                src
+            // TODO(dustin): return error rather than panic here
+            event_source: if let Ok(src) =
+                CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+            {
+                Some(src)
+            } else {
+                None
             },
             double_click_interval,
             multiple_click: 1,
@@ -227,9 +216,8 @@ impl MouseControllable for Enigo {
 
     fn mouse_move_relative(&mut self, x: i32, y: i32) {
         let (display_width, display_height) = Self::main_display_size();
-        // Use the display-change-immune mouse_location() (CGEvent-based) instead
-        // of the stale NSEvent Y-flip, same reason as in mouse_location().
-        let (current_x, current_y) = Self::mouse_location();
+        let (current_x, y_inv) = Self::mouse_location_raw_coords();
+        let current_y = (display_height as i32) - y_inv;
         // Use saturating arithmetic to prevent overflow/wraparound
         let mut new_x = current_x.saturating_add(x);
         let mut new_y = current_y.saturating_add(y);
@@ -441,7 +429,19 @@ impl KeyboardControllable for Enigo {
                 if let Ok(event) = CGEvent::new_keyboard_event(src.clone(), 0, true) {
                     event.set_string(cluster);
                     self.post(event, None);
+                } else {
+                    hbb_common::throttled_log!(
+                        KEYBOARD_ERROR_LOG_INTERVAL,
+                        error,
+                        "Failed to inject macOS Enigo key-sequence: could not create keyboard event"
+                    );
                 }
+            } else {
+                hbb_common::throttled_log!(
+                    KEYBOARD_ERROR_LOG_INTERVAL,
+                    error,
+                    "Failed to inject macOS Enigo key-sequence: event source is not initialized"
+                );
             }
         }
     }
@@ -449,17 +449,40 @@ impl KeyboardControllable for Enigo {
     fn key_click(&mut self, key: Key) {
         let keycode = self.key_to_keycode(key);
         if keycode == u16::MAX {
+            hbb_common::throttled_log!(
+                KEYBOARD_ERROR_LOG_INTERVAL,
+                error,
+                "Failed to inject macOS Enigo key-click: keycode mapping is unavailable"
+            );
             return;
         }
 
         if let Some(src) = self.event_source.as_ref() {
             if let Ok(event) = CGEvent::new_keyboard_event(src.clone(), keycode, true) {
                 self.post(event, Some(keycode));
+            } else {
+                hbb_common::throttled_log!(
+                    KEYBOARD_ERROR_LOG_INTERVAL,
+                    error,
+                    "Failed to inject macOS Enigo key-down in key-click: could not create keyboard event"
+                );
             }
 
             if let Ok(event) = CGEvent::new_keyboard_event(src.clone(), keycode, false) {
                 self.post(event, Some(keycode));
+            } else {
+                hbb_common::throttled_log!(
+                    KEYBOARD_ERROR_LOG_INTERVAL,
+                    error,
+                    "Failed to inject macOS Enigo key-up in key-click: could not create keyboard event"
+                );
             }
+        } else {
+            hbb_common::throttled_log!(
+                KEYBOARD_ERROR_LOG_INTERVAL,
+                error,
+                "Failed to inject macOS Enigo key-click: event source is not initialized"
+            );
         }
     }
 
@@ -478,10 +501,29 @@ impl KeyboardControllable for Enigo {
 
     fn key_up(&mut self, key: Key) {
         let code = self.key_to_keycode(key);
+        if code == u16::MAX {
+            hbb_common::throttled_log!(
+                KEYBOARD_ERROR_LOG_INTERVAL,
+                error,
+                "Cannot map macOS Enigo key-up to a keycode"
+            );
+        }
         if let Some(src) = self.event_source.as_ref() {
             if let Ok(event) = CGEvent::new_keyboard_event(src.clone(), code, false) {
                 self.post(event, Some(code));
+            } else {
+                hbb_common::throttled_log!(
+                    KEYBOARD_ERROR_LOG_INTERVAL,
+                    error,
+                    "Failed to inject macOS Enigo key-up: could not create keyboard event"
+                );
             }
+        } else {
+            hbb_common::throttled_log!(
+                KEYBOARD_ERROR_LOG_INTERVAL,
+                error,
+                "Failed to inject macOS Enigo key-up: event source is not initialized"
+            );
         }
     }
 
@@ -558,27 +600,11 @@ impl Enigo {
         }
     }
 
-    /// The mouse coordinates in points, in global top-left coordinates
-    /// (the same space CGEvent mouse events and get_cursor_pos use).
-    ///
-    /// NSEvent.mouseLocation is deliberately avoided here: AppKit caches the
-    /// screen configuration on first use and a long-running headless server
-    /// never refreshes it, so after any display/resolution change the Cocoa
-    /// Y-flip uses a stale height and every click lands vertically offset by
-    /// (new_height - old_height). CGEventCreate reads the live cursor
-    /// position from the window server, immune to display changes.
+    /// The mouse coordinates in points, only works on the main display
     pub fn mouse_location() -> (i32, i32) {
-        unsafe {
-            let e = CGEventCreate(std::ptr::null());
-            if e.is_null() {
-                let (x, y_inv) = Self::mouse_location_raw_coords();
-                let (_, display_height) = Self::main_display_size();
-                return (x, (display_height as i32) - y_inv);
-            }
-            let point = CGEventGetLocation(e);
-            CFRelease(e as *const std::ffi::c_void);
-            (point.x as i32, point.y as i32)
-        }
+        let (x, y_inv) = Self::mouse_location_raw_coords();
+        let (_, display_height) = Self::main_display_size();
+        (x, (display_height as i32) - y_inv)
     }
 
     fn key_to_keycode(&mut self, key: Key) -> CGKeyCode {

@@ -1,11 +1,12 @@
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(target_os = "windows")]
 use crate::client::translate;
 #[cfg(not(debug_assertions))]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::platform::breakdown_callback;
+use base::config::keys;
 #[cfg(not(debug_assertions))]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use hbb_common::platform::register_breakdown_handler;
+use base::platform::register_breakdown_handler;
 use hbb_common::{config, log};
 #[cfg(windows)]
 use tauri_winrt_notification::{Duration, Sound, Toast};
@@ -22,13 +23,26 @@ macro_rules! my_println{
     };
 }
 
+pub enum CoreMainAction {
+    StartUi(Vec<String>),
+    ExitFailure(hbb_common::anyhow::Error),
+}
+
+#[cfg(target_os = "macos")]
+fn finish_macos_update(result: hbb_common::ResultType<()>) -> Option<CoreMainAction> {
+    match result {
+        Ok(()) => None,
+        Err(err) => Some(CoreMainAction::ExitFailure(err)),
+    }
+}
+
 /// shared by flutter and sciter main function
 ///
 /// [Note]
 /// If it returns [`None`], then the process will terminate, and flutter gui will not be started.
-/// If it returns [`Some`], then the process will continue, and flutter gui will be started.
+/// If it returns [`Some`], the action determines whether to start the UI or report failure.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn core_main() -> Option<Vec<String>> {
+pub fn core_main() -> Option<CoreMainAction> {
     if !crate::common::global_init() {
         return None;
     }
@@ -45,11 +59,7 @@ pub fn core_main() -> Option<Vec<String>> {
     let mut _is_run_as_system = false;
     let mut _is_quick_support = false;
     let mut _is_flutter_invoke_new_connection = false;
-    // remotedisplay: CLIENTS start up with REMOTEDISPLAY_NO_SERVER=1 (set by
-    // their native runner before core_main) — never becoming a host: the
-    // only server is Remote Display Server (remotedisplayd). Equivalent to launching with
-    // the --no-server flag, which the user can't guarantee on every launch.
-    let mut no_server = std::env::var("REMOTEDISPLAY_NO_SERVER").map_or(false, |v| v == "1");
+    let mut no_server = false;
     let mut arg_exe = Default::default();
     for arg in std::env::args() {
         if i == 0 {
@@ -77,11 +87,6 @@ pub fn core_main() -> Option<Vec<String>> {
                 _is_quick_support = true;
             } else if arg == "--no-server" {
                 no_server = true;
-            } else if arg == "--camera-test-pattern" {
-                // remotedisplay: offer a test card as a camera, for testing camera
-                // forwarding without one (src/platform/macos_camera_capture.rs).
-                #[cfg(target_os = "macos")]
-                crate::platform::macos_camera_capture::use_test_pattern();
             } else {
                 args.push(arg);
             }
@@ -122,11 +127,11 @@ pub fn core_main() -> Option<Vec<String>> {
     }
     #[cfg(windows)]
     if args.contains(&"--connect".to_string()) || args.contains(&"--view-camera".to_string()) {
-        hbb_common::platform::windows::start_cpu_performance_monitor();
+        base::platform::windows::start_cpu_performance_monitor();
     }
     #[cfg(feature = "flutter")]
     if _is_flutter_invoke_new_connection {
-        return core_main_invoke_new_connection(std::env::args());
+        return core_main_invoke_new_connection(std::env::args()).map(CoreMainAction::StartUi);
     }
     let click_setup = cfg!(windows) && args.is_empty() && crate::common::is_setup(&arg_exe);
     if click_setup && !config::is_disable_installation() {
@@ -135,6 +140,13 @@ pub fn core_main() -> Option<Vec<String>> {
     }
     if args.contains(&"--noinstall".to_string()) {
         args.clear();
+    }
+    // The portable wrapper injects `--install` when its name ends with `install.exe`,
+    // including `no-install.exe`. Drop the argument instead of exiting so disabled
+    // clients can continue running as portable applications.
+    if config::is_disable_installation() {
+        args.retain(|arg| arg != "--install");
+        flutter_args.retain(|arg| arg != "--install");
     }
     if args.len() > 0 {
         if args[0] == "--version" {
@@ -172,7 +184,7 @@ pub fn core_main() -> Option<Vec<String>> {
     // linux uni (url) go here.
     #[cfg(all(target_os = "linux", feature = "flutter"))]
     if args.len() > 0 && args[0].starts_with(&crate::get_uri_prefix()) {
-        return try_send_by_dbus(args[0].clone());
+        return try_send_by_dbus(args[0].clone()).map(CoreMainAction::StartUi);
     }
 
     #[cfg(windows)]
@@ -192,9 +204,6 @@ pub fn core_main() -> Option<Vec<String>> {
         crate::platform::elevate_or_run_as_system(click_setup, _is_elevate, _is_run_as_system);
         return None;
     }
-    #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    init_plugins(&args);
     if args.is_empty() || crate::common::is_empty_uni_link(&args[0]) {
         #[cfg(target_os = "macos")]
         {
@@ -231,6 +240,10 @@ pub fn core_main() -> Option<Vec<String>> {
                 }
                 return None;
             } else if args[0] == "--update" {
+                // The elevated updater cannot delete its running verified copy.
+                if let Err(err) = platform::schedule_current_verified_update_file_cleanup() {
+                    log::warn!("Failed to schedule verified update file cleanup: {}", err);
+                }
                 if config::is_disable_installation() {
                     return None;
                 }
@@ -340,38 +353,8 @@ pub fn core_main() -> Option<Vec<String>> {
         }
         #[cfg(target_os = "macos")]
         {
-            use crate::platform;
             if args[0] == "--update" {
-                if args.len() > 1 && args[1].ends_with(".dmg") {
-                    // Version check is unnecessary unless downgrading to an older version
-                    // that lacks "update dmg" support. This is a special case since we cannot
-                    // detect the version before extracting the DMG, so we skip the check.
-                    let dmg_path = &args[1];
-                    println!("Updating from DMG: {}", dmg_path);
-                    match platform::update_from_dmg(dmg_path) {
-                        Ok(_) => {
-                            println!("Update process from DMG started successfully.");
-                            // The new process will handle the rest. We can exit.
-                        }
-                        Err(err) => {
-                            eprintln!("Failed to start update from DMG: {}", err);
-                        }
-                    }
-                } else {
-                    println!("Starting update process...");
-                    log::info!("Starting update process...");
-                    let _text = match platform::update_me() {
-                        Ok(_) => {
-                            println!("{}", translate("Updated successfully!".to_string()));
-                            log::info!("Updated successfully!");
-                        }
-                        Err(err) => {
-                            eprintln!("Update failed with error: {}", err);
-                            log::error!("Update failed with error: {err}");
-                        }
-                    };
-                }
-                return None;
+                return finish_macos_update(crate::manual_update::execute_macos_update(&args));
             }
         }
         if args[0] == "--remove" {
@@ -416,74 +399,12 @@ pub fn core_main() -> Option<Vec<String>> {
             {
                 crate::start_server(true, false);
             }
-            #[cfg(all(target_os = "macos", feature = "flutter"))]
+            #[cfg(target_os = "macos")]
             {
                 let handler = std::thread::spawn(move || crate::start_server(true, false));
                 crate::tray::start_tray();
                 // prevent server exit when encountering errors from tray
                 hbb_common::allow_err!(handler.join());
-            }
-            #[cfg(all(target_os = "macos", not(feature = "flutter")))]
-            {
-                // remotedisplay: the ENGINE writes its REAL permission state to a
-                // file, so the UI shows what the engine actually has
-                // (not what the app assumes based on its own identity). Source of truth.
-                std::thread::spawn(|| loop {
-                    let acc = crate::platform::is_process_trusted(false);
-                    let scr = crate::platform::is_can_screen_recording(false);
-                    let home = std::env::var("HOME").unwrap_or_default();
-                    let path = format!(
-                        "{}/Library/Application Support/remotedisplay-perms.json",
-                        home
-                    );
-                    // Write atomically (temp + rename) so the Swift UI, which reads
-                    // this file every 2s, never sees a torn/partial JSON (which would
-                    // make its permission checklist flicker and could trigger a mid-
-                    // session engine restart).
-                    let tmp = format!("{}.tmp", path);
-                    // remotedisplay: plus the owner's switch (decision 0009). Booleans
-                    // only: the app reads this file as [String: Bool].
-                    let fwd = crate::server::device_forward::is_allowed();
-                    let body = format!(
-                        "{{\"accessibility\":{},\"screen\":{},\"device_forward\":{}}}",
-                        acc, scr, fwd
-                    );
-                    if std::fs::write(&tmp, &body).is_ok() {
-                        let _ = std::fs::rename(&tmp, &path);
-                    }
-                    // remotedisplay: who is sending a camera or microphone, in its own
-                    // file, for the app's menu and badge (decision 0009).
-                    let path = format!(
-                        "{}/Library/Application Support/remotedisplay-forwarding.json",
-                        home
-                    );
-                    let tmp = format!("{}.tmp", path);
-                    let body = crate::server::device_forward::forwarding_json();
-                    if std::fs::write(&tmp, &body).is_ok() {
-                        let _ = std::fs::rename(&tmp, &path);
-                    }
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                });
-                // remotedisplay: ALL input on macOS (mouse/keyboard) is dispatched to
-                // `QUEUE = Queue::main()` (the main thread's queue). The Flutter
-                // version pumps it by running the tray on the main thread; since here
-                // there's NO tray, the main thread's run loop has to be run to
-                // drain that queue — otherwise events get queued but the injection
-                // (handle_mouse_/handle_key_) NEVER runs.
-                std::thread::spawn(move || crate::start_server(true, false));
-                // remotedisplay: NOT a bare CFRunLoopRun — CoreGraphics delivers display
-                // reconfiguration notifications through AppKit's event loop;
-                // without pumping it, the process's display list stays
-                // frozen after a mirror transaction (dynamic main), and
-                // virtuals created afterward are never announced to the client. An
-                // NSApplication "Prohibited" (no Dock, no menu) running [NSApp run]
-                // also drains the GCD main queue (input) — see macos.mm.
-                extern "C" {
-                    fn MacRunHeadlessAppLoop();
-                }
-                unsafe {
-                    MacRunHeadlessAppLoop();
-                }
             }
             return None;
         } else if args[0] == "--import-config" {
@@ -518,78 +439,6 @@ pub fn core_main() -> Option<Vec<String>> {
                     }
                 } else {
                     println!("Installation and administrative privileges required!");
-                }
-            }
-            return None;
-        } else if args[0] == "--test-inject" {
-            // remotedisplay: self-contained mouse injection test (enigo).
-            // Moves the cursor to 400,400 and reports before/after. No client involved.
-            #[cfg(target_os = "macos")]
-            {
-                use enigo::{Enigo, MouseControllable};
-                let before = crate::get_cursor_pos();
-                let mut en = Enigo::new();
-                en.mouse_move_to(400, 400);
-                std::thread::sleep(std::time::Duration::from_millis(300));
-                let after = crate::get_cursor_pos();
-                println!("test-inject: before={:?} after={:?}", before, after);
-            }
-            return None;
-        } else if args[0] == "--check-perms" {
-            // remotedisplay: TCC permission probe in a FRESH process. macOS caches
-            // CGPreflightScreenCaptureAccess per process: the already-running --server
-            // doesn't see a newly granted permission until it restarts, and neither does the UI app.
-            // The app calls this every few seconds while setup is incomplete and, if
-            // it changes, restarts the engine (kickstart).
-            #[cfg(target_os = "macos")]
-            {
-                let acc = crate::platform::is_process_trusted(false);
-                let scr = crate::platform::is_can_screen_recording(false);
-                println!("{{\"accessibility\":{},\"screen\":{}}}", acc, scr);
-            }
-            return None;
-        } else if args[0] == "--set-lan-password" {
-            // remotedisplay: sets the permanent password WITHOUT the is_installed/root gate.
-            // The serverless LAN-only server runs at the user level (not as an installed
-            // RustDesk.app), so --password doesn't work; this talks to the running
-            // --server over IPC (same user) and applies/persists the password.
-            // The password comes on stdin (one line) when no argument is given: an
-            // argument would show up in `ps` for every user on the Mac.
-            if !is_cli_setting_change_disabled()
-                && !config::Config::is_disable_change_permanent_password()
-                && (args.len() == 1 || args.len() == 2)
-            {
-                let password = if args.len() == 2 {
-                    Some(args[1].to_owned())
-                } else {
-                    let mut line = String::new();
-                    std::io::stdin()
-                        .read_line(&mut line)
-                        .ok()
-                        .map(|_| line.trim_end_matches(['\r', '\n']).to_owned())
-                        .filter(|p| !p.is_empty())
-                };
-                match password {
-                    Some(password) => match crate::ipc::set_permanent_password(password) {
-                        Ok(_) => println!("Done!"),
-                        Err(err) => println!("set-lan-password failed: {err}"),
-                    },
-                    None => println!("set-lan-password failed: no password on stdin"),
-                }
-            }
-            return None;
-        } else if args[0] == "--set-device-forward" {
-            // remotedisplay: the owner's switch for camera and microphone forwarding
-            // (decision 0009). User-level like --set-lan-password: it reaches the running
-            // --server over IPC (same user) and persists the option.
-            if !is_cli_setting_change_disabled() {
-                use crate::server::device_forward;
-                match args.get(1).and_then(|a| device_forward::option_value(a)) {
-                    Some(value) if args.len() == 2 => {
-                        crate::ipc::set_option(device_forward::OPTION, value);
-                        println!("Done!");
-                    }
-                    _ => println!("set-device-forward failed: use on or off"),
                 }
             }
             return None;
@@ -803,7 +652,8 @@ pub fn core_main() -> Option<Vec<String>> {
                         None
                     }
                 };
-                let new_id = get_value("--id");
+                // An empty --id (e.g. an unset var) would deploy a blank id; the Android flow guards this too (#15146).
+                let new_id = get_value("--id").filter(|s| !s.is_empty());
                 match crate::ui_interface::deploy_device(token, new_id) {
                     crate::ui_interface::DeployResult::Ok => {
                         println!("Device deployed.");
@@ -851,20 +701,6 @@ pub fn core_main() -> Option<Vec<String>> {
             // call connection manager to establish connections
             // meanwhile, return true to call flutter window to show control panel
             crate::ui_interface::start_option_status_sync();
-        } else if args[0] == "--cm-no-ui" {
-            #[cfg(feature = "flutter")]
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            {
-                crate::ui_interface::start_option_status_sync();
-                crate::flutter::connection_manager::start_cm_no_ui();
-            }
-            #[cfg(not(feature = "flutter"))]
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            {
-                crate::ui_interface::start_option_status_sync();
-                headless_cm::start_cm_no_ui();
-            }
-            return None;
         } else if args[0] == "--whiteboard" {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
@@ -878,46 +714,13 @@ pub fn core_main() -> Option<Vec<String>> {
                 crate::platform::gtk_sudo::exec();
             }
             return None;
-        } else {
-            #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            if args[0] == "--plugin-install" {
-                if args.len() == 2 {
-                    crate::plugin::change_uninstall_plugin(&args[1], false);
-                } else if args.len() == 3 {
-                    crate::plugin::install_plugin_with_url(&args[1], &args[2]);
-                }
-                return None;
-            } else if args[0] == "--plugin-uninstall" {
-                if args.len() == 2 {
-                    crate::plugin::change_uninstall_plugin(&args[1], true);
-                }
-                return None;
-            }
         }
     }
     //_async_logger_holder.map(|x| x.flush());
     #[cfg(feature = "flutter")]
-    return Some(flutter_args);
+    return Some(CoreMainAction::StartUi(flutter_args));
     #[cfg(not(feature = "flutter"))]
-    return Some(args);
-}
-
-#[inline]
-#[cfg(all(feature = "flutter", feature = "plugin_framework"))]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn init_plugins(args: &Vec<String>) {
-    if args.is_empty() || "--server" == (&args[0] as &str) {
-        #[cfg(debug_assertions)]
-        let load_plugins = true;
-        #[cfg(not(debug_assertions))]
-        let load_plugins = crate::platform::is_installed();
-        if load_plugins {
-            crate::plugin::init();
-        }
-    } else if "--service" == (&args[0] as &str) {
-        hbb_common::allow_err!(crate::plugin::remove_uninstalled());
-    }
+    return Some(CoreMainAction::StartUi(args));
 }
 
 fn import_config(path: &str) {
@@ -1057,7 +860,7 @@ fn is_root() -> bool {
     crate::platform::is_root()
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn is_user_main_ipc_scope_cli_command(args: &[String]) -> bool {
     matches!(
         args.first().map(String::as_str),
@@ -1074,7 +877,7 @@ fn is_user_main_ipc_scope_cli_command(args: &[String]) -> bool {
 
 #[inline]
 fn is_cli_setting_change_disabled() -> bool {
-    let option = config::keys::OPTION_ALLOW_COMMAND_LINE_SETTINGS_WHEN_SETTINGS_DISABLED;
+    let option = keys::OPTION_ALLOW_COMMAND_LINE_SETTINGS_WHEN_SETTINGS_DISABLED;
     let allow_command_line_settings =
         config::option2bool(option, &crate::get_builtin_option(option));
     config::is_disable_settings() && !allow_command_line_settings
@@ -1097,42 +900,6 @@ fn parse_silent_install_args(args: &[String]) -> (Option<bool>, bool) {
     (printer_override, debug)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn args(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| value.to_string()).collect()
-    }
-
-    #[test]
-    fn user_main_ipc_scope_cli_command_matches_management_commands_only() {
-        for command in [
-            "--password",
-            "--set-unlock-pin",
-            "--get-id",
-            "--set-id",
-            "--config",
-            "--option",
-            "--assign",
-            "--deploy",
-        ] {
-            assert!(is_user_main_ipc_scope_cli_command(&args(&[command])));
-        }
-
-        for command in [
-            "--service",
-            "--server",
-            "--tray",
-            "--cm",
-            "--check-hwcodec-config",
-            "--connect",
-        ] {
-            assert!(!is_user_main_ipc_scope_cli_command(&args(&[command])));
-        }
-    }
-}
-
 /// Check if the executable is a Quick Support version.
 /// Note: This function must be kept in sync with `libs/portable/src/main.rs`.
 #[cfg(windows)]
@@ -1140,37 +907,4 @@ mod tests {
 fn is_quick_support_exe(exe: &str) -> bool {
     let exe = exe.to_lowercase();
     exe.contains("-qs-") || exe.contains("-qs.exe") || exe.contains("_qs.exe")
-}
-
-// remotedisplay: headless connection manager for builds without flutter (no sciter).
-// Runs the CM's IPC logic with a no-op UI handler, so
-// sessions work without any window on the host.
-#[cfg(not(feature = "flutter"))]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-mod headless_cm {
-    use crate::ui_cm_interface::{start_ipc, Client, ConnectionManager, InvokeUiCM};
-
-    #[derive(Clone)]
-    pub struct HeadlessHandler;
-
-    impl InvokeUiCM for HeadlessHandler {
-        fn add_connection(&self, client: &Client) {
-            hbb_common::log::info!("cm-no-ui: new connection id={}", client.id);
-        }
-        fn remove_connection(&self, id: i32, close: bool) {
-            hbb_common::log::info!("cm-no-ui: connection {} closed (close={})", id, close);
-        }
-        fn new_message(&self, _id: i32, _text: String) {}
-        fn change_theme(&self, _dark: String) {}
-        fn change_language(&self) {}
-        fn show_elevation(&self, _show: bool) {}
-        fn update_voice_call_state(&self, _client: &Client) {}
-        fn file_transfer_log(&self, _action: &str, _log: &str) {}
-    }
-
-    pub fn start_cm_no_ui() {
-        start_ipc(ConnectionManager {
-            ui_handler: HeadlessHandler,
-        });
-    }
 }

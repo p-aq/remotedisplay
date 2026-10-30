@@ -296,7 +296,8 @@ impl Device {
             let ranges: *mut AudioValueRange = ranges.as_mut_ptr() as *mut _;
             let ranges: &'static [AudioValueRange] = slice::from_raw_parts(ranges, n_ranges);
 
-            let buffer_size = get_io_buffer_frame_size_range(self.audio_device_id)?;
+            let audio_unit = audio_unit_from_device(self, true)?;
+            let buffer_size = get_io_buffer_frame_size_range(&audio_unit)?;
 
             // Collect the supported formats for the device.
             let mut fmts = vec![];
@@ -397,7 +398,8 @@ impl Device {
                 }
             };
 
-            let buffer_size = get_io_buffer_frame_size_range(self.audio_device_id)?;
+            let audio_unit = audio_unit_from_device(self, true)?;
+            let buffer_size = get_io_buffer_frame_size_range(&audio_unit)?;
 
             let config = SupportedStreamConfig {
                 sample_rate: SampleRate(asbd.mSampleRate as _),
@@ -566,7 +568,7 @@ impl Device {
         // Set the buffersize
         match config.buffer_size {
             BufferSize::Fixed(v) => {
-                let buffer_size_range = get_io_buffer_frame_size_range(self.audio_device_id)?;
+                let buffer_size_range = get_io_buffer_frame_size_range(&audio_unit)?;
                 match buffer_size_range {
                     SupportedBufferSize::Range { min, max } => {
                         if v >= min && v <= max {
@@ -673,7 +675,7 @@ impl Device {
         // Set the buffersize
         match config.buffer_size {
             BufferSize::Fixed(v) => {
-                let buffer_size_range = get_io_buffer_frame_size_range(self.audio_device_id)?;
+                let buffer_size_range = get_io_buffer_frame_size_range(&audio_unit)?;
                 match buffer_size_range {
                     SupportedBufferSize::Range { min, max } => {
                         if v >= min && v <= max {
@@ -934,34 +936,17 @@ impl StreamTrait for Stream {
     }
 }
 
-// remotedisplay: read from the device itself, as upstream cpal does since #1184, not
-// through an audio unit. The unit was always made for input: on an output-only device such
-// as a Mac's built-in speakers it failed ("Invalid property value"), so the device had no
-// configs and no default config; on an input it waited in macOS's microphone check, so
-// listing inputs waited on the microphone prompt (decision 0025).
 fn get_io_buffer_frame_size_range(
-    device_id: AudioDeviceID,
-) -> Result<SupportedBufferSize, BackendSpecificError> {
-    let property_address = AudioObjectPropertyAddress {
-        mSelector: kAudioDevicePropertyBufferFrameSizeRange,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMaster,
-    };
-    let range: AudioValueRange = unsafe { mem::zeroed() };
-    let data_size = mem::size_of::<AudioValueRange>() as u32;
-    let status = unsafe {
-        AudioObjectGetPropertyData(
-            device_id,
-            &property_address as *const _,
-            0,
-            null(),
-            &data_size as *const _ as *mut _,
-            &range as *const _ as *mut _,
-        )
-    };
-    check_os_status(status)?;
+    audio_unit: &AudioUnit,
+) -> Result<SupportedBufferSize, coreaudio::Error> {
+    let buffer_size_range: AudioValueRange = audio_unit.get_property(
+        kAudioDevicePropertyBufferFrameSizeRange,
+        Scope::Global,
+        Element::Output,
+    )?;
+
     Ok(SupportedBufferSize::Range {
-        min: range.mMinimum as u32,
-        max: range.mMaximum as u32,
+        min: buffer_size_range.mMinimum as u32,
+        max: buffer_size_range.mMaximum as u32,
     })
 }

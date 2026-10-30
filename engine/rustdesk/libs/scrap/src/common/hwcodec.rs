@@ -3,11 +3,11 @@ use crate::{
     convert::*,
     CodecFormat, EncodeInput, ImageFormat, ImageRgb, Pixfmt, HW_STRIDE_ALIGN,
 };
+use base::message_proto::{EncodedVideoFrame, EncodedVideoFrames, VideoFrame};
 use hbb_common::{
     anyhow::{anyhow, bail, Context},
     bytes::Bytes,
     log,
-    message_proto::{EncodedVideoFrame, EncodedVideoFrames, VideoFrame},
     serde_derive::{Deserialize, Serialize},
     serde_json, ResultType,
 };
@@ -24,6 +24,9 @@ use hwcodec::{
         ffmpeg_linesize_offset_length, CodecInfo,
     },
 };
+
+#[cfg(all(test, windows, feature = "vram"))]
+mod tests;
 
 const DEFAULT_PIXFMT: AVPixelFormat = AVPixelFormat::AV_PIX_FMT_NV12;
 pub const DEFAULT_FPS: i32 = 30;
@@ -236,7 +239,7 @@ impl HwRamEncoder {
                 data.append(v);
                 Ok(data)
             }
-            Err(_) => Ok(Vec::<EncodeFrame>::new()),
+            Err(code) => Err(anyhow!("RAM encode failed: {}", code)),
         }
     }
 
@@ -351,23 +354,10 @@ impl HwRamDecoder {
         let Some(info) = info else {
             bail!("unsupported format: {:?}", format);
         };
-        // remotedisplay: FFmpeg's software HEVC decoder spreads one picture over
-        // slice threads (WPP entry points, which the macOS VideoToolbox encoder
-        // emits) and can deadlock in ff_thread_await_progress2: on a 24-core
-        // Windows client the decode thread stayed blocked for good (FPS 0, every
-        // later frame asking the server for a refresh). A single thread never
-        // takes that path; hardware decoders are unaffected.
-        let thread_count = if info.name == "hevc"
-            && info.hwdevice == hwcodec::ffmpeg::AVHWDeviceType::AV_HWDEVICE_TYPE_NONE
-        {
-            1
-        } else {
-            codec_thread_num(16)
-        };
         let ctx = DecodeContext {
             name: info.name.clone(),
             device_type: info.hwdevice.clone(),
-            thread_count: thread_count as _,
+            thread_count: codec_thread_num(16) as _,
         };
         match Decoder::new(ctx) {
             Ok(decoder) => Ok(HwRamDecoder { decoder, info }),
@@ -688,17 +678,6 @@ impl HwCodecConfig {
         }
         crate::codec::Encoder::update(crate::codec::EncodingUpdate::Check);
     }
-}
-
-/// remotedisplay: whether a codec check for this GPU has been loaded, either handed
-/// over IPC or read from the cache file written by the check process.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn config_ready() -> bool {
-    if HwCodecConfig::already_set() {
-        return true;
-    }
-    let _ = HwCodecConfig::get(); // loads and caches the file when its signature matches
-    CONFIG.lock().unwrap().is_some()
 }
 
 pub fn check_available_hwcodec() -> String {

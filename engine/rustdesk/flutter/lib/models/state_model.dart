@@ -13,10 +13,6 @@ class StateGlobal {
   bool _isMinimized = false;
   final RxBool isMaximized = false.obs;
   final RxBool _showTabBar = true.obs;
-  // remotedisplay: our client's session window uses a native frame, with no
-  // tab bar or frameless engine padding — the canvas fills the whole view
-  // and coordinate mapping (CanvasModel.*ToEdge) must not subtract edges.
-  bool edgeToEdgeSessionView = false;
   final RxDouble _resizeEdgeSize = RxDouble(windowResizeEdgeSize);
   final RxDouble _windowBorderWidth = RxDouble(kWindowBorderWidth);
   final RxBool showRemoteToolBar = false.obs;

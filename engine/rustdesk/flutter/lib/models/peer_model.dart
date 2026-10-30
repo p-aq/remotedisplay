@@ -12,18 +12,12 @@ class Peer {
   String username; // pc username
   String hostname;
   String platform;
-  // remotedisplay: the host's engine id ("" when unknown), the identity the home
-  // groups a host's addresses by; see client/lib/home.dart.
-  String machineId;
   String alias;
   List<dynamic> tags;
   bool forceAlwaysRelay = false;
   String rdpPort;
   String rdpUsername;
   bool online = false;
-  // remotedisplay: the engine said itself whether this scan found the peer
-  // (`online` in load_lan_peers); such a verdict is kept as is by _updatePeers.
-  bool onlineKnown = false;
   String loginName; //login username
   String device_group_name;
   String note;
@@ -43,7 +37,6 @@ class Peer {
         username = json['username'] ?? '',
         hostname = json['hostname'] ?? '',
         platform = json['platform'] ?? '',
-        machineId = json['machine_id'] ?? '',
         alias = json['alias'] ?? '',
         tags = json['tags'] ?? [],
         forceAlwaysRelay = json['forceAlwaysRelay'] == 'true',
@@ -52,12 +45,7 @@ class Peer {
         loginName = json['loginName'] ?? '',
         device_group_name = json['device_group_name'] ?? '',
         note = json['note'] is String ? json['note'] : '',
-        sameServer = json['same_server'] {
-    // remotedisplay: discovered peers say whether this scan found the address
-    // (load_lan_peers carries the engine's `online` flag as a string).
-    onlineKnown = json.containsKey('online');
-    online = json['online'] == 'true' || json['online'] == true;
-  }
+        sameServer = json['same_server'];
 
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
@@ -67,7 +55,6 @@ class Peer {
       "username": username,
       "hostname": hostname,
       "platform": platform,
-      "machine_id": machineId,
       "alias": alias,
       "tags": tags,
       "forceAlwaysRelay": forceAlwaysRelay.toString(),
@@ -113,7 +100,6 @@ class Peer {
     required this.username,
     required this.hostname,
     required this.platform,
-    this.machineId = '',
     required this.alias,
     required this.tags,
     required this.forceAlwaysRelay,
@@ -149,7 +135,6 @@ class Peer {
         username == other.username &&
         hostname == other.hostname &&
         platform == other.platform &&
-        machineId == other.machineId &&
         alias == other.alias &&
         tags.equals(other.tags) &&
         forceAlwaysRelay == other.forceAlwaysRelay &&
@@ -168,7 +153,6 @@ class Peer {
         username: other.username,
         hostname: other.hostname,
         platform: other.platform,
-        machineId: other.machineId,
         alias: other.alias,
         tags: other.tags.toList(),
         forceAlwaysRelay: other.forceAlwaysRelay,
@@ -276,9 +260,6 @@ class Peers extends ChangeNotifier {
     }
 
     for (var peer in peers) {
-      // remotedisplay: a discovered peer carries the engine's own verdict for
-      // this scan; only the lists without one keep the previous state.
-      if (peer.onlineKnown) continue;
       final state = onlineStates[peer.id];
       peer.online = state != null && state != false;
     }
