@@ -63,6 +63,10 @@ git apply --binary --cached --3way --directory=engine/rustdesk "$OURS" 2>"$APPLY
 CONFLICTS=$(git ls-files -u | awk '{print $4}' | sort -u)
 
 if [ -n "$CONFLICTS" ]; then
+    # What applied cleanly is only in the index so far: put it in the working tree too,
+    # so the build sees it while the conflicts are resolved.
+    git diff --name-only | sort -u | comm -23 - <(echo "$CONFLICTS") \
+        | while read -r f; do git checkout -q -- "$f"; done
     echo "   ⚠ CONFLICTS (upstream touched the same lines we did):"
     echo "$CONFLICTS" | sed 's/^/     /'
     echo "   Materialize the markers with: git checkout -m -- <file>"
