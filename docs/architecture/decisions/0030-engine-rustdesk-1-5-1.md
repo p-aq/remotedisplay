@@ -76,10 +76,16 @@
   - two new speaker-path tests: the trim, and the refill after running dry;
   - the message test;
   - builds: the server, the client library and the macOS client app.
+- **Tested since** (2026-10-30):
+  - the system-sound gate, which passes as on 1.4.9;
+  - a live session with a second Mac on the LAN ([live session](../../tests/live-session/README.md)).
+    The host's sound played cleanly with the limits above. `keep_short` trimmed about
+    61 ms 9 times in about 25 minutes: at the two session starts, and when the sound
+    started again after upstream's host had stopped sending through about 8 s of
+    silence. The rest of the time, including 40 s of continuous speech, nothing was
+    trimmed.
 - **Not yet:**
-  - the system-sound gate again (`docs/tests/system-sound/`), which needs Screen
-    Recording granted to its probe;
-  - a live session;
+  - Tailscale or a busy network, listening for a clipped first word;
   - the release build on the release Mac, with upstream's vcpkg baseline;
   - whether `static_refresh` makes our restart redundant on a static screen;
   - the mobile page on a phone.

@@ -392,6 +392,7 @@ There are no dates yet; they depend on who picks up each phase.
 - Does a process that only feeds a sink stream need the Camera permission? (Phase 0)
 - ~~Microphone: a driver (Option A) or Core Audio taps (Option B)?~~ Answered by Phase 0: Option A ([decision 0013](../architecture/decisions/0013-virtual-mic-input-only-driver.md)). Still to confirm in Zoom and Teams.
 - ~~Can the driver hide its output side, so it never appears under Sound › Output?~~ Answered by Phase 0: yes. The visible device has no output channels and can't become a default device; its output-only twin is hidden.
+- Should Remote Display Microphone be the Mac's default input when the owner picks it? The live session (2026-10-30) found it missing from Sound › Input: "can't become a default device" hides it there too. Apps with their own picker list it. Dictation and apps that only use the default input may need it ([live session](../tests/live-session/README.md)).
 - Camera formats: 720p only, or 720p and 1080p from the start?
 - Should the host delay mic audio to match video, or is unsynced good enough for calls?
 - One forwarded camera per host, or one per connected controller?
