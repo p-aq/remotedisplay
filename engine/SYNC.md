@@ -64,6 +64,7 @@ vendoring itself.
 | `src/core_main.rs`, `src/server.rs`, `src/server/device_forward.rs` | the owner's switch for camera and microphone forwarding: `--set-device-forward on\|off` and `device_forward` in `remotedisplay-perms.json` (`HOOKS.md` E3) |
 | `src/server/connection.rs`, `src/server/connection/audio_gate.rs` | the host plays a controller's audio only during an accepted voice call, independent of `disable_audio` (`HOOKS.md` E2) |
 | `src/server/audio_service.rs`, `src/server/audio_service/host_sound.rs` | with `screencapturekit`, host sound never falls back to an input device (`HOOKS.md` E1); the Phase 3 capture tests, `#[ignore]`d, run by `docs/tests/system-sound/` |
+| `src/client.rs`, `src/client/io_loop.rs`, `src/client/device_forward.rs` | the controller's camera sender: request, `CameraFrame`s once accepted, `CameraControl`, its own queue into the io loop (`HOOKS.md` E6) |
 | `build.rs`, `src/platform/mod.rs`, `src/platform/macos_camera_capture.mm`, `src/platform/macos_camera_capture.rs` | the controller's camera: capture, VideoToolbox encode, H.264 Annex B out (`HOOKS.md` E5); the camera tests, `#[ignore]`d, run by `docs/tests/camera-capture/` |
 | `libs/hbb_common/protos/message.proto`, `tests/device_forward_messages.rs` | the camera and microphone forwarding messages at `Message.union` 200–204, in the block Remote Display reserves (200–219), and their tests (`HOOKS.md` E4) |
 | `libs/scrap` | mirrored-display filter on macOS (`CGDisplayMirrorsDisplay`); a stopped stream is an error, not `WouldBlock` |

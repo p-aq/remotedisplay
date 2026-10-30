@@ -188,7 +188,7 @@ platform_additions is sent once, with the login response, and never updates duri
 Flow.
 
 - Turning the camera on sends DeviceForwardRequest{CAMERA, on: true} with the format the controller will send.
-- The host answers DeviceForwardResponse. Frames flow only after accepted: true.
+- The host answers DeviceForwardResponse. Frames flow only after accepted: true. With no answer within 10 seconds (a 1.0.x host ignores the request), the controller stops the camera and sends on: false.
 - Frames stop on on: false, on disconnect, or when the owner switches the feature off; the host then sends accepted: false, reason: "not-allowed".
 - A second controller asking for a busy device gets accepted: false, reason: "busy".
 

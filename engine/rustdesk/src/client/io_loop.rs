@@ -83,6 +83,8 @@ pub struct Remote<T: InvokeUiSession> {
     chroma: Arc<RwLock<Option<Chroma>>>,
     last_record_state: bool,
     sent_close_reason: bool,
+    // remotedisplay: camera and microphone forwarding (src/client/device_forward.rs).
+    device_forward: super::device_forward::DeviceForward,
 }
 
 #[derive(Default)]
@@ -132,6 +134,7 @@ impl<T: InvokeUiSession> Remote<T> {
             chroma: Default::default(),
             last_record_state: false,
             sent_close_reason: false,
+            device_forward: Default::default(),
         }
     }
 
@@ -338,6 +341,23 @@ impl<T: InvokeUiSession> Remote<T> {
                                 codec_format,
                                 ..Default::default()
                             });
+                        }
+                        // remotedisplay: forwarded camera frames, sent after any input
+                        // already queued (decision 0006).
+                        event = self.device_forward.next() => {
+                            let mut open = true;
+                            while let Ok(d) = self.receiver.try_recv() {
+                                open = self.handle_msg_from_ui(d, &mut peer).await;
+                                if !open {
+                                    break;
+                                }
+                            }
+                            if !open {
+                                break;
+                            }
+                            if let Some(msg) = self.device_forward.on_event(event) {
+                                allow_err!(peer.send(&msg).await);
+                            }
                         }
                     }
                 }
@@ -994,6 +1014,12 @@ impl<T: InvokeUiSession> Remote<T> {
                 self.handler
                     .on_voice_call_closed("Closed manually by the peer");
                 allow_err!(peer.send(&msg).await);
+            }
+            // remotedisplay: the Devices menu (src/client/device_forward.rs).
+            Data::DeviceForward(switch) => {
+                if let Some(msg) = self.device_forward.switch(switch) {
+                    allow_err!(peer.send(&msg).await);
+                }
             }
             Data::ResetDecoder(display) => match display {
                 Some(display) => {
@@ -2122,6 +2148,12 @@ impl<T: InvokeUiSession> Remote<T> {
                     self.handler.set_displays(&pi.displays);
                     self.handler.set_platform_additions(&pi.platform_additions);
                 }
+                // remotedisplay: the host's answers about forwarded devices.
+                Some(
+                    union @ (message::Union::DeviceForwardResponse(_)
+                    | message::Union::CameraControl(_)
+                    | message::Union::DeviceStatus(_)),
+                ) => self.device_forward.on_message(union),
                 Some(message::Union::ScreenshotResponse(response)) => {
                     crate::client::screenshot::set_screenshot(response.data);
                     self.handler
