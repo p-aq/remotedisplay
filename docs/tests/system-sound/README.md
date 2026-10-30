@@ -102,9 +102,11 @@ engine now builds what passed. It wasn't run again on the device.
 
 - Listening on a real controller. It decodes the same frames, but needs a second
   machine with the client.
-- The *Play the Mac's sound here* switch and its "unavailable" status: they need the
-  Devices menu and `DeviceStatus` (Phase 1, [decision 0012](../../architecture/decisions/0012-devices-menu-and-device-status.md)).
-  Until then the engine's existing Mute toggle (Input › Session) controls host sound.
+- The *Play the Mac's sound here* switch and its "unavailable" status in a live session.
+  The switch is in the Devices menu ([decision 0018](../../architecture/decisions/0018-devices-menu-state-and-ffi.md)),
+  and the host's `rd_host_sound` login key, from `host_sound::status`, makes it say
+  unavailable without Screen Recording ([decision 0028](../../architecture/decisions/0028-host-sound-status.md)).
+  Both sides are unit-tested; seeing it needs a second Mac.
 - A call running on the host (echo, ducking), the spec's open question.
 - `make own-mic` and `make hears` with the vendored cpal itself, rather than the scratch
   copy of the same source.
