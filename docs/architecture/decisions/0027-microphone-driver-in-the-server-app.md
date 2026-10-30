@@ -78,6 +78,16 @@
   - the install and remove scripts, run unprivileged on paths with spaces. The copy
     replaced a stale one, its signature verified, and no extended attributes came along.
 
-  **Not yet:** the admin prompt itself, and a real install, update and removal. Those
-  need an admin; until then the harness's `sudo make install-driver` is the measured
-  way in.
+- **Tested live** (2026-10-30, an ad-hoc build on a second Mac,
+  [live session](../../tests/live-session/README.md)):
+  - Setup's *Install…* asked for the admin password once, and the row said
+    *Installed*;
+  - a controller's microphone reached the device;
+  - *Remove Camera and Microphone* asked once more, and the device was gone.
+
+  **Not yet:** *Update…* over an older driver, and a reboot.
+- **Remote Display Microphone isn't in System Settings › Sound › Input.**
+  `kCanBeDefaultDevice=false`, which decision 0013 set to keep it out of Sound › Output,
+  also keeps it out of Input, and it can't be the Mac's default input. Apps with their
+  own picker list it (QuickTime did), as the row's wording says. Whether Dictation and
+  other default-input apps need it is the Phase 2 gate's question.

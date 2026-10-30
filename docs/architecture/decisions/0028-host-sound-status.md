@@ -44,5 +44,10 @@
 - A named input that's missing still says "ready": the owner chose it, and capture fails
   as before.
 - Unit-tested on both sides: `host_sound::status` in four cases, and `soundReason` in
-  `client/test/devices_test.dart`. Not yet seen in a live session with Screen Recording
-  revoked; that needs a second Mac.
+  `client/test/devices_test.dart`.
+- **In a live session** (2026-10-30, [live session](../../tests/live-session/README.md)),
+  the host sent "unavailable" before Screen Recording was granted and "ready" after. But
+  without Screen Recording the client waits for the first frame behind a modal dialog,
+  so the Devices menu, and the note, can't be reached. On a macOS 14+ host that is the
+  only "unavailable" case. The note shows only if the client lets the menu through that
+  dialog, which this decision doesn't change.
