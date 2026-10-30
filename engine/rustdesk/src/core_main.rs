@@ -59,7 +59,11 @@ pub fn core_main() -> Option<CoreMainAction> {
     let mut _is_run_as_system = false;
     let mut _is_quick_support = false;
     let mut _is_flutter_invoke_new_connection = false;
-    let mut no_server = false;
+    // remotedisplay: CLIENTS start up with REMOTEDISPLAY_NO_SERVER=1 (set by
+    // their native runner before core_main) — never becoming a host: the
+    // only server is Remote Display Server (remotedisplayd). Equivalent to launching with
+    // the --no-server flag, which the user can't guarantee on every launch.
+    let mut no_server = std::env::var("REMOTEDISPLAY_NO_SERVER").map_or(false, |v| v == "1");
     let mut arg_exe = Default::default();
     for arg in std::env::args() {
         if i == 0 {
@@ -87,6 +91,11 @@ pub fn core_main() -> Option<CoreMainAction> {
                 _is_quick_support = true;
             } else if arg == "--no-server" {
                 no_server = true;
+            } else if arg == "--camera-test-pattern" {
+                // remotedisplay: offer a test card as a camera, for testing camera
+                // forwarding without one (src/platform/macos_camera_capture.rs).
+                #[cfg(target_os = "macos")]
+                crate::platform::macos_camera_capture::use_test_pattern();
             } else {
                 args.push(arg);
             }
@@ -399,12 +408,74 @@ pub fn core_main() -> Option<CoreMainAction> {
             {
                 crate::start_server(true, false);
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "flutter"))]
             {
                 let handler = std::thread::spawn(move || crate::start_server(true, false));
                 crate::tray::start_tray();
                 // prevent server exit when encountering errors from tray
                 hbb_common::allow_err!(handler.join());
+            }
+            #[cfg(all(target_os = "macos", not(feature = "flutter")))]
+            {
+                // remotedisplay: the ENGINE writes its REAL permission state to a
+                // file, so the UI shows what the engine actually has
+                // (not what the app assumes based on its own identity). Source of truth.
+                std::thread::spawn(|| loop {
+                    let acc = crate::platform::is_process_trusted(false);
+                    let scr = crate::platform::is_can_screen_recording(false);
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    let path = format!(
+                        "{}/Library/Application Support/remotedisplay-perms.json",
+                        home
+                    );
+                    // Write atomically (temp + rename) so the Swift UI, which reads
+                    // this file every 2s, never sees a torn/partial JSON (which would
+                    // make its permission checklist flicker and could trigger a mid-
+                    // session engine restart).
+                    let tmp = format!("{}.tmp", path);
+                    // remotedisplay: plus the owner's switch (decision 0009). Booleans
+                    // only: the app reads this file as [String: Bool].
+                    let fwd = crate::server::device_forward::is_allowed();
+                    let body = format!(
+                        "{{\"accessibility\":{},\"screen\":{},\"device_forward\":{}}}",
+                        acc, scr, fwd
+                    );
+                    if std::fs::write(&tmp, &body).is_ok() {
+                        let _ = std::fs::rename(&tmp, &path);
+                    }
+                    // remotedisplay: who is sending a camera or microphone, in its own
+                    // file, for the app's menu and badge (decision 0009).
+                    let path = format!(
+                        "{}/Library/Application Support/remotedisplay-forwarding.json",
+                        home
+                    );
+                    let tmp = format!("{}.tmp", path);
+                    let body = crate::server::device_forward::forwarding_json();
+                    if std::fs::write(&tmp, &body).is_ok() {
+                        let _ = std::fs::rename(&tmp, &path);
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                });
+                // remotedisplay: ALL input on macOS (mouse/keyboard) is dispatched to
+                // `QUEUE = Queue::main()` (the main thread's queue). The Flutter
+                // version pumps it by running the tray on the main thread; since here
+                // there's NO tray, the main thread's run loop has to be run to
+                // drain that queue — otherwise events get queued but the injection
+                // (handle_mouse_/handle_key_) NEVER runs.
+                std::thread::spawn(move || crate::start_server(true, false));
+                // remotedisplay: NOT a bare CFRunLoopRun — CoreGraphics delivers display
+                // reconfiguration notifications through AppKit's event loop;
+                // without pumping it, the process's display list stays
+                // frozen after a mirror transaction (dynamic main), and
+                // virtuals created afterward are never announced to the client. An
+                // NSApplication "Prohibited" (no Dock, no menu) running [NSApp run]
+                // also drains the GCD main queue (input) — see macos.mm.
+                extern "C" {
+                    fn MacRunHeadlessAppLoop();
+                }
+                unsafe {
+                    MacRunHeadlessAppLoop();
+                }
             }
             return None;
         } else if args[0] == "--import-config" {
@@ -439,6 +510,78 @@ pub fn core_main() -> Option<CoreMainAction> {
                     }
                 } else {
                     println!("Installation and administrative privileges required!");
+                }
+            }
+            return None;
+        } else if args[0] == "--test-inject" {
+            // remotedisplay: self-contained mouse injection test (enigo).
+            // Moves the cursor to 400,400 and reports before/after. No client involved.
+            #[cfg(target_os = "macos")]
+            {
+                use enigo::{Enigo, MouseControllable};
+                let before = crate::get_cursor_pos();
+                let mut en = Enigo::new();
+                en.mouse_move_to(400, 400);
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                let after = crate::get_cursor_pos();
+                println!("test-inject: before={:?} after={:?}", before, after);
+            }
+            return None;
+        } else if args[0] == "--check-perms" {
+            // remotedisplay: TCC permission probe in a FRESH process. macOS caches
+            // CGPreflightScreenCaptureAccess per process: the already-running --server
+            // doesn't see a newly granted permission until it restarts, and neither does the UI app.
+            // The app calls this every few seconds while setup is incomplete and, if
+            // it changes, restarts the engine (kickstart).
+            #[cfg(target_os = "macos")]
+            {
+                let acc = crate::platform::is_process_trusted(false);
+                let scr = crate::platform::is_can_screen_recording(false);
+                println!("{{\"accessibility\":{},\"screen\":{}}}", acc, scr);
+            }
+            return None;
+        } else if args[0] == "--set-lan-password" {
+            // remotedisplay: sets the permanent password WITHOUT the is_installed/root gate.
+            // The serverless LAN-only server runs at the user level (not as an installed
+            // RustDesk.app), so --password doesn't work; this talks to the running
+            // --server over IPC (same user) and applies/persists the password.
+            // The password comes on stdin (one line) when no argument is given: an
+            // argument would show up in `ps` for every user on the Mac.
+            if !is_cli_setting_change_disabled()
+                && !config::Config::is_disable_change_permanent_password()
+                && (args.len() == 1 || args.len() == 2)
+            {
+                let password = if args.len() == 2 {
+                    Some(args[1].to_owned())
+                } else {
+                    let mut line = String::new();
+                    std::io::stdin()
+                        .read_line(&mut line)
+                        .ok()
+                        .map(|_| line.trim_end_matches(['\r', '\n']).to_owned())
+                        .filter(|p| !p.is_empty())
+                };
+                match password {
+                    Some(password) => match crate::ipc::set_permanent_password(password) {
+                        Ok(_) => println!("Done!"),
+                        Err(err) => println!("set-lan-password failed: {err}"),
+                    },
+                    None => println!("set-lan-password failed: no password on stdin"),
+                }
+            }
+            return None;
+        } else if args[0] == "--set-device-forward" {
+            // remotedisplay: the owner's switch for camera and microphone forwarding
+            // (decision 0009). User-level like --set-lan-password: it reaches the running
+            // --server over IPC (same user) and persists the option.
+            if !is_cli_setting_change_disabled() {
+                use crate::server::device_forward;
+                match args.get(1).and_then(|a| device_forward::option_value(a)) {
+                    Some(value) if args.len() == 2 => {
+                        crate::ipc::set_option(device_forward::OPTION, value);
+                        println!("Done!");
+                    }
+                    _ => println!("set-device-forward failed: use on or off"),
                 }
             }
             return None;
@@ -701,6 +844,16 @@ pub fn core_main() -> Option<CoreMainAction> {
             // call connection manager to establish connections
             // meanwhile, return true to call flutter window to show control panel
             crate::ui_interface::start_option_status_sync();
+        } else if args[0] == "--cm-no-ui" {
+            // remotedisplay: the server's headless connection manager (no Flutter); upstream
+            // dropped its own Flutter `--cm-no-ui` in 1.5.
+            #[cfg(not(feature = "flutter"))]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                crate::ui_interface::start_option_status_sync();
+                headless_cm::start_cm_no_ui();
+            }
+            return None;
         } else if args[0] == "--whiteboard" {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
@@ -907,4 +1060,37 @@ fn parse_silent_install_args(args: &[String]) -> (Option<bool>, bool) {
 fn is_quick_support_exe(exe: &str) -> bool {
     let exe = exe.to_lowercase();
     exe.contains("-qs-") || exe.contains("-qs.exe") || exe.contains("_qs.exe")
+}
+
+// remotedisplay: headless connection manager for builds without flutter (no sciter).
+// Runs the CM's IPC logic with a no-op UI handler, so
+// sessions work without any window on the host.
+#[cfg(not(feature = "flutter"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod headless_cm {
+    use crate::ui_cm_interface::{start_ipc, Client, ConnectionManager, InvokeUiCM};
+
+    #[derive(Clone)]
+    pub struct HeadlessHandler;
+
+    impl InvokeUiCM for HeadlessHandler {
+        fn add_connection(&self, client: &Client) {
+            hbb_common::log::info!("cm-no-ui: new connection id={}", client.id);
+        }
+        fn remove_connection(&self, id: i32, close: bool) {
+            hbb_common::log::info!("cm-no-ui: connection {} closed (close={})", id, close);
+        }
+        fn new_message(&self, _id: i32, _text: String) {}
+        fn change_theme(&self, _dark: String) {}
+        fn change_language(&self) {}
+        fn show_elevation(&self, _show: bool) {}
+        fn update_voice_call_state(&self, _client: &Client) {}
+        fn file_transfer_log(&self, _action: &str, _log: &str) {}
+    }
+
+    pub fn start_cm_no_ui() {
+        start_ipc(ConnectionManager {
+            ui_handler: HeadlessHandler,
+        });
+    }
 }

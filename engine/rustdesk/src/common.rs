@@ -693,6 +693,12 @@ impl Drop for CheckTestNatType {
 }
 
 pub fn test_nat_type() {
+    // remotedisplay: serverless (rendezvous → 127.0.0.1): there's no one to ask about
+    // NAT; without this the log fills up with "test nat: Failed to connect to 127.0.0.1:21116".
+    if hbb_common::config::Config::is_serverless_lan() {
+        Config::set_nat_type(NatType::SYMMETRIC as _);
+        return;
+    }
     test_ipv6_sync();
     use std::sync::atomic::{AtomicBool, Ordering};
     std::thread::spawn(move || {
@@ -936,6 +942,17 @@ pub fn username() -> String {
 #[inline(always)]
 #[cfg(not(target_os = "ios"))]
 pub fn whoami_hostname() -> String {
+    // remotedisplay: on macOS the kernel hostname is not the Mac's own name. With no
+    // HostName set (the default) configd derives it from the router's reverse DNS of
+    // the current address and only falls back to LocalHostName.local, so one Mac was
+    // announced as "mac.lan" on one lease and "samuels-mac-studio.local" on the next,
+    // and the client listed it as two computers. LocalHostName is the name the user
+    // gave the Mac (Sharing settings) and does not depend on the network.
+    #[cfg(target_os = "macos")]
+    if let Some(mut name) = crate::platform::local_hostname() {
+        name.make_ascii_lowercase();
+        return name;
+    }
     let mut hostname = whoami::fallible::hostname().unwrap_or_else(|_| "localhost".to_string());
     hostname.make_ascii_lowercase();
     hostname
@@ -1044,6 +1061,9 @@ pub fn is_modifier(evt: &KeyEvent) -> bool {
 }
 
 pub fn check_software_update() {
+    // remotedisplay: LAN-only build, never phone home
+    #[allow(unreachable_code)]
+    return;
     if is_custom_client() {
         return;
     }
@@ -1357,6 +1377,10 @@ pub fn get_local_option(key: &str) -> String {
 }
 
 pub fn get_audit_server(api: String, custom: String, typ: String) -> String {
+    // remotedisplay: no API server in serverless mode → no remote auditing.
+    if hbb_common::config::Config::is_serverless_lan() {
+        return "".to_owned();
+    }
     let url = get_api_server(api, custom);
     if url.is_empty() || is_public(&url) {
         return "".to_owned();

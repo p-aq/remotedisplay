@@ -54,7 +54,7 @@ const CONFIG_STORE_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
 #[cfg(target_os = "macos")]
 lazy_static::lazy_static! {
-    pub static ref ORG: RwLock<String> = RwLock::new("com.carriez".to_owned());
+    pub static ref ORG: RwLock<String> = RwLock::new("".to_owned()); // remotedisplay: no org -> ~/Library/Preferences/RemoteDisplay
 }
 
 type Size = (i32, i32, i32, i32);
@@ -68,7 +68,7 @@ lazy_static::lazy_static! {
     static ref ONLINE: Mutex<HashMap<String, i64>> = Default::default();
     pub static ref PROD_RENDEZVOUS_SERVER: RwLock<String> = RwLock::new("".to_owned());
     pub static ref EXE_RENDEZVOUS_SERVER: RwLock<String> = Default::default();
-    pub static ref APP_NAME: RwLock<String> = RwLock::new("RustDesk".to_owned());
+    pub static ref APP_NAME: RwLock<String> = RwLock::new("RemoteDisplay".to_owned()); // remotedisplay: app/config/log name
     static ref KEY_PAIR: Mutex<Option<KeyPair>> = Default::default();
     static ref USER_DEFAULT_CONFIG: RwLock<(UserDefaultConfig, Instant)> = RwLock::new((UserDefaultConfig::load(), Instant::now()));
     pub static ref NEW_STORED_PEER_CONFIG: Mutex<HashSet<String>> = Default::default();
@@ -113,8 +113,8 @@ const CHARS: &[char] = &[
     'm', 'n', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
 ];
 
-pub const RENDEZVOUS_SERVERS: &[&str] = &["rs-ny.rustdesk.com"];
-pub const RS_PUB_KEY: &str = "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=";
+pub const RENDEZVOUS_SERVERS: &[&str] = &["127.0.0.1"];
+pub const RS_PUB_KEY: &str = "";
 
 pub const RENDEZVOUS_PORT: i32 = 21116;
 pub const RELAY_PORT: i32 = 21117;
@@ -450,6 +450,12 @@ pub struct PeerInfoSerde {
     pub hostname: String,
     #[serde(default, deserialize_with = "deserialize_string")]
     pub platform: String,
+    // remotedisplay: the host's own engine id, stable across address and hostname
+    // changes; the client files this address under the same machine as the host's
+    // other addresses by it. Empty for hosts that predate it (a default, so older
+    // peer files still load).
+    #[serde(default, deserialize_with = "deserialize_string")]
+    pub machine_id: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
@@ -1067,6 +1073,18 @@ impl Config {
             rendezvous_server = format!("{rendezvous_server}:{RENDEZVOUS_PORT}");
         }
         rendezvous_server
+    }
+
+    /// remotedisplay: serverless/LAN mode = all configured rendezvous servers are loopback.
+    pub fn is_serverless_lan() -> bool {
+        let servers = Self::get_rendezvous_servers();
+        if servers.is_empty() {
+            return true;
+        }
+        servers.iter().all(|h| {
+            let host = h.split(':').next().unwrap_or(h.as_str());
+            host == "127.0.0.1" || host == "localhost" || host == "::1"
+        })
     }
 
     pub fn get_rendezvous_servers() -> Vec<String> {
@@ -2399,6 +2417,15 @@ pub struct DiscoveryPeer {
     pub platform: String,
     #[serde(default, deserialize_with = "deserialize_bool")]
     pub online: bool,
+    // remotedisplay: the host's engine id from its discovery reply (`id` above is the
+    // address in this fork); empty for hosts found by the port scan only. It sits
+    // BEFORE `ip_mac` on purpose: confy serializes with toml 0.5, which refuses a
+    // plain value after a table ("values must be emitted before tables"), and with
+    // the field after the map every LanPeers::store failed, so no discovered peer ever
+    // reached the client's home (1.0.13 to 1.0.15). Order matters for serialization
+    // only; the file is read by key.
+    #[serde(default, deserialize_with = "deserialize_string")]
+    pub machine_id: String,
     #[serde(default, deserialize_with = "deserialize_hashmap_string_string")]
     pub ip_mac: HashMap<String, String>,
 }
@@ -3775,5 +3802,51 @@ mod tests {
         let non_service_root = Config::ipc_path_for_uid(ROOT_UID, "");
         let non_service_user = Config::ipc_path_for_uid(USER_UID, "");
         assert_ne!(non_service_root, non_service_user);
+    }
+
+    // remotedisplay: the discovered-peers file is written by confy with toml 0.5, which
+    // refuses a plain value after a table; a DiscoveryPeer with its engine id placed
+    // after the `ip_mac` map could never be stored (1.0.13 to 1.0.15). Round-trip one
+    // through the very functions LanPeers uses.
+    #[test]
+    fn test_lan_peers_store_load_with_machine_id_and_ip_mac() {
+        let dir = std::env::temp_dir().join(format!(
+            "rd-lan-peers-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lan_peers.toml");
+        let peer = DiscoveryPeer {
+            id: "192.168.1.115".to_owned(),
+            username: "sam".to_owned(),
+            hostname: "samuels-mac-studio".to_owned(),
+            platform: "Mac OS".to_owned(),
+            online: true,
+            machine_id: "526326377".to_owned(),
+            ip_mac: HashMap::from([("192.168.1.115".to_owned(), "13:00:06:03:06:00".to_owned())]),
+        };
+        let bare = DiscoveryPeer {
+            id: "100.64.0.2".to_owned(),
+            hostname: "100.64.0.2".to_owned(),
+            ip_mac: HashMap::from([("100.64.0.2".to_owned(), "".to_owned())]),
+            ..Default::default()
+        };
+        let stored = LanPeers {
+            peers: vec![peer.clone(), bare.clone()],
+        };
+        store_path(path.clone(), stored).expect("LanPeers must serialize");
+        let loaded: LanPeers = confy::load_path(&path).expect("LanPeers must load back");
+        assert_eq!(loaded.peers.len(), 2);
+        assert_eq!(loaded.peers[0].machine_id, peer.machine_id);
+        assert_eq!(loaded.peers[0].ip_mac, peer.ip_mac);
+        assert_eq!(loaded.peers[0].hostname, peer.hostname);
+        assert!(loaded.peers[0].online);
+        assert_eq!(loaded.peers[1].machine_id, "");
+        assert_eq!(loaded.peers[1].ip_mac, bare.ip_mac);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -20,6 +20,10 @@ use magnum_opus::Application::LowDelay;
 use magnum_opus::{Channels::*, Encoder};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+// remotedisplay: the decision is plain logic, so its tests also run without the feature.
+#[cfg(any(test, feature = "screencapturekit"))]
+mod host_sound;
+
 pub const NAME: &'static str = "audio";
 pub const AUDIO_DATA_SIZE_U8: usize = 960 * 4; // 10ms in 48000 stereo
 static RESTARTING: AtomicBool = AtomicBool::new(false);
@@ -187,6 +191,17 @@ pub fn is_screen_capture_kit_available() -> bool {
     cpal::available_hosts()
         .iter()
         .any(|host| *host == cpal::HostId::ScreenCaptureKit)
+}
+
+/// remotedisplay: whether a controller can hear this Mac's sound, for its Devices menu
+/// (host_sound.rs, decision 0028).
+#[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+pub fn host_sound_status() -> &'static str {
+    host_sound::status(
+        &get_audio_input(),
+        is_screen_capture_kit_available(),
+        crate::platform::macos::is_can_screen_recording(false),
+    )
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -378,11 +393,27 @@ mod cpal_impl {
     #[cfg(feature = "screencapturekit")]
     fn get_device() -> ResultType<(Device, SupportedStreamConfig)> {
         let audio_input = super::get_audio_input();
-        if !audio_input.is_empty() {
-            return get_audio_input(&audio_input);
-        }
-        if !is_screen_capture_kit_available() {
-            return get_audio_input("");
+        // remotedisplay: host sound never falls back to the microphone (host_sound.rs).
+        match super::host_sound::source(
+            super::get_voice_call_input_device().is_some(),
+            &audio_input,
+            is_screen_capture_kit_available(),
+        ) {
+            super::host_sound::Source::VoiceCall(device) => return get_audio_input(&device),
+            super::host_sound::Source::Named(name) => {
+                let (device, format) = get_audio_input(&name)?;
+                if device.name().unwrap_or_default() != name {
+                    bail!(
+                        "audio input \"{}\" not found; not falling back to another input",
+                        name
+                    );
+                }
+                return Ok((device, format));
+            }
+            super::host_sound::Source::Unavailable => {
+                bail!("ScreenCaptureKit audio is unavailable; not falling back to the microphone")
+            }
+            super::host_sound::Source::ScreenCaptureKit => {}
         }
         let device = HOST_SCREEN_CAPTURE_KIT
             .as_ref()?

@@ -100,6 +100,11 @@ mod audio_playback_recovery;
 #[cfg(all(test, not(target_os = "linux")))]
 #[path = "client/tests/audio_state_tests.rs"]
 mod audio_state_tests;
+// remotedisplay: camera and microphone forwarding on the controller.
+pub mod device_forward;
+// remotedisplay: the spec's jitter buffer: the host's microphone path plays through it,
+// and AudioHandler keeps to its limits (decision 0029).
+pub(crate) mod jitter;
 pub mod file_trait;
 pub mod helper;
 pub mod io_loop;
@@ -132,6 +137,8 @@ pub const SCRAP_X11_REF_URL: &str = "https://rustdesk.com/docs/en/manual/linux/#
 
 #[cfg(not(target_os = "linux"))]
 pub const AUDIO_BUFFER_MS: usize = 3000;
+
+#[cfg(not(target_os = "linux"))]
 
 #[cfg(feature = "flutter")]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2142,6 +2149,8 @@ pub struct AudioHandler {
     audio_decoder: Option<(AudioDecoder, Vec<f32>)>,
     #[cfg(target_os = "linux")]
     simple: Option<psimple::Simple>,
+    // remotedisplay: the spec's jitter buffer instead of upstream's AudioBuffer (decision
+    // 0029), with what it did, for the log.
     #[cfg(not(target_os = "linux"))]
     audio_buffer: AudioBuffer,
     #[cfg(not(target_os = "linux"))]
@@ -2338,6 +2347,31 @@ impl AudioBuffer {
     pub fn append_pcm(&mut self, buffer: &[f32]) {
         let having = self.append_pcm2(buffer);
         self.try_shrink(having);
+    }
+}
+
+// remotedisplay: the spec's limits for the speaker path (decision 0029): with more than
+// 100 ms waiting, the oldest goes, back to 40 ms, in whole frames. The playback writer
+// fades across the jump, as it does for upstream's own discards.
+#[cfg(not(target_os = "linux"))]
+impl AudioBuffer {
+    fn keep_short(&self, channels: usize) {
+        let channels = channels.max(1);
+        let samples = |ms: usize| self.1 * ms / 1000;
+        let mut lock = self.0.lock().unwrap();
+        let occupied = lock.occupied_len();
+        if occupied <= samples(jitter::MAX_MS) {
+            return;
+        }
+        let skip = (occupied - samples(jitter::TARGET_MS)) / channels * channels;
+        lock.skip(skip);
+        let generation = self.signal_discontinuity();
+        drop(lock);
+        hbb_common::throttled_log!(
+            audio_playback::AUDIO_PLAYBACK_LOG_INTERVAL,
+            debug,
+            "Audio buffer kept short: samples={skip}, generation={generation}"
+        );
     }
 }
 
@@ -2544,6 +2578,8 @@ impl AudioHandler {
                     }
                 };
                 self.audio_buffer.append_pcm(&buffer);
+                // remotedisplay: the spec's limits for the speaker path (decision 0029).
+                self.audio_buffer.keep_short(self.device_channel as usize);
             }
             #[cfg(target_os = "linux")]
             {
@@ -2581,6 +2617,10 @@ impl AudioHandler {
             audio_buffer,
             discontinuity_generation,
         )?;
+        // remotedisplay: after running dry, wait for 40 ms again (decision 0029).
+        playback_writer.refill_after_running_dry(
+            config.sample_rate.0 as usize * config.channels as usize * jitter::TARGET_MS / 1000,
+        );
         let playback_status = playback_writer.status.clone();
         let timeout = None;
         let stream = device.build_output_stream(
@@ -3660,13 +3700,20 @@ impl LoginConfigHandler {
             self.version = hbb_common::get_version_number(&pi.version);
         }
         self.features = pi.features.clone().into_option();
+        // remotedisplay: the host's engine id, when it sends one (1.0.13+), so the home
+        // groups this address with the host's other addresses by identity, not by name.
+        let machine_id = serde_json::from_str::<serde_json::Value>(&pi.platform_additions)
+            .ok()
+            .and_then(|v| Some(v.get("machine_id")?.as_str()?.to_owned()))
+            .unwrap_or_default();
         let serde = PeerInfoSerde {
             username: pi.username.clone(),
             hostname: pi.hostname.clone(),
             platform: pi.platform.clone(),
+            machine_id,
         };
         let mut config = self.load_config();
-        config.info = serde;
+        config.info = serde.clone();
         let password = self.password.clone();
         let password0 = config.password.clone();
         let remember = self.remember;
@@ -3742,8 +3789,57 @@ impl LoginConfigHandler {
         }
         // no matter if change, for update file time
         self.save_config(config);
+        self.spread_identity(&serde, &pi.platform_additions);
         self.supported_encoding = pi.encoding.clone().unwrap_or_default();
         log::info!("peer info supported_encoding:{:?}", self.supported_encoding);
+    }
+
+    /// remotedisplay: the host named its other (Tailscale) addresses in the login
+    /// response (`addrs`, see server/connection.rs): file them under this same identity,
+    /// so the home shows one computer even where discovery replies never arrive — an
+    /// address saved by an older server under the name the router gave it then, or one
+    /// never seen before. Identity only: a password belongs to its address and stays
+    /// where it is. A new file carries the platform, or `batch_peers` would drop it.
+    /// A host is not trusted about addresses already known to belong to another
+    /// machine (a file with a different engine id stays as it is).
+    fn spread_identity(&self, info: &PeerInfoSerde, platform_additions: &str) {
+        if info.machine_id.is_empty() || info.platform.is_empty() {
+            return;
+        }
+        let mut written = 0;
+        for addr in crate::lan::login_addrs(platform_additions, &self.id) {
+            let mut c = if PeerConfig::exists(&addr) {
+                PeerConfig::load(&addr)
+            } else {
+                PeerConfig::default()
+            };
+            if c.info == *info {
+                continue;
+            }
+            if !c.info.machine_id.is_empty() && c.info.machine_id != info.machine_id {
+                log::info!(
+                    "{}: not re-identifying {}, it belongs to {}",
+                    self.id,
+                    addr,
+                    c.info.machine_id
+                );
+                continue;
+            }
+            c.info = info.clone();
+            c.store(&addr);
+            written += 1;
+        }
+        if written > 0 {
+            log::info!(
+                "identity of {} filed under {} other address(es) the host advertised",
+                self.id,
+                written
+            );
+            // The refresh reads and decrypts every peer file: off this thread, which
+            // holds the session's config lock while handling the peer info.
+            #[cfg(feature = "flutter")]
+            std::thread::spawn(crate::flutter_ffi::main_load_recent_peers);
+        }
     }
 
     pub fn get_remote_dir(&self) -> String {
@@ -4002,6 +4098,17 @@ pub fn start_video_thread<F, T>(
         let mut count = 0;
         let mut duration = std::time::Duration::ZERO;
         let mut skip_beginning = 0;
+        // remotedisplay: recovery from a decoder stuck on an old picture size. When the
+        // captured display changes size without the decoder being recreated, a
+        // hardware decoder (D3D11VA, VideoToolbox) keeps handing out pictures of the
+        // old size and the renderer refuses every one of them ("width/height
+        // mismatch"): the picture freezes while input keeps working. After a second
+        // of consecutive refusals we ask the server for a fresh keyframe and recreate
+        // the decoder when it arrives (never before: a P-frame on a new decoder would
+        // count as a failed first frame and mark the codec unsupported).
+        let mut size_mismatch_since: Option<std::time::Instant> = None;
+        let mut reset_on_next_key_frame = false;
+        let mut last_size_mismatch_refresh: Option<std::time::Instant> = None;
         loop {
             if let Ok(data) = video_receiver.recv() {
                 match data {
@@ -4043,6 +4150,18 @@ pub fn start_video_thread<F, T>(
                             let mut pixelbuffer = true;
                             let mut tmp_chroma = None;
                             let format_changed = handler.decoder.format() != format;
+                            if format_changed {
+                                // handle_frame recreates the decoder for the new format.
+                                reset_on_next_key_frame = false;
+                                size_mismatch_since = None;
+                            } else if reset_on_next_key_frame && has_key_frame(&vf) {
+                                log::info!(
+                                    "display {display}: keyframe arrived, recreating the decoder stuck on the old picture size"
+                                );
+                                handler.reset(None);
+                                reset_on_next_key_frame = false;
+                                size_mismatch_since = None;
+                            }
                             match handler.handle_frame(vf, &mut pixelbuffer, &mut tmp_chroma) {
                                 Ok(true) => {
                                     video_callback(
@@ -4051,6 +4170,30 @@ pub fn start_video_thread<F, T>(
                                         handler.texture.texture,
                                         pixelbuffer,
                                     );
+                                    if pixelbuffer {
+                                        let rejected =
+                                            session.ui_handler.rgba_size_mismatches(display);
+                                        if rejected == 0 {
+                                            size_mismatch_since = None;
+                                        } else if !reset_on_next_key_frame {
+                                            let since = *size_mismatch_since
+                                                .get_or_insert_with(std::time::Instant::now);
+                                            let cooled = last_size_mismatch_refresh
+                                                .map_or(true, |t| t.elapsed().as_secs() >= 5);
+                                            if rejected >= 5 && since.elapsed().as_secs() >= 1 && cooled {
+                                                log::warn!(
+                                                    "display {display}: {rejected} decoded frames of {}x{} refused for their size over {} ms: asking for a keyframe to recreate the decoder",
+                                                    handler.rgb.w,
+                                                    handler.rgb.h,
+                                                    since.elapsed().as_millis()
+                                                );
+                                                session.refresh_video(display as _);
+                                                reset_on_next_key_frame = true;
+                                                last_size_mismatch_refresh =
+                                                    Some(std::time::Instant::now());
+                                            }
+                                        }
+                                    }
 
                                     // chroma
                                     if tmp_chroma.is_some() && last_chroma != tmp_chroma {
@@ -4112,6 +4255,8 @@ pub fn start_video_thread<F, T>(
                         if let Some(handler) = video_handler.as_mut() {
                             handler.reset(None);
                         }
+                        reset_on_next_key_frame = false;
+                        size_mismatch_since = None;
                     }
                     MediaData::RecordScreen(start) => {
                         let id = session.lc.read().unwrap().id.clone();
@@ -4160,6 +4305,20 @@ pub fn start_audio_thread() -> MediaSender {
     audio_sender
 }
 
+/// remotedisplay: whether any encoded frame of this message is a keyframe (the point at
+/// which a decoder can be recreated without losing the picture).
+fn has_key_frame(vf: &VideoFrame) -> bool {
+    use base::message_proto::video_frame::Union;
+    match &vf.union {
+        Some(Union::Vp8s(f))
+        | Some(Union::Vp9s(f))
+        | Some(Union::Av1s(f))
+        | Some(Union::H264s(f))
+        | Some(Union::H265s(f)) => f.frames.iter().any(|f| f.key),
+        _ => false,
+    }
+}
+
 #[inline]
 fn fps_calculate(
     skip_beginning: &mut usize,
@@ -4206,6 +4365,26 @@ fn get_hwcodec_config() {
                     "Failed to get hwcodec config: {e:?}, elapsed: {:?}",
                     start.elapsed()
                 );
+                // remotedisplay: a client-only install runs no local server, so the
+                // config never arrived over IPC and every session decoded in software
+                // (an RTX 5070 sat idle). Run the check ourselves (it stores its
+                // result, see ipc::hwcodec_process) and give it a few seconds before
+                // the first decoder is created; later launches find the cached file.
+                #[cfg(windows)]
+                if scrap::codec::enable_hwcodec_option() && !scrap::hwcodec::config_ready() {
+                    scrap::hwcodec::start_check_process();
+                    for _ in 0..40 {
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                        if scrap::hwcodec::config_ready() {
+                            break;
+                        }
+                    }
+                    log::info!(
+                        "hwcodec config ready: {}, {:?} after the check was started",
+                        scrap::hwcodec::config_ready(),
+                        start.elapsed()
+                    );
+                }
             } else {
                 log::info!("{:?} used to get hwcodec config", start.elapsed());
             }
@@ -5037,6 +5216,8 @@ pub enum Data {
     ResetDecoder(Option<usize>),
     RenameFile((i32, String, String, bool)),
     TakeScreenshot((i32, String)),
+    // remotedisplay: the Devices menu turns a forwarded device on or off.
+    DeviceForward(device_forward::Switch),
 }
 
 pub async fn confirm_insecure_connection(

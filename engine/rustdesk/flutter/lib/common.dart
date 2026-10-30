@@ -788,6 +788,11 @@ class OverlayDialogManager {
   var _overlayKeyState = OverlayKeyState();
   int _tagCount = 0;
 
+  /// remotedisplay: number of visible dialogs, observable — the mobile session uses it
+  /// to SHOW the local pointer over popups even while it's hidden over
+  /// the remote canvas (patch 09).
+  final RxInt visibleDialogCount = 0.obs;
+
   OverlayEntry? _mobileActionsOverlayEntry;
   RxBool mobileActionsOverlayVisible = true.obs;
 
@@ -815,12 +820,14 @@ class OverlayDialogManager {
       BackButtonInterceptor.removeByName(key);
     });
     _dialogs.clear();
+    visibleDialogCount.value = 0;
   }
 
   void dismissByTag(String tag) {
     _dialogs[tag]?.complete(null);
     _dialogs.remove(tag);
     BackButtonInterceptor.removeByName(tag);
+    visibleDialogCount.value = _dialogs.length;
   }
 
   Future<T?> show<T>(DialogBuilder builder,
@@ -847,9 +854,11 @@ class OverlayDialogManager {
 
     final dialog = Dialog<T>();
     _dialogs[dialogTag] = dialog;
+    visibleDialogCount.value = _dialogs.length;
 
     close([res]) {
       _dialogs.remove(dialogTag);
+      visibleDialogCount.value = _dialogs.length;
       try {
         dialog.complete(res);
       } catch (e) {

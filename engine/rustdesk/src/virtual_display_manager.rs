@@ -1,20 +1,35 @@
+#[cfg(windows)]
 use base::platform::windows::is_windows_version_or_greater;
 use hbb_common::{bail, ResultType};
 
 // This string is defined here.
 //  https://github.com/rustdesk-org/RustDeskIddDriver/blob/b370aad3f50028b039aad211df60c8051c4a64d6/RustDeskIddDriver/RustDeskIddDriver.inf#LL73C1-L73C40
+#[cfg(windows)]
 pub const RUSTDESK_IDD_DEVICE_STRING: &'static str = "RustDeskIddDriver Device\0";
+#[cfg(windows)]
 pub const AMYUNI_IDD_DEVICE_STRING: &'static str = "USB Mobile Monitor Virtual Display\0";
 
+#[cfg(windows)]
 const IDD_IMPL: &str = IDD_IMPL_AMYUNI;
+#[cfg(windows)]
 const IDD_IMPL_RUSTDESK: &str = "rustdesk_idd";
+#[cfg(windows)]
 const IDD_IMPL_AMYUNI: &str = "amyuni_idd";
+#[cfg(windows)]
 const IDD_PLUG_OUT_ALL_INDEX: i32 = -1;
 
 pub fn is_amyuni_idd() -> bool {
-    IDD_IMPL == IDD_IMPL_AMYUNI
+    #[cfg(windows)]
+    {
+        IDD_IMPL == IDD_IMPL_AMYUNI
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
 
+#[cfg(windows)]
 pub fn get_cur_device_string() -> &'static str {
     match IDD_IMPL {
         IDD_IMPL_RUSTDESK => RUSTDESK_IDD_DEVICE_STRING,
@@ -35,6 +50,7 @@ pub fn is_virtual_display_supported() -> bool {
 }
 
 pub fn plug_in_headless() -> ResultType<()> {
+    #[cfg(windows)]
     match IDD_IMPL {
         IDD_IMPL_RUSTDESK => rustdesk_idd::plug_in_headless(),
         IDD_IMPL_AMYUNI => amyuni_idd::plug_in_headless(),
@@ -42,6 +58,7 @@ pub fn plug_in_headless() -> ResultType<()> {
     }
 }
 
+#[cfg(windows)]
 pub fn get_platform_additions() -> serde_json::Map<String, serde_json::Value> {
     let mut map = serde_json::Map::new();
     if !crate::platform::windows::is_self_service_running() {
@@ -70,6 +87,7 @@ pub fn get_platform_additions() -> serde_json::Map<String, serde_json::Value> {
 }
 
 #[inline]
+#[cfg(windows)]
 pub fn plug_in_monitor(idx: u32, modes: Vec<virtual_display::MonitorMode>) -> ResultType<()> {
     match IDD_IMPL {
         IDD_IMPL_RUSTDESK => rustdesk_idd::plug_in_index_modes(idx, modes),
@@ -79,6 +97,7 @@ pub fn plug_in_monitor(idx: u32, modes: Vec<virtual_display::MonitorMode>) -> Re
 }
 
 pub fn plug_out_monitor(index: i32, force_all: bool, force_one: bool) -> ResultType<()> {
+    #[cfg(windows)]
     match IDD_IMPL {
         IDD_IMPL_RUSTDESK => {
             let indices = if index == IDD_PLUG_OUT_ALL_INDEX {
@@ -93,6 +112,7 @@ pub fn plug_out_monitor(index: i32, force_all: bool, force_one: bool) -> ResultT
     }
 }
 
+#[cfg(windows)]
 pub fn plug_in_peer_request(modes: Vec<Vec<virtual_display::MonitorMode>>) -> ResultType<Vec<u32>> {
     match IDD_IMPL {
         IDD_IMPL_RUSTDESK => rustdesk_idd::plug_in_peer_request(modes),
@@ -104,6 +124,7 @@ pub fn plug_in_peer_request(modes: Vec<Vec<virtual_display::MonitorMode>>) -> Re
     }
 }
 
+#[cfg(windows)]
 pub fn plug_out_monitor_indices(
     indices: &[u32],
     force_all: bool,
@@ -122,6 +143,7 @@ pub fn plug_out_monitor_indices(
 }
 
 pub fn reset_all() -> ResultType<()> {
+    #[cfg(windows)]
     match IDD_IMPL {
         IDD_IMPL_RUSTDESK => rustdesk_idd::reset_all(),
         IDD_IMPL_AMYUNI => amyuni_idd::reset_all(),
@@ -129,6 +151,7 @@ pub fn reset_all() -> ResultType<()> {
     }
 }
 
+#[cfg(windows)]
 pub mod rustdesk_idd {
     use super::windows;
     use hbb_common::{allow_err, bail, lazy_static, log, ResultType};
@@ -382,6 +405,7 @@ pub mod rustdesk_idd {
     }
 }
 
+#[cfg(windows)]
 pub mod amyuni_idd {
     use super::windows;
     use crate::platform::{reg_display_settings, win_device};
@@ -738,6 +762,7 @@ pub mod amyuni_idd {
     }
 }
 
+#[cfg(windows)]
 mod windows {
     use std::ptr::null_mut;
     use winapi::{

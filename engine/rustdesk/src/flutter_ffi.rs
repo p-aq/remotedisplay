@@ -72,7 +72,11 @@ fn initialize(app_dir: &str, custom_client_config: &str) {
     #[cfg(target_os = "ios")]
     {
         use hbb_common::env_logger::*;
-        init_from_env(Env::default().filter_or(DEFAULT_FILTER_ENV, "debug"));
+        // remotedisplay: try_init instead of init_from_env — the 2nd Flutter engine
+        // (the iPad's external-monitor view) re-enters here, and init_from_env
+        // panics if the process's logger is already initialized.
+        let _ = Builder::from_env(Env::default().filter_or(DEFAULT_FILTER_ENV, "debug"))
+            .try_init();
         crate::common::test_nat_type();
     }
     #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -1596,6 +1600,7 @@ pub fn main_load_fav_peers() {
                             username: d.username.clone(),
                             hostname: d.hostname.clone(),
                             platform: d.platform.clone(),
+                            machine_id: d.machine_id.clone(),
                         },
                         ..Default::default()
                     },
@@ -1615,12 +1620,20 @@ pub fn main_load_fav_peers() {
 }
 
 pub fn main_load_lan_peers() {
+    // remotedisplay: the tally of the discovery run rides along (lan::discovery_stats),
+    // so the home can tell when replies never arrive. Same event, one more key.
+    let (run, replies, port_hits, done) = crate::lan::discovery_stats();
+    let discovery = serde_json::json!({
+        "run": run, "replies": replies, "port_hits": port_hits, "done": done
+    })
+    .to_string();
     let data = HashMap::from([
         ("name", "load_lan_peers".to_owned()),
         (
             "peers",
             serde_json::to_string(&get_lan_peers()).unwrap_or_default(),
         ),
+        ("discovery", discovery),
     ]);
     let _res = flutter::push_global_event(
         flutter::APP_TYPE_MAIN,
@@ -1775,6 +1788,33 @@ pub fn session_close_voice_call(session_id: SessionID) {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         session.close_voice_call();
     }
+}
+
+// remotedisplay: the Devices menu's calls (src/client/device_forward.rs, decision 0018).
+// The forwarders' state reaches the menu as the `rd_device_forward` session event.
+pub fn session_set_device_forward(session_id: SessionID, kind: String, on: bool, device: String) {
+    let Some(switch) = crate::client::device_forward::ui::switch(&kind, on, &device) else {
+        return;
+    };
+    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        crate::client::Interface::send(&*session, crate::client::Data::DeviceForward(switch));
+    }
+}
+
+pub fn main_list_cameras() -> SyncReturn<String> {
+    SyncReturn(crate::client::device_forward::ui::cameras())
+}
+
+pub fn main_list_microphones() -> SyncReturn<String> {
+    SyncReturn(crate::client::device_forward::ui::microphones())
+}
+
+pub fn main_get_capture_permission(kind: String) -> SyncReturn<String> {
+    SyncReturn(crate::client::device_forward::ui::permission(&kind))
+}
+
+pub fn main_request_capture_permission(kind: String) -> bool {
+    crate::client::device_forward::ui::request_permission(&kind)
 }
 
 pub fn session_get_conn_token(session_id: SessionID) -> SyncReturn<Option<String>> {

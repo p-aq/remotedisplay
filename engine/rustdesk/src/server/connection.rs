@@ -185,6 +185,14 @@ async fn login_deadline(authorized: bool, started: Instant) {
     time::sleep_until(started + LOGIN_GRACE).await
 }
 
+// remotedisplay: the host plays a controller's audio only during an accepted call.
+mod audio_gate;
+
+lazy_static::lazy_static! {
+    // remotedisplay: last accepted video refresh per display (-1 = all), see refresh_video_display.
+    static ref REFRESH_LIMITER: Mutex<HashMap<i64, std::time::Instant>> = Default::default();
+}
+
 lazy_static::lazy_static! {
     // Connections between accept and authorization, oldest first; see admit_unauthorized.
     static ref UNAUTHORIZED_CONNS: Mutex<Vec<(i32, IpAddr, Arc<UnauthorizedShared>)>> = Default::default();
@@ -426,6 +434,10 @@ pub struct Connection {
     from_switch: bool,
     voice_call_request_timestamp: Option<NonZeroI64>,
     voice_calling: bool,
+    // remotedisplay: see audio_gate.rs.
+    audio_gate: audio_gate::AudioGate,
+    // remotedisplay: camera and microphone forwarding (device_forward.rs).
+    device_forward: super::device_forward::Forwards,
     options_in_login: Option<OptionMessage>,
     #[cfg(not(any(target_os = "ios")))]
     pressed_modifiers: HashSet<rdev::Key>,
@@ -633,6 +645,8 @@ impl Connection {
             audio_sender: None,
             voice_call_request_timestamp: None,
             voice_calling: false,
+            audio_gate: Default::default(),
+            device_forward: super::device_forward::Forwards::new(id),
             options_in_login: None,
             #[cfg(not(any(target_os = "ios")))]
             pressed_modifiers: Default::default(),
@@ -1113,9 +1127,20 @@ impl Connection {
                             }
                         }
                         Some(message::Union::PeerInfo(_pi)) => {
-                            conn.refresh_video_display(None);
+                            // remotedisplay (macOS): the display list changed. The video loop
+                            // restarts on its own when the topology changes; refreshing here
+                            // as well doubled every restart. Refresh only if the loop showing
+                            // this connection's display predates the current topology.
                             #[cfg(target_os = "macos")]
-                            conn.retina.set_displays(&_pi.displays);
+                            {
+                                if video_service::loop_predates_topology(conn.display_idx) {
+                                    log::info!("#{} refresh: display list announced, loop predates topology", id);
+                                    conn.refresh_video_display(None);
+                                }
+                                conn.retina.set_displays(&_pi.displays);
+                            }
+                            #[cfg(not(target_os = "macos"))]
+                            conn.refresh_video_display(None);
                         }
                         Some(message::Union::CursorPosition(pos)) => {
                             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1183,6 +1208,10 @@ impl Connection {
                     conn.file_remove_log_control.on_timer().drain(..).map(|x| conn.send_to_cm(x)).count();
                     #[cfg(feature = "hwcodec")]
                     conn.update_supported_encoding();
+                    // remotedisplay: the owner's switch and the sinks, once a second.
+                    for msg in conn.device_forward.on_tick() {
+                        conn.send(msg).await;
+                    }
                 }
                 _ = test_delay_timer.tick() => {
                     if last_recv_time.elapsed() >= SEC30 {
@@ -2004,6 +2033,26 @@ impl Connection {
                 json!(privacy_mode::get_supported_privacy_mode_impl()),
             );
         }
+        // remotedisplay: the host's engine id travels with the login response, so the
+        // client can file this address under the same machine as the host's other
+        // addresses whatever hostname the host reports today (PeerInfoSerde::machine_id).
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+        platform_additions.insert("machine_id".into(), json!(Config::get_id()));
+        // remotedisplay: and the host's Tailscale addresses, the same set its discovery
+        // reply advertises, so a client that logged in through one address learns the
+        // identity of the others even where discovery replies never reach it (see
+        // client.rs spread_identity). After authentication only, and only while LAN
+        // discovery is on, which already discloses these addresses on the network.
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+        if hbb_common::config::option2bool(
+            "enable-lan-discovery",
+            &Config::get_option("enable-lan-discovery"),
+        ) {
+            let addrs = crate::lan::host_tailscale_addrs(Some(self.stream.local_addr().ip()));
+            if !addrs.is_empty() {
+                platform_additions.insert("addrs".into(), json!(addrs));
+            }
+        }
 
         #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
         {
@@ -2027,6 +2076,17 @@ impl Connection {
         {
             platform_additions.insert("support_view_camera".into(), json!(true));
         }
+        // remotedisplay: the devices this host can receive (device_forward.rs; none
+        // unless it's a Mac).
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+        platform_additions.extend(self.device_forward.capabilities(&self.lr.my_name));
+        // remotedisplay: whether the controller can hear this Mac's sound, for its
+        // Devices menu (decision 0028).
+        #[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+        platform_additions.insert(
+            "rd_host_sound".into(),
+            json!(super::audio_service::host_sound_status()),
+        );
 
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         if !platform_additions.is_empty() {
@@ -3922,10 +3982,9 @@ impl Connection {
                             self.toggle_privacy_mode(t).await;
                         }
                     }
-                    Some(misc::Union::ChatMessage(c)) => {
-                        self.send_to_cm(ipc::Data::ChatMessage { text: c.text });
-                        self.chat_unanswered = true;
-                        self.update_auto_disconnect_timer();
+                    Some(misc::Union::ChatMessage(_c)) => {
+                        // remotedisplay: chat disabled in this fork
+                        log::info!("chat message ignored (disabled in remotedisplay)");
                     }
                     Some(misc::Union::Option(o)) => {
                         if self.authed_conn_type() == Some(AuthConnType::Remote) {
@@ -3939,6 +3998,7 @@ impl Connection {
                             if r {
                                 // Refresh all videos.
                                 // Compatibility with old versions and sciter(remote).
+                                log::info!("#{} refresh: RefreshVideo from the client", self.inner.id());
                                 self.refresh_video_display(None);
                             }
                             self.update_auto_disconnect_timer();
@@ -3946,6 +4006,7 @@ impl Connection {
                     }
                     Some(misc::Union::RefreshVideoDisplay(display)) => {
                         if self.should_handle_render_broadcast_message() {
+                            log::info!("#{} refresh: RefreshVideoDisplay({display}) from the client", self.inner.id());
                             self.refresh_video_display(Some(display as usize));
                             self.update_auto_disconnect_timer();
                         }
@@ -3987,7 +4048,14 @@ impl Connection {
                         _ => {}
                     },
                     Some(misc::Union::AudioFormat(format)) => {
-                        if !self.disable_audio {
+                        // remotedisplay: only during an accepted call or microphone forward,
+                        // whatever disable_audio says; a microphone forward's audio goes to
+                        // Remote Display Microphone, not the speakers (device_forward.rs).
+                        let mic = self.device_forward.receiving_mic();
+                        let accepted = self.audio_gate.accepts(self.voice_calling || mic);
+                        if accepted && mic {
+                            self.device_forward.on_audio_format(format);
+                        } else if accepted {
                             // Drop the audio sender previously.
                             drop(std::mem::replace(&mut self.audio_sender, None));
                             self.audio_sender = Some(start_audio_thread());
@@ -4088,7 +4156,12 @@ impl Connection {
                     _ => {}
                 },
                 Some(message::Union::AudioFrame(frame)) => {
-                    if !self.disable_audio {
+                    // remotedisplay: as AudioFormat above.
+                    let mic = self.device_forward.receiving_mic();
+                    let accepted = self.audio_gate.accepts(self.voice_calling || mic);
+                    if accepted && mic {
+                        self.device_forward.on_audio_frame(frame);
+                    } else if accepted {
                         if let Some(sender) = &self.audio_sender {
                             allow_err!(sender.send(MediaData::AudioFrame(Box::new(frame))));
                         } else {
@@ -4112,6 +4185,15 @@ impl Connection {
                 }
                 Some(message::Union::VoiceCallResponse(_response)) => {
                     // TODO: Maybe we can do a voice call from cm directly.
+                }
+                // remotedisplay: a controller's camera and microphone (device_forward.rs).
+                Some(
+                    union @ (message::Union::DeviceForwardRequest(_)
+                    | message::Union::CameraFrame(_)),
+                ) => {
+                    if let Some(msg) = self.device_forward.on_message(union) {
+                        self.send(msg).await;
+                    }
                 }
                 Some(message::Union::ScreenshotRequest(request)) => {
                     if let Some(tx) = self.inner.tx.clone() {
@@ -4597,6 +4679,23 @@ impl Connection {
     }
 
     fn refresh_video_display(&self, display: Option<usize>) {
+        // remotedisplay: a refresh restarts the capturer and the encoder of the display.
+        // Seen on a real Mac: refresh requests arriving every ~0.2 s after each first
+        // frame kept the video restarting 35 times a minute for half an hour, and a
+        // hardware encoder never got to output a frame. Whatever asks, one refresh per
+        // display every 1.5 s is plenty for a lost keyframe; the rest is dropped.
+        {
+            let key = display.map(|d| d as i64).unwrap_or(-1);
+            let mut last = REFRESH_LIMITER.lock().unwrap();
+            let now = std::time::Instant::now();
+            if let Some(t) = last.get(&key) {
+                if now.duration_since(*t) < std::time::Duration::from_millis(1500) {
+                    log::debug!("#{} refresh of display {key} dropped: another one {} ms ago", self.inner.id(), now.duration_since(*t).as_millis());
+                    return;
+                }
+            }
+            last.insert(key, now);
+        }
         video_service::refresh();
         self.server.upgrade().map(|s| {
             s.read().unwrap().set_video_service_opt(
@@ -4615,8 +4714,16 @@ impl Connection {
                     return;
                 }
 
+                // remotedisplay/macOS: never apply the size cached in the client's peer
+                // config. It is keyed by display INDEX, so once the list changes it lands
+                // on a different display (a client once tried to set its iPad size on the
+                // Mac's built-in panel). Displays are not resized from remote on macOS.
+                #[cfg(target_os = "macos")]
+                let skip_switch_resize = true;
+                #[cfg(not(target_os = "macos"))]
+                let skip_switch_resize = false;
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                if !self.view_camera && s.width != 0 && s.height != 0 {
+                if !skip_switch_resize && !self.view_camera && s.width != 0 && s.height != 0 {
                     self.change_resolution(
                         None,
                         &Resolution {
@@ -4800,8 +4907,9 @@ impl Connection {
                 self.send(make_msg("idd_not_support_under_win10_2004_tip".to_string()))
                     .await;
             } else {
-                if let Err(e) = virtual_display_manager::plug_in_monitor(t.display as _, Vec::new())
-                {
+                #[cfg(windows)]
+                let res = virtual_display_manager::plug_in_monitor(t.display as _, Vec::new());
+                if let Err(e) = res {
                     log::error!("Failed to plug in virtual display: {}", e);
                     self.send(make_msg(format!(
                         "Failed to plug in virtual display: {}",
@@ -4852,6 +4960,30 @@ impl Connection {
                     #[cfg(windows)]
                     if virtual_display_manager::amyuni_idd::is_my_display(&name) {
                         record_changed = false;
+                    }
+                    // remotedisplay/macOS: only a virtual display (SimpleDisplay or another
+                    // app's) is resized from remote — Fit to screen on it. A physical
+                    // panel is never touched. The size is a live adjustment: nothing is
+                    // recorded or restored when the client leaves, and if the display does
+                    // not offer the exact size the nearest fitting mode is used.
+                    #[cfg(target_os = "macos")]
+                    {
+                        if !crate::platform::display_is_virtual(&name) {
+                            log::info!(
+                                "ignoring resolution change of physical display '{}' to {}x{}",
+                                name, r.width, r.height
+                            );
+                            return;
+                        }
+                        record_changed = false;
+                        if let Err(e) = crate::platform::change_resolution_nearest(
+                            &name,
+                            r.width as _,
+                            r.height as _,
+                        ) {
+                            log::error!("Fit failed on '{}' for {}x{}: {:?}", &name, r.width, r.height, e);
+                        }
+                        return;
                     }
                     #[cfg(not(target_os = "macos"))]
                     let scale = 1.0;
@@ -6423,7 +6555,14 @@ async fn start_ipc(
         stream = Some(s);
     }
     if stream.is_none() {
-        let args = vec!["--cm"];
+        #[allow(unused_mut)]
+        #[allow(unused_assignments)]
+        let mut args = vec!["--cm"];
+        #[cfg(all(target_os = "macos", not(feature = "flutter")))]
+        {
+            // remotedisplay: no sciter UI, use the headless CM
+            args = vec!["--cm-no-ui"];
+        }
         let run_done;
         if crate::platform::is_root() {
             let mut res = Ok(None);
@@ -7100,8 +7239,12 @@ mod raii {
                 }
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 display_service::restore_resolutions();
+                // Windows (IDD): virtuals are destroyed when the last client leaves.
                 #[cfg(windows)]
                 let _ = virtual_display_manager::reset_all();
+                // remotedisplay/macOS: nothing to put back. Virtual displays are not this
+                // app's business on macOS (SimpleDisplay handles them); clients never change
+                // the Mac's displays.
                 #[cfg(target_os = "linux")]
                 if self.1 == AuthConnType::Remote || self.1 == AuthConnType::ViewCamera {
                     wayland::try_close_portal_session();

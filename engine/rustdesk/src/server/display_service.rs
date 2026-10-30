@@ -9,6 +9,8 @@ use hbb_common::get_version_number;
 use hbb_common::protobuf::MessageField;
 use scrap::Display;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "macos")]
+use std::sync::atomic::AtomicU64;
 
 // https://github.com/rustdesk/rustdesk/discussions/6042, avoiding dbus call
 
@@ -496,6 +498,27 @@ fn refresh_wayland_uinput_rect_if_changed() {
 
 // https://github.com/rustdesk/rustdesk/pull/8537
 static TEMP_IGNORE_DISPLAYS_CHANGED: AtomicBool = AtomicBool::new(false);
+// remotedisplay (macOS): last display-topology hash we acted on, to ignore the spurious
+// reconfiguration notifications a hardware mirror emits ~1/s (see check_update_displays).
+#[cfg(target_os = "macos")]
+static LAST_TOPOLOGY_HASH: AtomicU64 = AtomicU64::new(0);
+
+// remotedisplay (macOS): virtual/physical per display id, answered from IOKit; cached until
+// the display topology changes (check_update_displays clears it).
+#[cfg(target_os = "macos")]
+lazy_static::lazy_static! {
+    static ref VIRTUAL_DISPLAY_CACHE: Mutex<HashMap<String, bool>> = Default::default();
+}
+
+#[cfg(target_os = "macos")]
+fn is_virtual_display_cached(name: &str) -> bool {
+    if let Some(v) = VIRTUAL_DISPLAY_CACHE.lock().unwrap().get(name) {
+        return *v;
+    }
+    let v = crate::platform::display_is_virtual(name);
+    VIRTUAL_DISPLAY_CACHE.lock().unwrap().insert(name.to_owned(), v);
+    v
+}
 
 #[derive(Default)]
 struct SyncDisplaysInfo {
@@ -686,6 +709,7 @@ fn check_get_displays_changed_msg() -> Option<Message> {
     get_displays_msg()
 }
 
+
 pub fn check_displays_changed() -> ResultType<()> {
     #[cfg(target_os = "linux")]
     {
@@ -741,7 +765,12 @@ pub(super) fn get_original_resolution(
     #[cfg(windows)]
     let is_rustdesk_virtual_display =
         crate::virtual_display_manager::rustdesk_idd::is_virtual_display(&display_name);
-    #[cfg(not(windows))]
+    // remotedisplay/macOS: a virtual display (SimpleDisplay or any other app's) reports
+    // a "virtual" resolution (original 0x0) so the client's Fit may resize it; physical
+    // panels keep their real size and are never resized.
+    #[cfg(target_os = "macos")]
+    let is_rustdesk_virtual_display = is_virtual_display_cached(&display_name);
+    #[cfg(not(any(windows, target_os = "macos")))]
     let is_rustdesk_virtual_display = false;
     Some(if is_rustdesk_virtual_display {
         Resolution {
@@ -815,6 +844,32 @@ pub fn has_non_drm_backed_display() -> bool {
 // Display to DisplayInfo
 // The DisplayInfo is be sent to the peer.
 pub(super) fn check_update_displays(all: &Vec<Display>) {
+    // remotedisplay (macOS): with a hardware mirror active, macOS keeps firing display
+    // reconfiguration callbacks about once a second even when nothing changed, and the raw
+    // display list jitters (online flag, scale, ordering). That flips is_synced, which
+    // broadcasts "Displays changed" to the client, which replies with PeerInfo, which makes
+    // the server refresh the video service (OPTION_REFRESH -> SWITCH) — an endless
+    // restart-per-second storm that freezes the session. Gate on the topology hash
+    // (id/active/main/mirror/bounds/mode): if it did not change, the difference is spurious,
+    // so leave is_synced alone. Any real change (resolution, mirror on/off, plug/unplug,
+    // virtual create/destroy) flips the hash and is processed as before. Explicit resyncs
+    // (new subscriber, temp_ignore cleanup) set is_synced directly and are unaffected.
+    //
+    // The Retina capture flag is part of the key: RustDesk turns it off while two video
+    // services run (two clients on different displays, "all displays"), which changes
+    // every reported size (2x -> 1x pixels) without changing the topology. Gating on the
+    // topology alone left the list stale and the capturer/list mismatch restarted the
+    // video every second until the service was restarted.
+    #[cfg(target_os = "macos")]
+    {
+        let retina = *scrap::quartz::ENABLE_RETINA.lock().unwrap() as u64;
+        let h = crate::platform::display_topology_hash().wrapping_add(retina);
+        let prev = LAST_TOPOLOGY_HASH.swap(h, Ordering::Relaxed);
+        if prev == h && prev != 0 {
+            return;
+        }
+        VIRTUAL_DISPLAY_CACHE.lock().unwrap().clear();
+    }
     let _ = update_sync_displays(all);
 }
 

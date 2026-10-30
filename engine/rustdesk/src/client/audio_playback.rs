@@ -78,6 +78,10 @@ pub(super) struct AudioPlaybackWriter {
     recovery: AudioPlaybackRecovery,
     pub(super) status: std::sync::Arc<AudioPlaybackStatus>,
     buffer_failed: bool,
+    // remotedisplay: samples to wait for after running dry; 0 plays whatever is there
+    // (decision 0029).
+    refill: usize,
+    refilling: bool,
 }
 
 impl AudioPlaybackWriter {
@@ -97,7 +101,16 @@ impl AudioPlaybackWriter {
             recovery,
             status: Default::default(),
             buffer_failed: false,
+            refill: 0,
+            refilling: false,
         })
+    }
+
+    /// remotedisplay: from now on, wait until `samples` are buffered, at the start and
+    /// after running dry (decision 0029).
+    pub(super) fn refill_after_running_dry(&mut self, samples: usize) {
+        self.refill = samples.min(self.buffered_input.len());
+        self.refilling = true;
     }
 
     fn read_buffer(&mut self, requested_samples: usize) -> usize {
@@ -118,11 +131,19 @@ impl AudioPlaybackWriter {
                 return 0;
             }
         };
+        // remotedisplay: the generation stays for the read that plays (decision 0029).
+        if self.refilling && buffer.occupied_len() < self.refill {
+            return 0;
+        }
+        self.refilling = false;
         let generation = self.discontinuity_generation.load(Ordering::Relaxed);
         let channels = self.recovery.channels;
         let samples = buffer.occupied_len().min(requested_samples) / channels * channels;
         buffer.pop_slice(&mut self.buffered_input[..samples]);
         drop(buffer);
+        if self.refill > 0 && samples < requested_samples {
+            self.refilling = true;
+        }
         if generation != self.observed_discontinuity_generation {
             self.recovery.begin_discontinuity();
             self.observed_discontinuity_generation = generation;

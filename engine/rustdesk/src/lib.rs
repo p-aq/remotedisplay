@@ -74,6 +74,7 @@ pub mod clipboard_file;
 
 pub mod privacy_mode;
 
+#[cfg(any(windows, target_os = "macos"))]
 #[cfg(windows)]
 pub mod virtual_display_manager;
 

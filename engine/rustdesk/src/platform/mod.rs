@@ -14,6 +14,22 @@ pub mod win_device;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
+// remotedisplay: the controller's camera for camera forwarding.
+#[cfg(target_os = "macos")]
+pub mod macos_camera_capture;
+
+// remotedisplay: the controller's microphone access for microphone forwarding.
+#[cfg(target_os = "macos")]
+pub mod macos_mic_capture;
+
+// remotedisplay: the host's camera sink for camera forwarding.
+#[cfg(target_os = "macos")]
+pub mod macos_camera_sink;
+
+// remotedisplay: the host's virtual mic for microphone forwarding.
+#[cfg(target_os = "macos")]
+pub mod macos_mic_sink;
+
 #[cfg(target_os = "macos")]
 pub mod delegate;
 

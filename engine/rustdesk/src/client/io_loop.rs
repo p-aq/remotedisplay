@@ -104,6 +104,8 @@ pub struct Remote<T: InvokeUiSession> {
     sent_close_reason: bool,
     cursor_dedupe: CursorDedupe,
     trusted_device: crate::trusted_devices::client::Session,
+    // remotedisplay: camera and microphone forwarding (src/client/device_forward.rs).
+    device_forward: super::device_forward::DeviceForward,
 }
 
 #[derive(Default)]
@@ -129,6 +131,8 @@ impl<T: InvokeUiSession> Remote<T> {
         receiver: mpsc::UnboundedReceiver<Data>,
         sender: mpsc::UnboundedSender<Data>,
     ) -> Self {
+        // remotedisplay: the forwarder tells the Devices menu about each change.
+        let device_forward = super::device_forward::DeviceForward::new(handler.clone());
         Self {
             handler,
             audio_sender: crate::client::start_audio_thread(),
@@ -158,6 +162,7 @@ impl<T: InvokeUiSession> Remote<T> {
             sent_close_reason: false,
             cursor_dedupe: Default::default(),
             trusted_device: Default::default(),
+            device_forward,
         }
     }
 
@@ -422,6 +427,23 @@ impl<T: InvokeUiSession> Remote<T> {
                                 codec_format,
                                 ..Default::default()
                             });
+                        }
+                        // remotedisplay: forwarded camera frames, sent after any input
+                        // already queued (decision 0006).
+                        event = self.device_forward.next() => {
+                            let mut open = true;
+                            while let Ok(d) = self.receiver.try_recv() {
+                                open = self.handle_msg_from_ui(d, &mut peer).await;
+                                if !open {
+                                    break;
+                                }
+                            }
+                            if !open {
+                                break;
+                            }
+                            if let Some(msg) = self.device_forward.on_event(event) {
+                                allow_err!(peer.send(&msg).await);
+                            }
                         }
                     }
                 }
@@ -1359,6 +1381,12 @@ impl<T: InvokeUiSession> Remote<T> {
                     .on_voice_call_closed("Closed manually by the peer");
                 allow_err!(peer.send(&msg).await);
             }
+            // remotedisplay: the Devices menu (src/client/device_forward.rs).
+            Data::DeviceForward(switch) => {
+                if let Some(msg) = self.device_forward.switch(switch) {
+                    allow_err!(peer.send(&msg).await);
+                }
+            }
             Data::ResetDecoder(display) => match display {
                 Some(display) => {
                     if let Some(v) = self.video_threads.get_mut(&display) {
@@ -1722,7 +1750,20 @@ impl<T: InvokeUiSession> Remote<T> {
                         let video_queue = thread.video_queue.read().unwrap();
                         if video_queue.force_push(vf).is_some() {
                             drop(video_queue);
-                            self.handler.refresh_video(display as _);
+                            // remotedisplay: a stalled decoder fills the queue and every
+                            // later frame would ask the server for a new stream (seen at
+                            // 10 a second for half an hour); once a second is enough.
+                            let due = thread
+                                .last_overflow_refresh
+                                .map(|t| t.elapsed() >= Duration::from_secs(1))
+                                .unwrap_or(true);
+                            if due {
+                                thread.last_overflow_refresh = Some(Instant::now());
+                                log::info!(
+                                    "video queue of display {display} full: asking for a refresh"
+                                );
+                                self.handler.refresh_video(display as _);
+                            }
                         } else {
                             thread.video_sender.send(MediaData::VideoQueue).ok();
                         }
@@ -2569,6 +2610,12 @@ impl<T: InvokeUiSession> Remote<T> {
                     self.handler.set_displays(&pi.displays);
                     self.handler.set_platform_additions(&pi.platform_additions);
                 }
+                // remotedisplay: the host's answers about forwarded devices.
+                Some(
+                    union @ (message::Union::DeviceForwardResponse(_)
+                    | message::Union::CameraControl(_)
+                    | message::Union::DeviceStatus(_)),
+                ) => self.device_forward.on_message(union),
                 Some(message::Union::ScreenshotResponse(response)) => {
                     crate::client::screenshot::set_screenshot(response.data);
                     self.handler
@@ -2899,6 +2946,7 @@ impl<T: InvokeUiSession> Remote<T> {
             frame_count: frame_count.clone(),
             fps_control: Default::default(),
             discard_queue: discard_queue.clone(),
+            last_overflow_refresh: None,
         };
         let handler = self.handler.ui_handler.clone();
         crate::client::start_video_thread(
@@ -3148,6 +3196,8 @@ struct VideoThread {
     decode_fps: Arc<RwLock<Option<usize>>>,
     frame_count: Arc<RwLock<usize>>,
     discard_queue: Arc<RwLock<bool>>,
+    // remotedisplay: last refresh asked because the queue overflowed.
+    last_overflow_refresh: Option<Instant>,
     fps_control: FpsControl,
 }
 

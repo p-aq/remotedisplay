@@ -60,3 +60,6 @@ flutter/web/
 /third_party/libdrmtap/
 # Local git worktrees
 .worktrees/
+# remotedisplay (deploy helpers)
+config.local.json
+*.log

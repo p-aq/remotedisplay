@@ -35,6 +35,8 @@ use video_service::VideoSource;
 use crate::ipc::Data;
 
 pub mod audio_service;
+// remotedisplay: camera and microphone forwarding on the host (device_forward.rs).
+pub mod device_forward;
 #[cfg(target_os = "windows")]
 pub mod terminal_helper;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -753,8 +755,19 @@ pub async fn start_server(is_server: bool, no_server: bool) {
                 crate::ipc::client_get_hwcodec_config_thread(0);
             }
             Err(err) => {
-                log::info!("server not started: {err:?}, no_server: {no_server}");
+                // remotedisplay: the client-only process (no_server) retries every second
+                // to sync config with a server that normally never appears; log it once.
+                static NO_SERVER_LOGGED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !no_server || !NO_SERVER_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed)
+                {
+                    log::info!("server not started: {err:?}, no_server: {no_server}");
+                }
                 if no_server {
+                    // remotedisplay: nobody else runs the hardware codec check for a
+                    // client-only process (once; the function is guarded).
+                    #[cfg(all(windows, feature = "hwcodec"))]
+                    scrap::hwcodec::start_check_process();
                     hbb_common::sleep(1.0).await;
                     std::thread::spawn(|| start_server(false, true));
                 } else {
@@ -841,6 +854,16 @@ async fn wait_initial_config_sync() {
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 async fn sync_and_watch_config_dir(sync_done_tx: Option<tokio::sync::oneshot::Sender<()>>) {
+    // remotedisplay: in serverless mode the engine only runs as a user LaunchAgent,
+    // without the root `--service` it would sync config with → 30 retries of
+    // "failed to connect to ipc_service" and 3s of waiting on startup, for nothing.
+    if hbb_common::config::Config::is_serverless_lan() {
+        if let Some(tx) = sync_done_tx {
+            let _ = tx.send(());
+        }
+        log::info!("serverless: config sync with ipc_service skipped");
+        return;
+    }
     let mut cfg0 = (Config::get(), Config2::get());
     let mut synced = false;
     let mut is_root_config_empty = false;

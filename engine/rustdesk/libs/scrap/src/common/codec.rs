@@ -270,7 +270,11 @@ impl Encoder {
 
         // auto: h265 > h264 > av1/vp9/vp8
         let av1_test = Config::get_option(base::config::keys::OPTION_AV1_TEST) != "N";
-        let mut auto_codec = if av1_useable && av1_test {
+        // remotedisplay: in serverless/LAN mode there's plenty of bandwidth and AV1 only
+        // costs CPU (its 1080p/4K decode hangs modest clients → endless "Connecting…"):
+        // with Auto preference use VP9; AV1 only if the client explicitly requests it.
+        let lan_mode = Config::is_serverless_lan();
+        let mut auto_codec = if av1_useable && av1_test && !lan_mode {
             CodecFormat::AV1
         } else {
             CodecFormat::VP9

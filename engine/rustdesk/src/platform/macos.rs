@@ -117,12 +117,44 @@ extern "C" {
     fn majorVersion() -> u32;
     fn MacGetMode(display: u32, width: *mut u32, height: *mut u32) -> BOOL;
     fn MacSetMode(display: u32, width: u32, height: u32, tryHiDPI: bool) -> BOOL;
+    fn MacDisplayTopologyHash() -> u64;
+    fn MacDisplayIsVirtual(display: u32) -> bool;
+    fn MacSetNearestMode(display: u32, want_w: u32, want_h: u32, chosen_w: *mut u32, chosen_h: *mut u32) -> bool;
     fn CGWarpMouseCursorPosition(newCursorPosition: CGPoint) -> CGError;
     fn CGAssociateMouseAndMouseCursorPosition(connected: BooleanT) -> CGError;
 }
 
 pub fn major_version() -> u32 {
     unsafe { majorVersion() }
+}
+
+// remotedisplay: fingerprint of the display topology (see MacDisplayTopologyHash in macos.mm).
+pub fn display_topology_hash() -> u64 {
+    unsafe { MacDisplayTopologyHash() }
+}
+
+/// remotedisplay: is this display (name = CGDirectDisplayID) a virtual one created by some
+/// app (SimpleDisplay, ...) rather than a physical panel? Only virtual displays may be
+/// resized from remote (see MacDisplayIsVirtual in macos.mm for the criterion).
+pub fn display_is_virtual(name: &str) -> bool {
+    name.parse::<u32>()
+        .map(|id| unsafe { MacDisplayIsVirtual(id) })
+        .unwrap_or(false)
+}
+
+/// remotedisplay: Fit for a virtual display. `width` x `height` are the client window's
+/// PIXELS; the mode whose pixel size best fills that window (aspect ratio first, then
+/// size) is chosen from what the display offers — an exact match when there is one. Returns
+/// the chosen pixel size.
+pub fn change_resolution_nearest(name: &str, width: usize, height: usize) -> ResultType<(u32, u32)> {
+    let display = name.parse::<u32>().map_err(|e| anyhow!(e))?;
+    let (mut w, mut h) = (0u32, 0u32);
+    let ok = unsafe { MacSetNearestMode(display, width as _, height as _, &mut w, &mut h) };
+    if !ok {
+        bail!("no usable mode on display {name} for {width}x{height}");
+    }
+    log::info!("fit on {name}: {width}x{height} px requested, {w}x{h} px chosen");
+    Ok((w, h))
 }
 
 pub fn is_process_trusted(prompt: bool) -> bool {
@@ -663,20 +695,47 @@ fn unsafe_get_cursor_data(hcursor: u64) -> ResultType<CursorData> {
         if nreps == 0 {
             bail!("Get empty [NSImage representations]");
         }
-        let rep: id = msg_send![reps, objectAtIndex: 0];
-        /*
-        let n: id = msg_send![class!(NSNumber), numberWithFloat:1.0];
-        let props: id = msg_send![class!(NSDictionary), dictionaryWithObject:n forKey:NSString::alloc(nil).init_str("NSImageCompressionFactor")];
-        let image_data: id = msg_send![rep, representationUsingType:2 properties:props];
-        let () = msg_send![image_data, writeToFile:NSString::alloc(nil).init_str("cursor.jpg") atomically:0];
-        */
+        // remotedisplay: pick the representation whose size in PIXELS matches
+        // the image's POINTS (the 1x variant). With a Retina/HiDPI display
+        // present (e.g. SimpleDisplay's virtual ultrawide), reps[0] can be
+        // the 2x variant: the loop below (which iterates in points) would only read the
+        // top-left quarter of the bitmap, and the cursor would reach the viewer
+        // distorted with its tip offset from the hotspot -> "miscalibrated
+        // clicks". If only scaled reps exist, sample using the factor.
+        let mut rep: id = msg_send![reps, objectAtIndex: 0];
+        for i in 0..nreps {
+            let r: id = msg_send![reps, objectAtIndex: i];
+            let pw: cocoa::foundation::NSInteger = msg_send![r, pixelsWide];
+            let ph: cocoa::foundation::NSInteger = msg_send![r, pixelsHigh];
+            if pw == size.width as cocoa::foundation::NSInteger
+                && ph == size.height as cocoa::foundation::NSInteger
+            {
+                rep = r;
+                break;
+            }
+        }
+        let rep_pw: cocoa::foundation::NSInteger = msg_send![rep, pixelsWide];
+        let rep_ph: cocoa::foundation::NSInteger = msg_send![rep, pixelsHigh];
+        let sx = if size.width > 0. {
+            rep_pw as f64 / size.width
+        } else {
+            1.
+        };
+        let sy = if size.height > 0. {
+            rep_ph as f64 / size.height
+        } else {
+            1.
+        };
         let mut colors: Vec<u8> = Vec::new();
         colors.reserve((size.height * size.width) as usize * 4);
         // TIFF is rgb colorspace, no need to convert
         // let cs: id = msg_send![class!(NSColorSpace), sRGBColorSpace];
-        for y in 0..(size.height as _) {
-            for x in 0..(size.width as _) {
-                let color: id = msg_send![rep, colorAtX:x as cocoa::foundation::NSInteger y:y as cocoa::foundation::NSInteger];
+        for y in 0..(size.height as i64) {
+            for x in 0..(size.width as i64) {
+                // center of the scaled texel (with a 1x rep, px == x, py == y)
+                let px = ((x as f64 + 0.5) * sx) as cocoa::foundation::NSInteger;
+                let py = ((y as f64 + 0.5) * sy) as cocoa::foundation::NSInteger;
+                let color: id = msg_send![rep, colorAtX:px y:py];
                 // let color: id = msg_send![color, colorUsingColorSpace: cs];
                 if color == nil {
                     continue;
@@ -2170,5 +2229,31 @@ mod update_tests {
         }
 
         std::fs::remove_dir_all(test_dir).unwrap();
+    }
+}
+
+// ── remotedisplay: the Mac's own name ────────────────────────────────────────
+#[link(name = "SystemConfiguration", kind = "framework")]
+extern "C" {
+    fn SCDynamicStoreCopyLocalHostName(store: *const std::ffi::c_void) -> CFStringRef;
+}
+
+/// The Mac's LocalHostName ("Samuels-Mac-Studio", the Bonjour name from Sharing
+/// settings): the one hostname that does not change with the network the Mac is on.
+/// `None` when the system has none configured.
+pub fn local_hostname() -> Option<String> {
+    use core_foundation::{base::TCFType, string::CFString};
+    unsafe {
+        let s = SCDynamicStoreCopyLocalHostName(std::ptr::null());
+        if s.is_null() {
+            return None;
+        }
+        let name = CFString::wrap_under_create_rule(s).to_string();
+        let name = name.trim();
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.to_owned())
+        }
     }
 }

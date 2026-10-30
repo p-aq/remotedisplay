@@ -1166,21 +1166,6 @@ Future<List<TToggleMenu>> toolbarDisplayToggle(
         child: Text(translate('Show displays as individual windows'))));
   }
 
-  final isMultiScreens = !isWeb && (await getScreenRectList()).length > 1;
-  if (pi.isSupportMultiDisplay && isMultiScreens) {
-    final value = bind.sessionGetUseAllMyDisplaysForTheRemoteSession(
-            sessionId: ffi.sessionId) ==
-        'Y';
-    v.add(TToggleMenu(
-        value: value,
-        onChanged: (value) {
-          if (value == null) return;
-          bind.sessionSetUseAllMyDisplaysForTheRemoteSession(
-              sessionId: sessionId, value: value ? 'Y' : 'N');
-        },
-        child: Text(translate('Use all my displays for the remote session'))));
-  }
-
   // 444
   final codec_format = ffi.qualityMonitorModel.data.codecFormat;
   if (versionCmp(pi.version, "1.2.4") >= 0 &&
@@ -1459,6 +1444,10 @@ void registerToolbarShortcuts(BuildContext context, String id, FFI ffi) {
 }
 
 bool showVirtualDisplayMenu(FFI ffi) {
+  // remotedisplay: macOS hosts with CGVirtualDisplay support
+  if (ffi.ffiModel.pi.platform == kPeerPlatformMacOS) {
+    return ffi.ffiModel.pi.isMacVirtualDisplaySupported;
+  }
   if (ffi.ffiModel.pi.platform != kPeerPlatformWindows) {
     return false;
   }
@@ -1478,6 +1467,85 @@ List<Widget> getVirtualDisplayMenuChildren(
   }
   final pi = ffi.ffiModel.pi;
   final privacyModeState = PrivacyModeState.find(id);
+  // remotedisplay: macOS hosts (CGVirtualDisplay)
+  if (pi.platform == kPeerPlatformMacOS) {
+    final virtualDisplays = pi.macVirtualDisplays;
+    // The dynamic main uses its own virtual: don't count it as "extra".
+    final extraCount =
+        pi.macDynamicMainActive && virtualDisplays.isNotEmpty
+            ? virtualDisplays.length - 1
+            : virtualDisplays.length;
+    return [
+      // Case 1: the main monitor becomes dynamic (mirrored onto a
+      // virtual display that can be resized on the fly).
+      Obx(() => CkbMenuButton(
+            value: pi.macDynamicMainActive,
+            onChanged: privacyModeState.isNotEmpty
+                ? null
+                : (bool? value) async {
+                    if (value != null) {
+                      bind.sessionToggleVirtualDisplay(
+                          sessionId: ffi.sessionId,
+                          index: kMacDynamicMainIndex,
+                          on: value);
+                      // dynamic main implies following the window: turn on
+                      // dynamic resolution and apply it once the display switch
+                      // settles on the host.
+                      ffi.ffiModel.dynamicResolution.value = value;
+                      if (value) {
+                        Future.delayed(const Duration(seconds: 2), () {
+                          ffi.ffiModel.applyDynamicResolution();
+                        });
+                      }
+                      clickCallBack?.call();
+                    }
+                  },
+            child: Text(translate('Dynamic main display')),
+            ffi: ffi,
+          )),
+      Divider(),
+      // Case 2: extra virtual displays that extend the desktop.
+      Obx(() => Row(
+            children: [
+              TextButton(
+                onPressed: privacyModeState.isNotEmpty || extraCount == 0
+                    ? null
+                    : () {
+                        bind.sessionToggleVirtualDisplay(
+                            sessionId: ffi.sessionId, index: 0, on: false);
+                        clickCallBack?.call();
+                      },
+                child: Icon(Icons.remove),
+              ),
+              Text(extraCount.toString()),
+              TextButton(
+                onPressed: privacyModeState.isNotEmpty
+                    ? null
+                    : () {
+                        bind.sessionToggleVirtualDisplay(
+                            sessionId: ffi.sessionId, index: 0, on: true);
+                        clickCallBack?.call();
+                      },
+                child: Icon(Icons.add),
+              ),
+            ],
+          )),
+      Divider(),
+      Obx(() => MenuButton(
+            onPressed: privacyModeState.isNotEmpty
+                ? null
+                : () {
+                    bind.sessionToggleVirtualDisplay(
+                        sessionId: ffi.sessionId,
+                        index: kAllVirtualDisplay,
+                        on: false);
+                    clickCallBack?.call();
+                  },
+            ffi: ffi,
+            child: Text(translate('Plug out all')),
+          )),
+    ];
+  }
   if (pi.isRustDeskIdd) {
     final virtualDisplays = ffi.ffiModel.pi.RustDeskVirtualDisplays;
     final children = <Widget>[];

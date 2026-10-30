@@ -136,6 +136,10 @@ class FfiModel with ChangeNotifier {
 
   Timer? timerScreenshot;
 
+  // remotedisplay: the camera and microphone forwards' state as the engine last sent
+  // it (JSON, "" before the first change), for the client's Devices menu (HOOKS.md #3).
+  final deviceForward = ''.obs;
+
   Rect? get rect => _rect;
   bool get isOriginalResolutionSet =>
       _pi.tryGetDisplayIfNotAllDisplay()?.isOriginalResolutionSet ?? false;
@@ -143,6 +147,74 @@ class FfiModel with ChangeNotifier {
       _pi.tryGetDisplayIfNotAllDisplay()?.isVirtualDisplayResolution ?? false;
   bool get isOriginalResolution =>
       _pi.tryGetDisplayIfNotAllDisplay()?.isOriginalResolution ?? false;
+
+  // remotedisplay: dynamic resolution — the remote display follows the size of the
+  // viewer window (Tart/Virtualization.framework style). Only applies to
+  // displays with a virtual resolution (CGVirtualDisplay on macOS, IDD on Windows).
+  final dynamicResolution = false.obs;
+  Timer? _dynamicResolutionTimer;
+
+  // Coalescing: during a burst of resizes (dragging the border) only the last one is applied.
+  void scheduleDynamicResolution() {
+    if (!dynamicResolution.value) return;
+    _dynamicResolutionTimer?.cancel();
+    _dynamicResolutionTimer = Timer(
+      const Duration(milliseconds: 300),
+      () => applyDynamicResolution(),
+    );
+  }
+
+  /// Current canvas size (visible area of the window), in remote px.
+  /// Used by the client to create a virtual display matching the window size.
+  Size? get viewportSize => parent.target?.canvasModel.getSize();
+
+  /// Applies a resolution to a specific display (by peer index).
+  Future<void> changeResolutionOfDisplay(int display, int w, int h) async {
+    if (w < 400 || h < 300) return;
+    await bind.sessionChangeResolution(
+      sessionId: sessionId,
+      display: display,
+      width: w,
+      height: h,
+    );
+  }
+
+  /// [scalePercent]: virtual display scale (100/125/150/200). The
+  /// framebuffer maps to the PHYSICAL pixels of the viewer window
+  /// (logical canvas x [devicePixelRatio]); the POINTS requested from the server are
+  /// pixels / scale (with scale > 100 the server uses HiDPI mode = 2x points).
+  Future<void> applyDynamicResolution(
+      {int scalePercent = 100, double devicePixelRatio = 1.0}) async {
+    // "All displays": nothing is resized — each monitor's size
+    // is kept as-is (there is no single display to fit against).
+    if (_pi.currentDisplay == kAllDisplayValue) return;
+    if (!isVirtualDisplayResolution) return;
+    final display = _pi.tryGetDisplayIfNotAllDisplay();
+    final canvasSize = parent.target?.canvasModel.getSize();
+    if (display == null || canvasSize == null) return;
+    final dpr = devicePixelRatio <= 0 ? 1.0 : devicePixelRatio;
+    final pxW = (canvasSize.width * dpr).round();
+    final pxH = (canvasSize.height * dpr).round();
+    // sane minimum sizes; ignores transient window states
+    if (pxW < 400 || pxH < 300) return;
+    final s = scalePercent <= 0 ? 100 : scalePercent;
+    // Even numbers: hardware encoders refuse odd frame sizes (the server rounds
+    // down as well).
+    final w = (pxW * 100 / s).round() & ~1;
+    final h = (pxH * 100 / s).round() & ~1;
+    // display.width/height arrive in pixels; scale = pixels/points
+    final sc = display.scale <= 0 ? 1.0 : display.scale;
+    if (((display.width / sc).round() - w).abs() <= 1 &&
+        ((display.height / sc).round() - h).abs() <= 1) {
+      return;
+    }
+    await bind.sessionChangeResolution(
+      sessionId: sessionId,
+      display: _pi.currentDisplay,
+      width: w,
+      height: h,
+    );
+  }
 
   Map<String, bool> get permissions => _permissions;
   setPermissions(Map<String, bool> permissions) {
@@ -475,6 +547,9 @@ class FfiModel with ChangeNotifier {
         if (action is String) {
           parent.target?.shortcutModel.onTriggered(action);
         }
+      } else if (name == 'rd_device_forward') {
+        // remotedisplay: the client's Devices menu (HOOKS.md #3).
+        deviceForward.value = evt['state'] ?? '';
       } else {
         debugPrint('Event is not handled in the fixed branch: $name');
       }
@@ -1338,7 +1413,13 @@ class FfiModel with ChangeNotifier {
   }
 
   /// Handle the peer info event based on [evt].
+  // remotedisplay: how many times a PeerInfo has arrived (initial connection and each
+  // reconnection). Display list changes do NOT go through here, so this
+  // is useful for detecting "(re)connected" without confusing it with create/delete.
+  int peerInfoEpoch = 0;
+
   handlePeerInfo(Map<String, dynamic> evt, String peerId, bool isCache) async {
+    peerInfoEpoch++;
     parent.target?.chatModel.voiceCallStatus.value = VoiceCallStatus.notStarted;
 
     _queryAuditGuid(peerId);
@@ -1731,6 +1812,8 @@ class FfiModel with ChangeNotifier {
     if (updateData.isEmpty) {
       _pi.platformAdditions.remove(kPlatformAdditionsRustDeskVirtualDisplays);
       _pi.platformAdditions.remove(kPlatformAdditionsAmyuniVirtualDisplays);
+      _pi.platformAdditions.remove(kPlatformAdditionsMacVirtualDisplays);
+      _pi.platformAdditions.remove(kPlatformAdditionsMacDynamicMain);
     } else {
       try {
         final updateJson = json.decode(updateData) as Map<String, dynamic>;
@@ -1744,6 +1827,18 @@ class FfiModel with ChangeNotifier {
         }
         if (!updateJson.containsKey(kPlatformAdditionsAmyuniVirtualDisplays)) {
           _pi.platformAdditions.remove(kPlatformAdditionsAmyuniVirtualDisplays);
+        }
+        if (!updateJson.containsKey(kPlatformAdditionsMacVirtualDisplays)) {
+          _pi.platformAdditions.remove(kPlatformAdditionsMacVirtualDisplays);
+        }
+        if (!updateJson.containsKey(kPlatformAdditionsMacDynamicMain)) {
+          _pi.platformAdditions.remove(kPlatformAdditionsMacDynamicMain);
+        }
+        if (!updateJson.containsKey(kPlatformAdditionsMacDisplayIds)) {
+          _pi.platformAdditions.remove(kPlatformAdditionsMacDisplayIds);
+        }
+        if (!updateJson.containsKey(kPlatformAdditionsMacPhysicalOff)) {
+          _pi.platformAdditions.remove(kPlatformAdditionsMacPhysicalOff);
         }
       } catch (e) {
         debugPrint('Failed to decode platformAdditions $e');
@@ -2325,15 +2420,22 @@ class CanvasModel with ChangeNotifier {
   double get scrollX => _scrollX;
   double get scrollY => _scrollY;
 
-  static double get leftToEdge =>
-      isDesktop ? windowBorderWidth + kDragToResizeAreaPadding.left : 0;
-  static double get rightToEdge =>
-      isDesktop ? windowBorderWidth + kDragToResizeAreaPadding.right : 0;
-  static double get topToEdge => isDesktop
+  // remotedisplay: with edgeToEdgeSessionView (its own session window, native
+  // frame with no tab bar) the view is edge-to-edge and these edges are 0; otherwise,
+  // subtract the tab bar/border/padding of the engine layout as usual.
+  static bool get _edgeToEdge => stateGlobal.edgeToEdgeSessionView;
+  static double get leftToEdge => (isDesktop && !_edgeToEdge)
+      ? windowBorderWidth + kDragToResizeAreaPadding.left
+      : 0;
+  static double get rightToEdge => (isDesktop && !_edgeToEdge)
+      ? windowBorderWidth + kDragToResizeAreaPadding.right
+      : 0;
+  static double get topToEdge => (isDesktop && !_edgeToEdge)
       ? tabBarHeight + windowBorderWidth + kDragToResizeAreaPadding.top
       : 0;
-  static double get bottomToEdge =>
-      isDesktop ? windowBorderWidth + kDragToResizeAreaPadding.bottom : 0;
+  static double get bottomToEdge => (isDesktop && !_edgeToEdge)
+      ? windowBorderWidth + kDragToResizeAreaPadding.bottom
+      : 0;
 
   Size getSize() {
     final mediaData = MediaQueryData.fromView(ui.window);
@@ -3236,6 +3338,115 @@ class CursorModel with ChangeNotifier {
 
   // remote physical display coordinate
   // For update pan (mobile), onOneFingerPanStart, onOneFingerPanUpdate, onHoldDragUpdate
+  // remotedisplay: rect (remote global coords) of the remote display shown on
+  // the iPad's external monitor. If set, the cursor can CROSS the
+  // edge of the current display into it (like a multi-monitor desktop) during
+  // pans in cursor and touch modes. null = original behavior.
+  Rect? extraCursorRect;
+
+  /// remotedisplay: tries to move the cursor to (tx,ty), allowing it to enter/be in
+  /// [extraCursorRect]. Returns true if the movement was consumed.
+  ///
+  /// Unlike macOS (which only crosses through the portion of the edge shared
+  /// by both screens in the arrangement), here it PROJECTS: if the
+  /// movement pushes toward the side where the other display is, it enters through
+  /// its nearest point even if the monitors are misaligned, have
+  /// different resolutions, or there is a gap between their rects.
+  bool _tryMoveIntoExtraRect(double tx, double ty, Rect curRect) {
+    final extra = extraCursorRect;
+    if (extra == null) return false;
+    final cur = Offset(_x, _y);
+    final curInExtra =
+        isPointInRect(cur, extra) && !isPointInRect(cur, curRect);
+    final from = curInExtra ? extra : curRect;
+    final to = curInExtra ? curRect : extra;
+    final target = Offset(tx, ty);
+
+    bool apply(double nx, double ny) {
+      _x = nx;
+      _y = ny;
+      parent.target?.inputModel.moveMouse(_x, _y);
+      notifyListeners();
+      return true;
+    }
+
+    // Falls within the destination rect as-is: cross directly.
+    if (isPointInRect(target, to)) return apply(tx, ty);
+
+    // Still within the origin rect: if we're in the external one, we move it
+    // ourselves (the original flow only knows about the current display); otherwise,
+    // let the original flow handle it (canvas/visible-rect clamps).
+    if (isPointInRect(target, from)) {
+      return curInExtra ? apply(tx, ty) : false;
+    }
+
+    // Outside both. Is the push heading toward the destination side? Project.
+    final side = _sideOfRect(from, to);
+    var toward = false;
+    switch (side) {
+      case 1: // destination on the right
+        toward = tx > from.right - 1;
+        break;
+      case -1: // on the left
+        toward = tx < from.left;
+        break;
+      case 2: // below
+        toward = ty > from.bottom - 1;
+        break;
+      case -2: // above
+        toward = ty < from.top;
+        break;
+    }
+    if (toward) {
+      return apply(
+          tx.clamp(to.left, to.right - 1), ty.clamp(to.top, to.bottom - 1));
+    }
+    if (curInExtra) {
+      // Pushed another edge of the external display: clamp within the external one (same
+      // treatment as the original clamp to the current display).
+      return apply(tx.clamp(extra.left, extra.right - 1),
+          ty.clamp(extra.top, extra.bottom - 1));
+    }
+    return false;
+  }
+
+  /// Side where [to] is relative to [from] (macOS free arrangement):
+  /// 1 right, -1 left, 2 below, -2 above (if overlapping, dominant axis).
+  int _sideOfRect(Rect from, Rect to) {
+    if (to.left >= from.right - 1) return 1;
+    if (to.right <= from.left + 1) return -1;
+    if (to.top >= from.bottom - 1) return 2;
+    if (to.bottom <= from.top + 1) return -2;
+    final dx = to.center.dx - from.center.dx;
+    final dy = to.center.dy - from.center.dy;
+    if (dx.abs() >= dy.abs()) return dx >= 0 ? 1 : -1;
+    return dy >= 0 ? 2 : -2;
+  }
+
+  /// remotedisplay: RELATIVE cursor movement (trackpad captured with
+  /// pointer lock on iPad) across the remote desktop: current display ∪
+  /// extraCursorRect, clamped to the rect the cursor is in. iPadOS's
+  /// absolute pointer gets pinned at the screen edges; GCMouse deltas
+  /// have no such limit.
+  moveRelativeAcrossDisplays(double dx, double dy) {
+    final curRect = parent.target?.ffiModel.rect;
+    if (curRect == null) return;
+    final tx = _x + dx;
+    final ty = _y + dy;
+    if (_tryMoveIntoExtraRect(tx, ty, curRect)) return;
+    var r = curRect;
+    final extra = extraCursorRect;
+    if (extra != null &&
+        isPointInRect(Offset(_x, _y), extra) &&
+        !isPointInRect(Offset(_x, _y), curRect)) {
+      r = extra;
+    }
+    _x = tx.clamp(r.left, r.right - 1);
+    _y = ty.clamp(r.top, r.bottom - 1);
+    parent.target?.inputModel.moveMouse(_x, _y);
+    notifyListeners();
+  }
+
   Rect getVisibleRect() {
     final size = parent.target?.canvasModel.getSize() ??
         MediaQueryData.fromView(ui.window).size;
@@ -3369,6 +3580,12 @@ class CursorModel with ChangeNotifier {
     final scale = parent.target?.canvasModel.scale ?? 1.0;
     dx /= scale;
     dy /= scale;
+    // remotedisplay: crossing into the display on the iPad's external monitor —
+    // before the clamps to the visible rect and the current display.
+    final curRect = parent.target?.ffiModel.rect;
+    if (curRect != null && _tryMoveIntoExtraRect(_x + dx, _y + dy, curRect)) {
+      return;
+    }
     final r = getVisibleRect();
     var cx = r.center.dx;
     var cy = r.center.dy;
@@ -3484,6 +3701,17 @@ class CursorModel with ChangeNotifier {
       if (rect == null) {
         // unreachable
         return;
+      }
+
+      // remotedisplay: in touch mode, panning can also cross into the display on the
+      // external monitor (movement only — tapping remains absolute on the
+      // iPad canvas; to click over there, use cursor mode).
+      {
+        final scale0 = parent.target?.canvasModel.scale ?? 1.0;
+        if (_tryMoveIntoExtraRect(
+            _x + delta.dx / scale0, _y + delta.dy / scale0, rect)) {
+          return;
+        }
       }
 
       Offset? movementInRect(double x, double y, Rect r) {
@@ -3812,16 +4040,27 @@ class CursorModel with ChangeNotifier {
 
   /// Update the cursor position.
   updateCursorPosition(Map<String, dynamic> evt, String id) async {
-    if (!isConnIn2Secs()) {
+    // remotedisplay: the host only excludes the peer that moved the mouse for 300ms
+    // (run_pos in input_service.rs); with lag, our own movement bounces back
+    // as CursorPosition and used to trigger "cursor moved on host" mode, which
+    // hides the local cursor, paints the remote one, and blocks input → duplicated
+    // cursor / intermittent flicker. If we sent mouse input <1s ago,
+    // treat it as an echo: just update the position.
+    final lastInput = parent.target?.inputModel.lastMouseInputTime;
+    final isEcho = lastInput != null &&
+        DateTime.now().difference(lastInput).inMilliseconds < 1000;
+    if (!isConnIn2Secs() && !isEcho) {
       gotMouseControl = false;
       _lastPeerMouse = DateTime.now();
     }
     _x = double.parse(evt['x']);
     _y = double.parse(evt['y']);
-    try {
-      RemoteCursorMovedState.find(id).value = true;
-    } catch (e) {
-      //
+    if (!isEcho) {
+      try {
+        RemoteCursorMovedState.find(id).value = true;
+      } catch (e) {
+        //
+      }
     }
     notifyListeners();
   }
@@ -4123,6 +4362,11 @@ class FFI {
     int? tabWindowId,
     int? display,
     List<int>? displays,
+    // remotedisplay: alternative fetch of the source session's cached data
+    // for an "existing session" WITHOUT desktop_multi_window (mobile: the iPad
+    // external monitor view runs in another Flutter engine of the same process
+    // and gets the CachedPeerData via a local option, not via the window channel).
+    Future<String?> Function()? getCachedSessionData,
   }) {
     closed = false;
     if (isMobile) mobileReset();
@@ -4244,9 +4488,16 @@ class FFI {
         // Session is read to be moved to a new window.
         // Get the cached data and handle the cached data.
         Future.delayed(Duration.zero, () async {
-          final args = jsonEncode({'id': id, 'close': display == null});
-          final cachedData = await DesktopMultiWindow.invokeMethod(
-              tabWindowId, kWindowEventGetCachedSessionData, args);
+          final dynamic cachedData;
+          if (getCachedSessionData != null) {
+            // remotedisplay: mobile — cached data via callback (local option),
+            // desktop_multi_window does not exist on iOS/Android.
+            cachedData = await getCachedSessionData();
+          } else {
+            final args = jsonEncode({'id': id, 'close': display == null});
+            cachedData = await DesktopMultiWindow.invokeMethod(
+                tabWindowId, kWindowEventGetCachedSessionData, args);
+          }
           if (cachedData == null) {
             // unreachable
             debugPrint('Unreachable, the cached data is empty.');
@@ -4534,6 +4785,27 @@ class PeerInfo with ChangeNotifier {
       platformAdditions[kPlatformAdditionsRustDeskVirtualDisplays] ?? []);
   int get amyuniVirtualDisplayCount =>
       platformAdditions[kPlatformAdditionsAmyuniVirtualDisplays] ?? 0;
+  // remotedisplay: virtual displays on macOS hosts (CGVirtualDisplay).
+  // Key present (even if empty) = the host supports the feature.
+  bool get isMacVirtualDisplaySupported =>
+      platformAdditions.containsKey(kPlatformAdditionsMacVirtualDisplays);
+  List<int> get macVirtualDisplays => List<int>.from(
+      platformAdditions[kPlatformAdditionsMacVirtualDisplays] ?? []);
+  bool get macDynamicMainActive =>
+      platformAdditions[kPlatformAdditionsMacDynamicMain] == true;
+  // CGDirectDisplayID of the dynamic main's virtual (0 if none exists).
+  int get macDynamicMainId =>
+      (platformAdditions[kPlatformAdditionsMacDynamicMainId] as num?)?.toInt() ?? 0;
+  // Virtuals in HiDPI mode (scale > 100%).
+  List<int> get macHiDPIDisplays => List<int>.from(
+      platformAdditions[kPlatformAdditionsMacHiDPIDisplays] ?? []);
+  // IDs (CGDirectDisplayID) aligned with `displays`; the client maps
+  // row <-> id for the per-monitor toggles.
+  List<int> get macDisplayIds =>
+      List<int>.from(platformAdditions[kPlatformAdditionsMacDisplayIds] ?? []);
+  // Physical displays turned off (mirrored), so they can be listed with the toggle off.
+  List<int> get macPhysicalOff =>
+      List<int>.from(platformAdditions[kPlatformAdditionsMacPhysicalOff] ?? []);
 
   bool get isSupportMultiDisplay =>
       (isDesktop || isWebDesktop) && isSupportMultiUiSession;

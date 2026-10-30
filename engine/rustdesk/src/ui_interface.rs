@@ -335,6 +335,20 @@ pub fn set_peer_flutter_option(id: String, name: String, value: String) {
 #[inline]
 pub fn set_peer_option(id: String, name: String, value: String) {
     let mut c = PeerConfig::load(&id);
+    // remotedisplay: virtual option. The client groups the addresses (LAN, Tailscale) of
+    // one machine; the saved password lives per address. `rd-copy-password-from = <other
+    // address>` copies it so the other route connects with one tap too (same machine, same
+    // salt, so the stored hash is valid for both). Nothing is stored under this name.
+    if name == "rd-copy-password-from" {
+        if !value.is_empty() && value != id {
+            let from = PeerConfig::load(&value);
+            if !from.password.is_empty() {
+                c.password = from.password;
+                c.store(&id);
+            }
+        }
+        return;
+    }
     if value.is_empty() {
         c.options.remove(&name);
     } else {
@@ -841,6 +855,7 @@ pub fn peer_to_map(id: String, p: PeerConfig) -> HashMap<&'static str, String> {
         ("username", p.info.username.clone()),
         ("hostname", p.info.hostname.clone()),
         ("platform", p.info.platform.clone()),
+        ("machine_id", p.info.machine_id.clone()),
         (
             "alias",
             p.options.get("alias").unwrap_or(&"".to_owned()).to_owned(),
@@ -868,6 +883,9 @@ pub fn get_lan_peers() -> Vec<HashMap<&'static str, String>> {
                 ("username", peer.username.clone()),
                 ("hostname", peer.hostname.clone()),
                 ("platform", peer.platform.clone()),
+                // remotedisplay: identity and whether this scan found the address
+                ("machine_id", peer.machine_id.clone()),
+                ("online", peer.online.to_string()),
             ])
         })
         .collect()

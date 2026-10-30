@@ -278,7 +278,11 @@ impl RendezvousMediator {
                 sleep(1.).await;
             }
         }
-        crate::hbbs_http::sync::start();
+        // Serverless/LAN-only: no external API server to sync with (would only
+        // heartbeat a closed 127.0.0.1 port, or fall back to admin.rustdesk.com).
+        if !is_serverless_lan() {
+            crate::hbbs_http::sync::start();
+        }
         #[cfg(target_os = "windows")]
         if crate::platform::is_installed() && crate::is_server() {
             crate::updater::start_auto_update();
@@ -294,8 +298,11 @@ impl RendezvousMediator {
         });
         #[cfg(target_os = "android")]
         let start_lan_listening = true;
+        // remotedisplay: in serverless mode, LAN discovery is the ONLY way
+        // to find the host, so always listen (the headless server
+        // bundled inside Remote Display Server.app doesn't count as "installed").
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        let start_lan_listening = crate::platform::is_installed();
+        let start_lan_listening = crate::platform::is_installed() || is_serverless_lan();
         if start_lan_listening {
             std::thread::spawn(move || {
                 allow_err!(super::lan::start_listening());
@@ -304,6 +311,14 @@ impl RendezvousMediator {
         scrap::codec::test_av1();
         *LAST_NOT_DEPLOYED_REGISTER.lock().await = None;
         loop {
+            // Serverless/LAN-only: the rendezvous server points at loopback, so the
+            // register/heartbeat loop would just retry forever (`register_pk ... key
+            // not confirmed`). The direct_server (spawned above) + LAN discovery
+            // handle everything, so idle this loop instead of spamming.
+            if is_serverless_lan() {
+                sleep(3.).await;
+                continue;
+            }
             let timeout = Arc::new(RwLock::new(CONNECT_TIMEOUT));
             let conn_start_time = Instant::now();
             *SOLVING_PK_MISMATCH.lock().await = "".to_owned();
@@ -1328,6 +1343,12 @@ impl RendezvousMediator {
         }
         relay_server
     }
+}
+
+// Serverless/LAN-only marker: this fork points the rendezvous server at loopback
+// instead of a real server. Detect that so we can skip all rendezvous traffic.
+pub fn is_serverless_lan() -> bool {
+    Config::is_serverless_lan()
 }
 
 fn get_direct_port() -> i32 {

@@ -47,6 +47,7 @@ class RemotePage extends StatefulWidget {
     this.switchUuid,
     this.forceRelay,
     this.isSharedPassword,
+    this.showToolbar = true,
   }) : super(key: key) {
     initSharedStates(id);
   }
@@ -61,6 +62,9 @@ class RemotePage extends StatefulWidget {
   final String? switchUuid;
   final bool? forceRelay;
   final bool? isSharedPassword;
+  // remotedisplay: lets an external frontend (client/) suppress the built-in
+  // RemoteToolbar and overlay its own. Default true = upstream behavior.
+  final bool showToolbar;
   final SimpleWrapper<State<RemotePage>?> _lastState = SimpleWrapper(null);
   final DesktopTabController? tabController;
 
@@ -585,6 +589,8 @@ class _RemotePageState extends State<RemotePage>
     super.onWindowResize();
     // Update pointer lock center when window is resized
     _updatePointerLockCenterIfNeeded();
+    // remotedisplay: dynamic resolution — the remote display follows the window
+    _ffi.ffiModel.scheduleDynamicResolution();
   }
 
   @override
@@ -782,13 +788,15 @@ class _RemotePageState extends State<RemotePage>
               // Use Overlay to enable rebuild every time on menu button click.
               // Hide toolbar when relative mouse mode is active to prevent
               // cursor from escaping to toolbar area.
-              Obx(() => _ffi.inputModel.relativeMouseMode.value
+              !widget.showToolbar
                   ? const Offstage()
-                  : _ffi.ffiModel.pi.isSet.isTrue
-                      ? Overlay(initialEntries: [
-                          OverlayEntry(builder: remoteToolbar)
-                        ])
-                      : remoteToolbar(context)),
+                  : Obx(() => _ffi.inputModel.relativeMouseMode.value
+                      ? const Offstage()
+                      : _ffi.ffiModel.pi.isSet.isTrue
+                          ? Overlay(initialEntries: [
+                              OverlayEntry(builder: remoteToolbar)
+                            ])
+                          : remoteToolbar(context)),
               _ffi.ffiModel.pi.isSet.isFalse ? emptyOverlay() : Offstage(),
             ],
           ),

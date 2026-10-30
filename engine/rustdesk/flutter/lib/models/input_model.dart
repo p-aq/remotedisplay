@@ -458,9 +458,20 @@ class InputModel {
 
   // mouse
   final isPhysicalMouse = false.obs;
+
+  // remotedisplay: with iPad trackpad capture active (pointer lock +
+  // GCMouse deltas over the native channel), iPadOS STILL delivers trackpad
+  // clicks as indirectPointer touches → they arrive here as kind==mouse and
+  // DUPLICATE the click that already came in through the channel (1 physical click
+  // = 2 for the host). With this flag, every physical mouse event and trackpad
+  // pan-zoom is ignored; FINGER touches keep working normally.
+  bool ignorePhysicalMouse = false;
   int _lastButtons = 0;
   int _pressedMouseButtons = 0;
   Offset lastMousePos = Offset.zero;
+  // remotedisplay: timestamp of the last mouse input sent to the host, so that
+  // CursorModel.updateCursorPosition can tell an echo apart from genuine movement.
+  DateTime lastMouseInputTime = DateTime.fromMillisecondsSinceEpoch(0);
   int _lastWheelTsUs = 0;
 
   // Wheel acceleration thresholds.
@@ -1487,6 +1498,7 @@ class InputModel {
     if (isViewCamera) return;
     var x2 = x.toInt();
     var y2 = y.toInt();
+    lastMouseInputTime = DateTime.now();
     await bind.sessionSendMouse(
         sessionId: sessionId,
         msg: json.encode(modify({'x': '$x2', 'y': '$y2'})));
@@ -1602,6 +1614,7 @@ class InputModel {
   }
 
   void onPointHoverImage(PointerHoverEvent e) {
+    if (ignorePhysicalMouse && e.kind == ui.PointerDeviceKind.mouse) return;
     _stopFling = true;
     if (isViewOnly && !showMyCursor) return;
     if (e.kind != ui.PointerDeviceKind.mouse) return;
@@ -1633,6 +1646,7 @@ class InputModel {
   }
 
   void onPointerPanZoomStart(PointerPanZoomStartEvent e) {
+    if (ignorePhysicalMouse) return;
     _lastScale = 1.0;
     _stopFling = true;
     if (isViewOnly) return;
@@ -1644,6 +1658,7 @@ class InputModel {
 
   // https://docs.flutter.dev/release/breaking-changes/trackpad-gestures
   void onPointerPanZoomUpdate(PointerPanZoomUpdateEvent e) {
+    if (ignorePhysicalMouse) return;
     if (isViewOnly) return;
     if (isViewCamera) return;
     if (peerPlatform != kPeerPlatformAndroid) {
@@ -1768,6 +1783,7 @@ class InputModel {
   }
 
   void onPointerPanZoomEnd(PointerPanZoomEndEvent e) {
+    if (ignorePhysicalMouse) return;
     if (isViewCamera) return;
     if (peerPlatform == kPeerPlatformAndroid) {
       handlePointerEvent('touch', kMouseEventTypePanEnd, e.position);
@@ -1829,6 +1845,7 @@ class InputModel {
   }
 
   void onPointDownImage(PointerDownEvent e) {
+    if (ignorePhysicalMouse && e.kind == ui.PointerDeviceKind.mouse) return;
     debugPrint("onPointDownImage ${e.kind}");
     _stopFling = true;
     if (isDesktop) _queryOtherWindowCoords = true;
@@ -1874,6 +1891,7 @@ class InputModel {
   }
 
   void onPointUpImage(PointerUpEvent e) {
+    if (ignorePhysicalMouse && e.kind == ui.PointerDeviceKind.mouse) return;
     if (isDesktop) _queryOtherWindowCoords = false;
     if (isViewOnly && !showMyCursor) return;
     if (isViewCamera) return;
@@ -1897,6 +1915,7 @@ class InputModel {
   }
 
   void onPointMoveImage(PointerMoveEvent e) {
+    if (ignorePhysicalMouse && e.kind == ui.PointerDeviceKind.mouse) return;
     if (isViewOnly && !showMyCursor) return;
     if (isViewCamera) return;
     if (e.kind != ui.PointerDeviceKind.mouse) return;
@@ -2100,6 +2119,7 @@ class InputModel {
 
     final evt = PointerEventToRust(kind, type, evtValue).toJson();
     if (isViewCamera) return;
+    lastMouseInputTime = DateTime.now();
     bind.sessionSendPointer(
         sessionId: sessionId, msg: json.encode(modify(evt)));
   }
@@ -2230,6 +2250,7 @@ class InputModel {
     final evtToPeer = processEventToPeer(evt, offset,
         onExit: onExit, moveCanvas: moveCanvas, edgeScroll: edgeScroll);
     if (evtToPeer != null) {
+      lastMouseInputTime = DateTime.now();
       bind.sessionSendMouse(
           sessionId: sessionId, msg: json.encode(modify(evtToPeer)));
     }

@@ -66,6 +66,34 @@ class RustDeskMultiWindowManager {
   final List<int> _portForwardWindows = List.empty(growable: true);
   final List<int> _terminalWindows = List.empty(growable: true);
 
+  /// remotedisplay: invokeMethod tolerant of dead windows. Our own client's
+  /// session windows are ACTUALLY CLOSED (not hidden like RustDesk's tab
+  /// page windows), so the lists can accumulate IDs of windows that no
+  /// longer exist; invoking them throws PlatformException and used to break
+  /// the whole flow (symptom: "Connect" did nothing after closing a
+  /// session). If the call fails, the ID is pruned and null is returned.
+  Future<dynamic> _invokeOrPrune(
+      int windowId, String methodName, dynamic args) async {
+    try {
+      return await DesktopMultiWindow.invokeMethod(windowId, methodName, args);
+    } catch (e) {
+      debugPrint('Window $windowId unreachable on "$methodName", pruning: $e');
+      forgetWindow(windowId);
+      return null;
+    }
+  }
+
+  /// remotedisplay: forgets a dead window from all lists/sets.
+  void forgetWindow(int windowId) {
+    _remoteDesktopWindows.remove(windowId);
+    _fileTransferWindows.remove(windowId);
+    _viewCameraWindows.remove(windowId);
+    _portForwardWindows.remove(windowId);
+    _terminalWindows.remove(windowId);
+    _activeWindows.remove(windowId);
+    _inactiveWindows.remove(windowId);
+  }
+
   moveTabToNewWindow(int windowId, String peerId, String sessionId,
       WindowType windowType) async {
     var params = {
@@ -102,14 +130,15 @@ class RustDeskMultiWindowManager {
     final isCamera = windowType == WindowType.ViewCamera.index;
     final windowIDs = isCamera ? _viewCameraWindows : _remoteDesktopWindows;
     if (windowIDs.length > 1) {
-      for (final windowId in windowIDs) {
-        if (await DesktopMultiWindow.invokeMethod(
-            windowId,
-            kWindowEventActiveDisplaySession,
-            jsonEncode({
-              'id': peerId,
-              'display': display,
-            }))) {
+      for (final windowId in windowIDs.toList()) {
+        if (await _invokeOrPrune(
+                windowId,
+                kWindowEventActiveDisplaySession,
+                jsonEncode({
+                  'id': peerId,
+                  'display': display,
+                })) ==
+            true) {
           return;
         }
       }
@@ -198,13 +227,16 @@ class RustDeskMultiWindowManager {
       }
     } else {
       if (_inactiveWindows.isNotEmpty) {
-        for (final windowId in windows) {
+        for (final windowId in windows.toList()) {
           if (_inactiveWindows.contains(windowId)) {
             if (screenRect == null) {
               await restoreWindowPosition(type,
                   windowId: windowId, peerId: remoteId);
             }
-            await DesktopMultiWindow.invokeMethod(windowId, methodName, msg);
+            await _invokeOrPrune(windowId, methodName, msg);
+            if (!windows.contains(windowId)) {
+              continue; // dead window pruned — try the next one
+            }
             if (methodName != kWindowEventNewRemoteDesktop) {
               WindowController.fromWindowId(windowId).show();
             }
@@ -256,9 +288,10 @@ class RustDeskMultiWindowManager {
         mainGetLocalBoolOptionSync(kOptionOpenNewConnInTabs);
 
     if (windows.length > 1 || !openInTabs) {
-      for (final windowId in windows) {
-        if (await DesktopMultiWindow.invokeMethod(
-            windowId, kWindowEventActiveSession, remoteId)) {
+      for (final windowId in windows.toList()) {
+        if (await _invokeOrPrune(
+                windowId, kWindowEventActiveSession, remoteId) ==
+            true) {
           return MultiWindowCallResult(windowId, null);
         }
       }
@@ -389,16 +422,31 @@ class RustDeskMultiWindowManager {
     if (wnds.isEmpty) {
       return MultiWindowCallResult(kInvalidWindowId, null);
     }
-    for (final windowId in wnds) {
+    for (final windowId in wnds.toList()) {
       if (_activeWindows.contains(windowId)) {
+        try {
+          final res =
+              await DesktopMultiWindow.invokeMethod(windowId, methodName, args);
+          return MultiWindowCallResult(windowId, res);
+        } catch (e) {
+          debugPrint(
+              'Window $windowId unreachable on "$methodName", pruning: $e');
+          forgetWindow(windowId);
+        }
+      }
+    }
+    for (final windowId in wnds.toList()) {
+      try {
         final res =
             await DesktopMultiWindow.invokeMethod(windowId, methodName, args);
         return MultiWindowCallResult(windowId, res);
+      } catch (e) {
+        debugPrint(
+            'Window $windowId unreachable on "$methodName", pruning: $e');
+        forgetWindow(windowId);
       }
     }
-    final res =
-        await DesktopMultiWindow.invokeMethod(wnds[0], methodName, args);
-    return MultiWindowCallResult(wnds[0], res);
+    return MultiWindowCallResult(kInvalidWindowId, null);
   }
 
   List<int> _findWindowsByType(WindowType type) {
@@ -548,10 +596,10 @@ class RustDeskMultiWindowManager {
   // It will query the active remote windows to get their coords.
   Future<List<String>> getOtherRemoteWindowCoords(int wId) async {
     List<String> coords = [];
-    for (final windowId in _remoteDesktopWindows) {
+    for (final windowId in _remoteDesktopWindows.toList()) {
       if (windowId != wId) {
         if (_activeWindows.contains(windowId)) {
-          final res = await DesktopMultiWindow.invokeMethod(
+          final res = await _invokeOrPrune(
               windowId, kWindowEventRemoteWindowCoords, '');
           if (res != null) {
             coords.add(res);

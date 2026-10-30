@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/widgets/audio_input.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/common/widgets/keyboard_shortcuts/display.dart';
+import 'package:flutter_hbb/common/widgets/simple_display.dart';
 import 'package:flutter_hbb/common/widgets/toolbar.dart';
 import 'package:flutter_hbb/models/chat_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
@@ -834,6 +835,13 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
       }
     }));
 
+    // remotedisplay: SimpleDisplay always accessible — the monitors menu only
+    // appears with >1 display, and without this button it would be impossible to
+    // create the second display (chicken and egg).
+    if (!isWeb && pi.platform == kPeerPlatformMacOS) {
+      toolbarItems.add(_SimpleDisplayMenu(id: widget.id, ffi: widget.ffi));
+    }
+
     toolbarItems
         .add(_ControlMenu(id: widget.id, ffi: widget.ffi, state: widget.state));
     toolbarItems.add(_DisplayMenu(
@@ -846,7 +854,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
     if (widget.ffi.connType == ConnType.defaultConn) {
       toolbarItems.add(_KeyboardMenu(id: widget.id, ffi: widget.ffi));
     }
-    toolbarItems.add(_ChatMenu(id: widget.id, ffi: widget.ffi));
+    // remotedisplay: chat disabled (voice call is kept)
     if (!isWeb) {
       toolbarItems.add(_VoiceCallMenu(id: widget.id, ffi: widget.ffi));
     }
@@ -949,6 +957,26 @@ class _PinMenu extends StatelessWidget {
             ? _ToolbarTheme.hoverBlueColor
             : _ToolbarTheme.hoverInactiveColor,
       ),
+    );
+  }
+}
+
+// remotedisplay: toolbar button for controlling SimpleDisplay on the Mac host.
+class _SimpleDisplayMenu extends StatelessWidget {
+  final String id;
+  final FFI ffi;
+  const _SimpleDisplayMenu({Key? key, required this.id, required this.ffi})
+      : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return _IconMenuButton(
+      icon: const Icon(Icons.add_to_queue_outlined,
+          color: Colors.white, size: 18),
+      tooltip: 'SimpleDisplay',
+      onPressed: () => showSimpleDisplayDialog(context, id),
+      color: _ToolbarTheme.blueColor,
+      hoverColor: _ToolbarTheme.hoverBlueColor,
     );
   }
 }
@@ -2286,6 +2314,7 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
     return _SubmenuButton(
       ffi: widget.ffi,
       menuChildren: <Widget>[
+            _dynamicResolutionMenuButton(context, isVirtualDisplay),
             _OriginalResolutionMenuButton(context, showOriginalBtn),
             _FitLocalResolutionMenuButton(context, showFitLocalBtn),
             _customResolutionMenuButton(context, isVirtualDisplay),
@@ -2293,6 +2322,29 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
           ] +
           _supportedResolutionMenuButtons(),
       child: Text(translate("Resolution")),
+    );
+  }
+
+  // remotedisplay: dynamic resolution — the remote display follows the size of the
+  // viewer window. Only for displays with a virtual resolution (arbitrary
+  // hot resize): CGVirtualDisplay on macOS, IDD on Windows.
+  Widget _dynamicResolutionMenuButton(
+      BuildContext context, bool isVirtualDisplay) {
+    return Offstage(
+      offstage: !isVirtualDisplay,
+      child: Obx(() => CkbMenuButton(
+            value: ffiModel.dynamicResolution.value,
+            onChanged: (bool? value) async {
+              if (value == null) return;
+              ffiModel.dynamicResolution.value = value;
+              if (value) {
+                // apply immediately with the window's current size
+                await ffiModel.applyDynamicResolution();
+              }
+            },
+            ffi: widget.ffi,
+            child: Text(translate('Dynamic resolution')),
+          )),
     );
   }
 

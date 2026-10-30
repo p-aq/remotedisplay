@@ -312,6 +312,9 @@ struct DisplaySessionInfo {
 struct VideoRenderer {
     is_support_multi_ui_session: bool,
     map_display_sessions: Arc<RwLock<HashMap<usize, DisplaySessionInfo>>>,
+    // remotedisplay: consecutive frames per display refused because their size did not
+    // match the announced display size (see on_rgba); cleared when a frame is drawn.
+    size_mismatches: Arc<RwLock<HashMap<usize, usize>>>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     on_rgba_func: Option<Symbol<'static, FlutterRgbaRendererPluginOnRgba>>,
     #[cfg(feature = "vram")]
@@ -363,6 +366,7 @@ impl Default for VideoRenderer {
 
         Self {
             map_display_sessions: Default::default(),
+            size_mismatches: Default::default(),
             is_support_multi_ui_session: false,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             on_rgba_func,
@@ -373,6 +377,16 @@ impl Default for VideoRenderer {
 }
 
 impl VideoRenderer {
+    // remotedisplay: see InvokeUiSession::rgba_size_mismatches.
+    fn size_mismatches(&self, display: usize) -> usize {
+        self.size_mismatches
+            .read()
+            .unwrap()
+            .get(&display)
+            .copied()
+            .unwrap_or(0)
+    }
+
     #[inline]
     fn set_size(&mut self, display: usize, width: usize, height: usize) {
         let mut sessions_lock = self.map_display_sessions.write().unwrap();
@@ -502,9 +516,18 @@ impl VideoRenderer {
             // Peer info's handling is async and may be late than video frame's handling
             // Allow peer info not set, but not allow wrong width/height for correct local cursor position
             if info.size != (0, 0) {
+                // remotedisplay: counted so the video thread can tell a decoder stuck
+                // on an old picture size from the transient case above.
+                *self
+                    .size_mismatches
+                    .write()
+                    .unwrap()
+                    .entry(display)
+                    .or_default() += 1;
                 return false;
             }
         }
+        self.size_mismatches.write().unwrap().remove(&display);
         if let Some(func) = &self.on_rgba_func {
             unsafe {
                 func(
@@ -866,6 +889,17 @@ impl InvokeUiSession for FlutterHandler {
     // unused in flutter
     fn adapt_size(&self) {}
 
+    // remotedisplay: see InvokeUiSession::rgba_size_mismatches.
+    fn rgba_size_mismatches(&self, display: usize) -> usize {
+        self.session_handlers
+            .read()
+            .unwrap()
+            .values()
+            .map(|s| s.renderer.size_mismatches(display))
+            .max()
+            .unwrap_or(0)
+    }
+
     #[inline]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn on_rgba(&self, display: usize, rgba: &mut scrap::ImageRgb) {
@@ -1098,6 +1132,11 @@ impl InvokeUiSession for FlutterHandler {
 
     fn on_voice_call_waiting(&self) {
         self.push_event::<&str>("on_voice_call_waiting", &[], &[]);
+    }
+
+    // remotedisplay: the Devices menu (decision 0018).
+    fn on_device_forward(&self, state: &str) {
+        self.push_event("rd_device_forward", &[("state", state)], &[]);
     }
 
     fn on_voice_call_incoming(&self) {
@@ -1353,6 +1392,7 @@ pub fn session_add(
         None
     };
 
+    let remember_preset = !preset_password.is_empty();
     let session: Session<FlutterHandler> = Session {
         password: preset_password,
         server_keyboard_enabled: Arc::new(RwLock::new(true)),
@@ -1377,6 +1417,22 @@ pub fn session_add(
         shared_password,
         conn_token,
     );
+
+    // remotedisplay: a password preset by the client's connect sheet is remembered, or not,
+    // as the per-peer option `rd-remember` says (the client sets Y/N right before connecting).
+    // Without it the default stays: remember only when one was already saved.
+    if remember_preset {
+        let flag = hbb_common::config::PeerConfig::load(&id)
+            .options
+            .get("rd-remember")
+            .cloned()
+            .unwrap_or_default();
+        match flag.as_str() {
+            "Y" => session.lc.write().unwrap().remember = true,
+            "N" => session.lc.write().unwrap().remember = false,
+            _ => {}
+        }
+    }
 
     let session = Arc::new(session.clone());
     sessions::insert_session(session_id.to_owned(), conn_type, session.clone());
@@ -2229,6 +2285,14 @@ pub mod sessions {
     pub fn session_switch_display(is_desktop: bool, session_id: SessionID, value: Vec<i32>) {
         for s in SESSIONS.read().unwrap().values() {
             let mut write_lock = s.ui_handler.session_handlers.write().unwrap();
+            // remotedisplay: displays that OTHER ui-sessions of this peer are still
+            // showing (mobile multi-session: iPad + external monitor). On mobile the
+            // exclusive set below would cut off their capture.
+            let other_displays: Vec<i32> = write_lock
+                .iter()
+                .filter(|(k, _)| **k != session_id)
+                .flat_map(|(_, h2)| h2.displays.iter().map(|d| *d as i32))
+                .collect();
             if let Some(h) = write_lock.get_mut(&session_id) {
                 h.displays = value.iter().map(|x| *x as usize).collect::<_>();
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2242,7 +2306,21 @@ pub mod sessions {
                     s.next_rgba(value[0] as usize);
 
                     if !is_desktop {
-                        s.capture_displays(vec![], vec![], value);
+                        if other_displays.is_empty() {
+                            s.capture_displays(vec![], vec![], value);
+                        } else {
+                            // remotedisplay: union with the other ui-sessions' displays
+                            // (same semantics as desktop's else branch, which
+                            // doesn't apply on mobile because it uses the texture
+                            // renderer's maps, empty under soft render).
+                            let mut caps = value.clone();
+                            for d in other_displays.iter() {
+                                if !caps.contains(d) {
+                                    caps.push(*d);
+                                }
+                            }
+                            s.capture_displays(vec![], vec![], caps);
+                        }
                     } else {
                         // Check if other displays are needed.
                         if value.len() == 1 {

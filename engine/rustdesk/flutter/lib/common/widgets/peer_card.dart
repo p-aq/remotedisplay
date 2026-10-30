@@ -3,6 +3,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
+import 'package:flutter_hbb/common/widgets/simple_display.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/peer_tab_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
@@ -662,6 +663,22 @@ abstract class BasePeerCard extends StatelessWidget {
     );
   }
 
+  // remotedisplay: control of virtual displays (SimpleDisplay) on the Mac via SSH
+  @protected
+  MenuEntryBase<String> _simpleDisplayAction(BuildContext context) {
+    return MenuEntryButton<String>(
+      childBuilder: (TextStyle? style) => Text(
+        'Displays (SimpleDisplay)',
+        style: style,
+      ),
+      proc: () {
+        showSimpleDisplayDialog(context, peer.id);
+      },
+      padding: menuPadding,
+      dismissOnClicked: true,
+    );
+  }
+
   @protected
   MenuEntryBase<String> _rdpAction(BuildContext context, String id) {
     return MenuEntryButton<String>(
@@ -1011,6 +1028,11 @@ class RecentPeerCard extends BasePeerCard {
       menuItems.add(_terminalRunAsAdminAction(context));
     }
 
+    // remotedisplay: control of virtual displays (SimpleDisplay) on the Mac via SSH
+    if (!isWeb) {
+      menuItems.add(_simpleDisplayAction(context));
+    }
+
     final List favs = (await bind.mainGetFav()).toList();
 
     if (isDesktop && peer.platform != kPeerPlatformAndroid) {
@@ -1134,6 +1156,11 @@ class DiscoveredPeerCard extends BasePeerCard {
 
     if (peer.platform == kPeerPlatformWindows) {
       menuItems.add(_terminalRunAsAdminAction(context));
+    }
+
+    // remotedisplay: control of virtual displays (SimpleDisplay) on the Mac via SSH
+    if (!isWeb) {
+      menuItems.add(_simpleDisplayAction(context));
     }
 
     final List favs = (await bind.mainGetFav()).toList();

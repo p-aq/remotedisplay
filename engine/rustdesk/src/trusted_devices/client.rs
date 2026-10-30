@@ -126,6 +126,7 @@ impl Session {
                     username: info.username.clone(),
                     hostname: info.hostname.clone(),
                     platform: info.platform.clone(),
+                    ..Default::default()
                 };
                 tokio::task::spawn_blocking(move || credentials.save(&token, info)).await??;
             }
