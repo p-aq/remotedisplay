@@ -63,8 +63,9 @@ pub(crate) fn start(_: Option<&str>, _: OnAudio, _: OnLost) -> ResultType<Captur
 const REMOTE_DISPLAY_MICROPHONE: &str = "Remote Display Microphone";
 
 /// The inputs a forward can capture, by name, without Remote Display Microphone. Needs no
-/// microphone access.
+/// microphone access. Only the Devices menu (`ui`) lists them.
 #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "ios")))]
+#[cfg(any(feature = "flutter", test))]
 pub(crate) fn list() -> Vec<String> {
     use cpal::traits::{DeviceTrait, HostTrait};
     let Ok(devices) = cpal::default_host().input_devices() else {
@@ -77,6 +78,7 @@ pub(crate) fn list() -> Vec<String> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
+#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter", test))]
 pub(crate) fn list() -> Vec<String> {
     Vec::new()
 }
