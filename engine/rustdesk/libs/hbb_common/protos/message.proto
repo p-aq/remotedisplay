@@ -964,7 +964,7 @@ message DeviceForwardRequest {          // controller -> host
 message DeviceForwardResponse {         // host -> controller
   DeviceForwardRequest.Kind kind = 1;
   bool accepted = 2;
-  string reason = 3;                    // "not-installed" | "not-approved" | "not-allowed" | "busy"
+  string reason = 3;                    // "not-installed" | "not-approved" | "not-allowed" | "busy" | "bad-format"
 }
 message DeviceStatus {                  // host -> controller, whenever it changes
   DeviceForwardRequest.Kind kind = 1;

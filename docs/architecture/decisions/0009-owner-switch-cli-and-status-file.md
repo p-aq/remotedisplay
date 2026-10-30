@@ -44,7 +44,9 @@ and editing the TOML doesn't reach a running engine.
   the CLI, shows the chosen value until the engine's file agrees (up to 10 s), and is
   disabled while the service is off, like the password.
 - "Stop every live forward and tell each controller `not-allowed`" waits for forwards to
-  exist (request handling, Phase 1).
+  exist (request handling, Phase 1). Done 2026-10-27: each connection checks the switch
+  once a second, ends its camera forward and sends `DeviceForwardResponse{accepted:
+  false, reason: "not-allowed"}` plus `DeviceStatus` (decision 0012, Host side).
 - Tested: the CLI against a scratch `HOME` with no server running (on stores the option,
   off removes it, anything else is refused and changes nothing); unit test for the
   argument; the engine and the app build. Not tested here: the switch against a live
