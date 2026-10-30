@@ -110,6 +110,8 @@ impl<T: InvokeUiSession> Remote<T> {
         receiver: mpsc::UnboundedReceiver<Data>,
         sender: mpsc::UnboundedSender<Data>,
     ) -> Self {
+        // remotedisplay: the forwarder tells the Devices menu about each change.
+        let device_forward = super::device_forward::DeviceForward::new(handler.clone());
         Self {
             handler,
             audio_sender: crate::client::start_audio_thread(),
@@ -134,7 +136,7 @@ impl<T: InvokeUiSession> Remote<T> {
             chroma: Default::default(),
             last_record_state: false,
             sent_close_reason: false,
-            device_forward: Default::default(),
+            device_forward,
         }
     }
 

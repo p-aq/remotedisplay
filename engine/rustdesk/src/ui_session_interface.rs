@@ -1749,6 +1749,9 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn is_multi_ui_session(&self) -> bool;
     fn update_record_status(&self, start: bool);
     fn update_empty_dirs(&self, _res: ReadEmptyDirsResponse) {}
+    // remotedisplay: the forwarders' state for the Devices menu, as JSON
+    // (src/client/device_forward.rs, decision 0018). Only the Flutter UI shows it.
+    fn on_device_forward(&self, _state: &str) {}
     fn printer_request(&self, id: i32, path: String);
     fn handle_screenshot_resp(&self, sid: String, msg: String);
     fn handle_terminal_response(&self, response: TerminalResponse);

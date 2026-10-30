@@ -32,3 +32,4 @@ architecture README's change log (and its departures table, if it departs).
 | [0015](0015-virtual-mic-harness.md) | Virtual-mic harness: BlackHole configured, not modified; one engine-side module for both options | Accepted (Phase 0) | Extends; departs from vendoring for Phase 0 |
 | [0016](0016-camera-encoder-and-decoder-contract.md) | Camera encoder settings (low-latency, hardware required) and decoder contract (limits, outcomes, sanitizer fuzz) | Accepted | Extends |
 | [0017](0017-reserved-message-range-200.md) | Reserve `Message.union` 200–219 for Remote Display | Accepted | Departs |
+| [0018](0018-devices-menu-state-and-ffi.md) | The Devices menu hears the forward's state as a session event | Accepted | Departs |

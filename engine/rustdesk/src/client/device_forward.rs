@@ -7,7 +7,12 @@
 //! their own, which the loop serves after any input it already has, so mouse and
 //! keyboard never wait behind video. The camera stops when the user switches it off,
 //! when the host refuses or stops it, and when the session ends.
+//!
+//! Every change of what the Devices menu shows is reported to the UI as JSON
+//! ([`DeviceForward::state`], decision 0018). The functions at the end back the menu's
+//! FFI calls in `flutter_ffi.rs`.
 
+use crate::ui_session_interface::{InvokeUiSession, Session};
 use hbb_common::{
     bytes::Bytes,
     log,
@@ -70,6 +75,25 @@ pub(crate) struct Format {
 pub(crate) type OnUnit = Box<dyn FnMut(&[u8], bool, i64) + Send>;
 type Start =
     Box<dyn Fn(Option<&str>, OnUnit) -> ResultType<(Box<dyn Source>, Format)> + Send + Sync>;
+/// Hands the UI the new [`DeviceForward::state`].
+type Notify = Box<dyn Fn(&str) + Send>;
+
+/// What the Devices menu shows for the camera (decision 0018).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+struct CameraState {
+    /// "off", "asking" (waiting for the host's answer) or "on".
+    forward: &'static str,
+    /// The camera being forwarded: its unique ID, "" for the default one or when off.
+    device: String,
+    /// Why the camera stopped without being switched off, "" otherwise: the host's
+    /// reason ("not-allowed", "not-installed", "not-approved", "busy", "bad-format", or
+    /// "refused" when it gave none), "no-answer", or "camera-failed" when the camera
+    /// didn't start.
+    reason: String,
+    /// The host's camera status from its latest `DeviceStatus`, "" before one arrives;
+    /// the menu then uses `rd_camera_sink` from the login response.
+    host: String,
+}
 
 #[cfg(target_os = "macos")]
 impl Source for crate::platform::macos_camera_capture::Capture {
@@ -159,6 +183,13 @@ enum Camera {
 
 pub struct DeviceForward {
     camera: Camera,
+    /// The camera asked for, "" for the default one.
+    device: String,
+    /// Why the last forward ended without being switched off ([`CameraState::reason`]).
+    reason: String,
+    notify: Notify,
+    /// The state the UI last heard.
+    reported: String,
     shared: Arc<Shared>,
     tx: mpsc::Sender<Unit>,
     rx: mpsc::Receiver<Unit>,
@@ -170,15 +201,14 @@ pub struct DeviceForward {
     host_status: HashMap<Kind, String>,
 }
 
-impl Default for DeviceForward {
-    fn default() -> Self {
-        Self::with(Box::new(start_camera), ANSWER_TIMEOUT)
-    }
-}
-
 impl Drop for DeviceForward {
     fn drop(&mut self) {
         self.stop_camera();
+        // The session's next connection starts afresh: off, and the host's status from
+        // its new login response.
+        self.reason.clear();
+        self.host_status.clear();
+        self.report();
     }
 }
 
@@ -250,10 +280,23 @@ fn unit_sink(shared: Arc<Shared>, tx: mpsc::Sender<Unit>) -> OnUnit {
 }
 
 impl DeviceForward {
-    fn with(start: Start, answer_timeout: Duration) -> Self {
+    /// The session's forwarder, telling `ui` about every change.
+    pub fn new<T: InvokeUiSession>(ui: Session<T>) -> Self {
+        Self::with(
+            Box::new(start_camera),
+            ANSWER_TIMEOUT,
+            Box::new(move |state| ui.on_device_forward(state)),
+        )
+    }
+
+    fn with(start: Start, answer_timeout: Duration, notify: Notify) -> Self {
         let (tx, rx) = mpsc::channel(QUEUE);
         Self {
             camera: Camera::Off,
+            device: String::new(),
+            reason: String::new(),
+            notify,
+            reported: String::new(),
             shared: Default::default(),
             tx,
             rx,
@@ -266,23 +309,57 @@ impl DeviceForward {
         }
     }
 
+    /// What the Devices menu shows, as JSON: `{"camera": {"forward", "device", "reason",
+    /// "host"}}` ([`CameraState`]).
+    pub fn state(&self) -> String {
+        let camera = CameraState {
+            forward: match self.camera {
+                Camera::Off => "off",
+                Camera::Asking { .. } => "asking",
+                Camera::Sending { .. } => "on",
+            },
+            device: self.device.clone(),
+            reason: self.reason.clone(),
+            host: self
+                .host_status
+                .get(&Kind::CAMERA)
+                .cloned()
+                .unwrap_or_default(),
+        };
+        serde_json::json!({ "camera": camera }).to_string()
+    }
+
+    /// Tells the UI if the state changed since it last heard.
+    fn report(&mut self) {
+        let state = self.state();
+        if state != self.reported {
+            (self.notify)(&state);
+            self.reported = state;
+        }
+    }
+
     /// Turns a device on or off; returns the request to send to the host.
     pub fn switch(&mut self, switch: Switch) -> Option<Message> {
-        match (switch.kind, switch.on) {
+        let msg = match (switch.kind, switch.on) {
             (Kind::CAMERA, true) => self.camera_on(switch.device.as_deref()),
-            (Kind::CAMERA, false) => self
-                .stop_camera()
-                .then(|| request(Kind::CAMERA, false, None)),
+            (Kind::CAMERA, false) => {
+                self.reason.clear();
+                self.stop_camera()
+                    .then(|| request(Kind::CAMERA, false, None))
+            }
             (kind, _) => {
                 log::warn!("Forwarding {:?} isn't supported yet", kind);
                 None
             }
-        }
+        };
+        self.report();
+        msg
     }
 
     fn camera_on(&mut self, device: Option<&str>) -> Option<Message> {
         // A different camera replaces the running one.
         self.stop_camera();
+        self.reason.clear();
         let shared = Arc::new(Shared::default());
         match (self.start)(device, unit_sink(shared.clone(), self.tx.clone())) {
             Ok((source, format)) => {
@@ -290,6 +367,7 @@ impl DeviceForward {
                 source.set_skipping(true);
                 self.skipping = true;
                 self.shared = shared;
+                self.device = device.unwrap_or_default().to_owned();
                 self.camera = Camera::Asking {
                     source,
                     until: Instant::now() + self.answer_timeout,
@@ -298,6 +376,7 @@ impl DeviceForward {
             }
             Err(err) => {
                 log::warn!("Camera not started: {}", err);
+                self.reason = "camera-failed".to_owned();
                 None
             }
         }
@@ -309,6 +388,7 @@ impl DeviceForward {
         self.shared.sending.store(false, Ordering::Release);
         let was_on = !matches!(self.camera, Camera::Off);
         self.camera = Camera::Off;
+        self.device.clear();
         while self.rx.try_recv().is_ok() {}
         if was_on {
             log::info!(
@@ -331,6 +411,7 @@ impl DeviceForward {
             message::Union::DeviceStatus(status) => self.on_status(status),
             _ => {}
         }
+        self.report();
     }
 
     fn on_response(&mut self, response: DeviceForwardResponse) {
@@ -353,6 +434,11 @@ impl DeviceForward {
                 log::info!("The host stopped the camera: {}", response.reason);
                 self.camera = camera;
                 self.stop_camera();
+                self.reason = if response.reason.is_empty() {
+                    "refused".to_owned()
+                } else {
+                    response.reason
+                };
             }
         }
     }
@@ -418,6 +504,8 @@ impl DeviceForward {
                 }
                 log::warn!("No answer from the host about the camera; stopping it");
                 self.stop_camera();
+                self.reason = "no-answer".to_owned();
+                self.report();
                 Some(request(Kind::CAMERA, false, None))
             }
             Event::Unit(unit) => {
@@ -448,6 +536,76 @@ impl DeviceForward {
     }
 }
 
+/// The Devices menu's FFI calls (`flutter_ffi.rs`, decision 0018).
+#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter", test))]
+pub mod ui {
+    use super::*;
+
+    fn kind(name: &str) -> Option<Kind> {
+        match name {
+            "camera" => Some(Kind::CAMERA),
+            "microphone" => Some(Kind::MICROPHONE),
+            _ => None,
+        }
+    }
+
+    /// The menu's switch: `kind` is "camera" or "microphone", `device` a unique ID or ""
+    /// for the default one.
+    pub fn switch(kind: &str, on: bool, device: &str) -> Option<Switch> {
+        Some(Switch {
+            kind: self::kind(kind)?,
+            on,
+            device: (!device.is_empty()).then(|| device.to_owned()),
+        })
+    }
+
+    /// The cameras the menu offers, as JSON `[{"id", "name"}]`: none but a Mac's.
+    pub fn cameras() -> String {
+        #[cfg(target_os = "macos")]
+        let cameras: Vec<_> = crate::platform::macos_camera_capture::list()
+            .into_iter()
+            .map(|c| serde_json::json!({ "id": c.id, "name": c.name }))
+            .collect();
+        #[cfg(not(target_os = "macos"))]
+        let cameras: Vec<serde_json::Value> = vec![];
+        serde_json::Value::from(cameras).to_string()
+    }
+
+    /// The controller's own access to `kind`: "allowed", "denied", "restricted",
+    /// "not-determined", or "unsupported" (the microphone until Phase 2, and the camera
+    /// anywhere but a Mac).
+    pub fn permission(kind: &str) -> String {
+        #[cfg(target_os = "macos")]
+        if self::kind(kind) == Some(Kind::CAMERA) {
+            use crate::platform::macos_camera_capture::{access, Access};
+            return match access() {
+                Access::Allowed => "allowed",
+                Access::Denied => "denied",
+                Access::Restricted => "restricted",
+                Access::NotDetermined => "not-determined",
+            }
+            .to_owned();
+        }
+        let _ = kind;
+        "unsupported".to_owned()
+    }
+
+    /// Shows macOS's prompt for `kind` if the user hasn't answered it yet, and waits for
+    /// the answer; true when access is allowed.
+    pub fn request_permission(kind: &str) -> bool {
+        #[cfg(target_os = "macos")]
+        if self::kind(kind) == Some(Kind::CAMERA) {
+            let (tx, rx) = std::sync::mpsc::channel();
+            crate::platform::macos_camera_capture::request_access(move |granted| {
+                tx.send(granted).ok();
+            });
+            return rx.recv().unwrap_or(false);
+        }
+        let _ = kind;
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -461,6 +619,8 @@ mod tests {
         skipping: AtomicBool,
         key_frames: AtomicUsize,
         bitrates: Mutex<Vec<i32>>,
+        /// What the UI heard.
+        states: Mutex<Vec<serde_json::Value>>,
     }
 
     struct FakeSource(Arc<Fake>);
@@ -499,6 +659,17 @@ mod tests {
         fn key_frames(&self) -> usize {
             self.key_frames.load(Ordering::SeqCst)
         }
+        /// The camera states the UI heard since the last call, as (forward, reason, host).
+        fn heard(&self) -> Vec<(String, String, String)> {
+            let field =
+                |v: &serde_json::Value, k: &str| v["camera"][k].as_str().unwrap().to_owned();
+            self.states
+                .lock()
+                .unwrap()
+                .drain(..)
+                .map(|v| (field(&v, "forward"), field(&v, "reason"), field(&v, "host")))
+                .collect()
+        }
     }
 
     fn forward(answer_timeout: Duration) -> (DeviceForward, Arc<Fake>) {
@@ -518,7 +689,14 @@ mod tests {
                 format,
             ))
         });
-        (DeviceForward::with(start, answer_timeout), fake)
+        let ui = fake.clone();
+        let notify: Notify = Box::new(move |state| {
+            ui.states
+                .lock()
+                .unwrap()
+                .push(serde_json::from_str(state).unwrap());
+        });
+        (DeviceForward::with(start, answer_timeout, notify), fake)
     }
 
     fn runtime() -> tokio::runtime::Runtime {
@@ -736,6 +914,103 @@ mod tests {
         drop(fwd);
         assert!(!fake.running());
     }
+
+    fn status(kind: Kind, status: &str) -> message::Union {
+        message::Union::DeviceStatus(DeviceStatus {
+            kind: kind.into(),
+            status: status.into(),
+            ..Default::default()
+        })
+    }
+
+    fn heard(forward: &str, reason: &str, host: &str) -> (String, String, String) {
+        (forward.into(), reason.into(), host.into())
+    }
+
+    #[test]
+    fn the_menu_hears_each_change_once() {
+        let (mut fwd, fake) = forward(ANSWER_TIMEOUT);
+        fwd.switch(camera(true)).unwrap();
+        fwd.on_message(response(Kind::CAMERA, true, ""));
+        // A repeated accept and the host's controls change nothing the menu shows.
+        fwd.on_message(response(Kind::CAMERA, true, ""));
+        fwd.on_message(control(true, 500));
+        fwd.on_message(status(Kind::CAMERA, "not-allowed"));
+        fwd.on_message(response(Kind::CAMERA, false, "not-allowed"));
+        // Switching off clears the reason.
+        fwd.switch(camera(false));
+        assert_eq!(
+            fake.heard(),
+            vec![
+                heard("asking", "", ""),
+                heard("on", "", ""),
+                heard("on", "", "not-allowed"),
+                heard("off", "not-allowed", "not-allowed"),
+                heard("off", "", "not-allowed"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_menu_hears_why_the_camera_stopped() {
+        let rt = runtime();
+        let (mut fwd, fake) = forward(Duration::from_millis(20));
+        fwd.switch(camera(true)).unwrap();
+        assert!(next(&rt, &mut fwd, 200).is_some());
+        assert_eq!(fake.heard().pop(), Some(heard("off", "no-answer", "")));
+        fwd.switch(camera(true)).unwrap();
+        fwd.on_message(response(Kind::CAMERA, false, ""));
+        assert_eq!(fake.heard().pop(), Some(heard("off", "refused", "")));
+
+        let states = Arc::new(Mutex::new(Vec::<String>::new()));
+        let ui = states.clone();
+        let start: Start = Box::new(|_, _| Err(hbb_common::anyhow::anyhow!("no camera")));
+        let mut fwd = DeviceForward::with(
+            start,
+            ANSWER_TIMEOUT,
+            Box::new(move |state| ui.lock().unwrap().push(state.to_owned())),
+        );
+        assert!(fwd.switch(camera(true)).is_none());
+        assert!(states.lock().unwrap()[0].contains(r#""reason":"camera-failed""#));
+    }
+
+    #[test]
+    fn the_menu_sees_which_camera_is_on() {
+        let (mut fwd, _fake) = forward(ANSWER_TIMEOUT);
+        fwd.switch(Switch {
+            device: Some("cam-1".into()),
+            ..camera(true)
+        })
+        .unwrap();
+        assert!(fwd.state().contains(r#""device":"cam-1""#));
+        fwd.switch(camera(false));
+        assert!(fwd.state().contains(r#""device":"""#));
+    }
+
+    #[test]
+    fn a_new_connection_starts_afresh() {
+        let (mut fwd, fake) = forward(ANSWER_TIMEOUT);
+        fwd.switch(camera(true)).unwrap();
+        fwd.on_message(response(Kind::CAMERA, true, ""));
+        fwd.on_message(status(Kind::CAMERA, "ready"));
+        fake.heard();
+        drop(fwd);
+        assert_eq!(fake.heard(), vec![heard("off", "", "")]);
+    }
+
+    #[test]
+    fn the_menus_names_for_devices() {
+        let on = ui::switch("camera", true, "").unwrap();
+        assert_eq!((on.kind, on.on, on.device), (Kind::CAMERA, true, None));
+        let mic = ui::switch("microphone", false, "mic-2").unwrap();
+        assert_eq!(
+            (mic.kind, mic.device.as_deref()),
+            (Kind::MICROPHONE, Some("mic-2"))
+        );
+        assert!(ui::switch("speaker", true, "").is_none());
+        assert_eq!(ui::permission("microphone"), "unsupported");
+        assert!(!ui::request_permission("microphone"));
+    }
 }
 
 /// The real camera through the forward. Needs a camera and macOS's camera prompt, so
@@ -743,6 +1018,17 @@ mod tests {
 #[cfg(all(test, target_os = "macos"))]
 mod capture {
     use super::*;
+
+    #[test]
+    #[ignore]
+    fn the_menu_lists_the_macs_cameras() {
+        let cameras: Vec<serde_json::Value> = serde_json::from_str(&ui::cameras()).unwrap();
+        assert!(!cameras.is_empty(), "no camera");
+        for camera in &cameras {
+            assert!(!camera["id"].as_str().unwrap().is_empty());
+            assert_ne!(camera["name"], "Remote Display Camera");
+        }
+    }
 
     fn next(
         rt: &tokio::runtime::Runtime,
@@ -785,7 +1071,7 @@ mod capture {
             .enable_time()
             .build()
             .unwrap();
-        let mut fwd = DeviceForward::default();
+        let mut fwd = DeviceForward::with(Box::new(start_camera), ANSWER_TIMEOUT, Box::new(|_| {}));
         let ask = fwd
             .switch(Switch {
                 kind: Kind::CAMERA,

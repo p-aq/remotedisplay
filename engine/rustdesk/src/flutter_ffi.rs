@@ -1725,6 +1725,29 @@ pub fn session_close_voice_call(session_id: SessionID) {
     }
 }
 
+// remotedisplay: the Devices menu's calls (src/client/device_forward.rs, decision 0018).
+// The forwarders' state reaches the menu as the `rd_device_forward` session event.
+pub fn session_set_device_forward(session_id: SessionID, kind: String, on: bool, device: String) {
+    let Some(switch) = crate::client::device_forward::ui::switch(&kind, on, &device) else {
+        return;
+    };
+    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        crate::client::Interface::send(&*session, crate::client::Data::DeviceForward(switch));
+    }
+}
+
+pub fn main_list_cameras() -> SyncReturn<String> {
+    SyncReturn(crate::client::device_forward::ui::cameras())
+}
+
+pub fn main_get_capture_permission(kind: String) -> SyncReturn<String> {
+    SyncReturn(crate::client::device_forward::ui::permission(&kind))
+}
+
+pub fn main_request_capture_permission(kind: String) -> bool {
+    crate::client::device_forward::ui::request_permission(&kind)
+}
+
 pub fn session_get_conn_token(session_id: SessionID) -> SyncReturn<Option<String>> {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         SyncReturn(session.get_conn_token())

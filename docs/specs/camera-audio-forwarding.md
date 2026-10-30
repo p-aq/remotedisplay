@@ -238,6 +238,8 @@ UI (new). client/lib/session/session_toolbar.dart gets the Devices menu, and dro
 
 Adding FFI calls means regenerating the flutter_rust_bridge bindings (the Dart side and client/macos/Runner/bridge_generated.h); the Phase 1 task list includes that step, and every engine touch goes in HOOKS.md and engine/SYNC.md.
 
+As built ([decision 0018](../architecture/decisions/0018-devices-menu-state-and-ffi.md)): the forward's state, including the host's latest status, reaches the menu as an rd_device_forward session event on every change, the way the voice call reports its state, so there is no getter. The calls are session_set_device_forward, main_list_cameras, main_get_capture_permission and main_request_capture_permission. The camera list is read each time the menu opens; the hot-plug event comes with the microphone list in Phase 2.
+
 Testing without a camera. A --camera-test-pattern option sends a moving test card with a running clock, so the VM test bench can run the whole path without hardware.
 
 ## Host side
