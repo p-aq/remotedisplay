@@ -15,15 +15,20 @@ chosen ([decision 0013](../../architecture/decisions/0013-virtual-mic-input-only
 Still to run: Zoom and Teams picking the device (tests 4 and 8), and the reboot and
 restart tests (5 and 10).
 
+**Phase 2 (2026-10-29):** the engine's own path plays into Option A
+([decision 0021](../../architecture/decisions/0021-microphone-forward-on-the-host.md)). A
+controller's Opus arrives in Remote Display Microphone 49–55 ms after it reaches the
+host, with no glitches ([results](#phase-2-the-engines-path)).
+
 ## What's here
 
 | Harness | What it is | Becomes in Phase 2 |
 |---|---|---|
-| `harness/mic_sink.mm`, `.h` | Opens either option and plays whatever a render callback supplies, once per I/O cycle. `extern "C"` `MacMicSink…` functions, `-std=c++17`, no ARC, like `src/platform/macos.mm`. | Engine code behind the host's mic routing; the callback reads the low-latency jitter buffer ([decision 0008](../../architecture/decisions/0008-mic-path.md)) |
+| `harness/mic_sink.mm`, `.h` | Opens either option and plays whatever a render callback supplies, once per I/O cycle. `extern "C"` `MacMicSink…` functions, `-std=c++17`, no ARC, like `src/platform/macos.mm`. | Option A is now `engine/rustdesk/src/platform/macos_mic_sink.mm`; its callback reads the jitter buffer ([decision 0021](../../architecture/decisions/0021-microphone-forward-on-the-host.md)) |
 | `harness/mic_feeder.mm` | `rd-mic-feeder --option a\|b`: a 50 ms, 1 kHz burst at every whole second of host time. Option B takes `--mute muted\|when-tapped\|unmuted` and `--with-output-subdevice`. | Replaced by decoded controller audio |
 | `harness/mic_probe.mm` | `rd-mic-probe`: records from an input device like Zoom would, counts bursts and measures latency. Since bursts start on whole host seconds, each onset's time modulo one second is the latency, with no link between the two processes. Exits 0 on PASS. | A Phase 2 test |
 | `harness/driver/Info.plist` + Makefile `driver` | Option A: BlackHole v0.7.2 (commit `561d934`) fetched at build time and configured, not modified, with its own build constants ([decision 0015](../../architecture/decisions/0015-virtual-mic-harness.md)). | `server-mac/AudioDriver/` |
-| `harness/Makefile` | Builds everything with the Command Line Tools; `install-driver` / `uninstall-driver` need an admin and touch only our own bundle. | Folded into `server-mac/Makefile` |
+| `harness/Makefile` | Builds everything with the Command Line Tools; `install-driver` / `uninstall-driver` need an admin and touch only our own bundle. `make engine` runs the engine's own path instead of the feeder (Phase 2). | Folded into `server-mac/Makefile` |
 | `harness/gate.sh` | One command per gate test: starts the feeder, waits with nothing reading (phase 1), probes (phase 2), stops. `ANNOUNCE=1` speaks the phases aloud for listening tests. | — |
 
 ## What was tested and the result
@@ -67,6 +72,38 @@ listening at the speakers and typing the admin password.
 | 10 | A, persistence | Stop the feeder; restart the Mac | The device stays (silent), so the choice in Zoom sticks | Pending (reboot) |
 | 11 | A, uninstall | `sudo make uninstall-driver` | The device is gone without a reboot; the HAL folder is as before | **PASS**: device gone; the HAL folder holds the same four third-party drivers as before the test |
 | 12 | Latency | Probe medians from tests 1 and 7 | Record per option | A: **0.0 ms**; B: **32 ms**, steady to 0.1 ms. These are timestamp offsets: they include buffering between devices but not the one I/O cycle (about 10 ms) every input path has |
+
+### Phase 2: the engine's path
+
+Run 2026-10-29 on the same Mac, from the Claude app's Terminal panel, with a person
+typing the admin password for `a-install` and `a-uninstall`. `make engine` runs the
+`#[ignore]`d engine test
+`server::device_forward::mic::tests::plays_a_controllers_bursts_into_remote_display_microphone`,
+which opens Remote Display Microphone exactly as an accepted forward does. It then sends
+14 s of 10 ms Opus frames at 48 kHz mono, paced like a live microphone, with a 1 kHz tone
+at 0.3 for the first 250 ms of every whole second of host time. Meanwhile the probe
+records 10 s. Each onset modulo one second is the delay from a frame reaching the host
+to its sound in the device.
+
+| Run | Probe | Delay (min / median / max) | Peak | Engine |
+|---|---|---|---|---|
+| 1 | **PASS**, 10 bursts | 48.2 / 48.6 / 49.2 ms | 0.423 | 14.00 s played; 0 dropped; 1 underrun |
+| 2 | **PASS**, 10 bursts | 53.7 / 54.0 / 54.5 ms | 0.478 | the same |
+| 3 | **PASS**, 9 bursts | 54.7 / 55.2 / 57.1 ms | 0.335 | the same |
+
+- **Delay.** The jitter buffer's 40 ms target, Opus's few milliseconds, and one I/O cycle
+  of the device. Each run is steady to within about 2 ms. Mic latency end to end also
+  has the controller's capture and the network; the spec's target is 150 ms on a LAN.
+- **No glitches.** Every sample sent was played. The one underrun is where the frames
+  stopped, and nothing was dropped at the decode queue or the buffer.
+- **Level.** Runs 1 and 2 computed each frame's tone phase from the clock when it was
+  sent, so the phase jumped slightly between frames. Opus turned those clicks into
+  overshoots, and the peaks were above the 0.3 sent. Run 3's tone is continuous, and its
+  0.335 is close to what was sent. The engine's `audio_rechannel`, which turns the
+  controller's mono into the device's stereo, keeps the level: 0.3 in gives 0.3 in each
+  channel (measured separately with fon 0.6).
+- **Nothing left behind.** After `a-uninstall` the HAL folder holds the same four drivers
+  as before, and the probe lists no Remote Display device.
 
 ## Runtime findings
 
@@ -116,6 +153,7 @@ ANNOUNCE=1 ./gate.sh b-when-tapped     # listen: beeps in phase one only
 # Option A: needs an admin; uninstall restores the HAL folder
 ./gate.sh a-install
 ./gate.sh a-signal
+source <toolchains>/env.sh && make engine   # Phase 2: the engine's own path
 ./gate.sh a-uninstall
 ```
 

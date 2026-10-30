@@ -70,11 +70,24 @@
   shows it with the driver's packaging and Setup's Microphone row.
 - The controller doesn't send its microphone yet. It needs voice-processed capture
   started by `DeviceForwardResponse` and the Devices menu's Microphone row (issue #3).
-- Unit-tested with a fake feed and on the buffer itself. The real path has two
-  `#[ignore]`d tests: `make engine` in `docs/tests/virtual-mic/harness` (latency into the
-  device, glitches) and `make own-mic` in `docs/tests/system-sound/harness` (the host's
-  sound capture doesn't send the microphone back). Both need the driver installed.
+- Unit-tested with a fake feed and on the buffer itself. Two `#[ignore]`d tests use the
+  real driver (2026-10-29):
+  - **`make engine`** in `docs/tests/virtual-mic/harness` plays a controller's Opus
+    bursts through the real path while the Phase 0 probe records. Three runs passed: the
+    median delay from a frame reaching the host to its sound in the device was 48.6,
+    54.0 and 55.2 ms. Every sample sent was played; nothing was dropped and there were no
+    underruns until the frames stopped.
+  - **`make own-mic`** in `docs/tests/system-sound/harness` fails: the host's sound
+    carries the microphone back to the controller (100 of 100 tone windows). See the
+    next point.
 - **Host sound and the microphone come from one process.** cpal's ScreenCaptureKit
   capture sets `excludesCurrentProcessAudio` to false, and `remotedisplayd` both
-  captures the host's sound and plays the microphone. `make own-mic` measures whether
-  audio played into a hidden device comes back that way.
+  captures the host's sound and plays the microphone. ScreenCaptureKit captures by
+  process, not by device: the tone went to the hidden feeder, not the speakers, and
+  still came back. A controller with *Play the Mac's sound here* on would hear its own
+  voice about 50 ms late.
+  - With a scratch copy of cpal that sets it to true, `make own-mic` passed (silence, 0
+    tone windows), and `make hears` still passed (100 of 100: other processes' sound
+    still goes out).
+  - The engine's cpal is a git dependency outside the snapshot, so carrying that change
+    needs its own decision. The microphone forward isn't usable until it lands.

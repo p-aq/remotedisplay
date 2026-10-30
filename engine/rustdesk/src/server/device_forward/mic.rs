@@ -279,7 +279,8 @@ impl<O: Send> Drop for MicThread<O> {
 
 /// Sends `seconds` of microphone as a controller does: 10 ms Opus frames at 48 kHz
 /// mono, each when its time comes. Samples whose host time (ns, the clock of Core
-/// Audio's time stamps) `tone` accepts carry a 1 kHz tone at 0.3; the rest are silence.
+/// Audio's time stamps) `tone` accepts carry a 1 kHz tone at 0.3, continuous across
+/// frames; the rest are silence.
 #[cfg(all(test, target_os = "macos"))]
 pub(crate) fn send_tone(feed: &mut dyn MicFeed, seconds: f64, tone: impl Fn(u64) -> bool) {
     use std::time::{Duration, Instant};
@@ -299,12 +300,12 @@ pub(crate) fn send_tone(feed: &mut dyn MicFeed, seconds: f64, tone: impl Fn(u64)
     let mut sent = 0u32;
     while start.elapsed().as_secs_f64() < seconds {
         let now = unsafe { clock_gettime_nsec_np(CLOCK_UPTIME_RAW) };
+        let first = sent as u64 * RATE as u64 / 100;
         let pcm: Vec<f32> = (0..RATE as u64 / 100)
             .map(|i| {
-                let t = now + i * 1_000_000_000 / RATE as u64;
-                if tone(t) {
-                    let phase = (t % 1_000_000_000) as f64 / 1e9 * 1000.0;
-                    (0.3 * (2.0 * std::f64::consts::PI * phase).sin()) as f32
+                if tone(now + i * 1_000_000_000 / RATE as u64) {
+                    let cycles = (first + i) as f64 * 1000.0 / RATE as f64;
+                    (0.3 * (2.0 * std::f64::consts::PI * cycles).sin()) as f32
                 } else {
                     0.0
                 }
@@ -454,7 +455,8 @@ mod tests {
         let mut r = r;
         r.consumer.pop_slice(&mut out);
         let peak = out.iter().fold(0f32, |m, s| m.max(s.abs()));
-        assert!(peak > 0.1, "the tone came through: peak {peak}");
+        // The tone was 0.3: Opus and the move to stereo keep the level.
+        assert!((0.25..0.35).contains(&peak), "peak {peak}");
         assert!(out.chunks(2).all(|lr| lr[0] == lr[1]), "both channels");
     }
 
