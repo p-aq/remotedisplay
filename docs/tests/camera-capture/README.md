@@ -16,9 +16,9 @@ Camera capture and encode on macOS; decisions
 | Piece | What it is |
 |---|---|
 | `engine/rustdesk/src/platform/macos_camera_capture.mm` | Capture and encode (`HOOKS.md` E5): `AVCaptureSession` in NV12 → `VTCompressionSession` with the encoder settings measured in `docs/tests/camera-extension/` → H.264 Annex B, SPS and PPS in front of each key frame. Lists cameras without Remote Display Camera; picks the camera's own format closest to the request, up to 1920×1080; drops frames only before encoding (decision 0006) |
-| `engine/rustdesk/src/client/device_forward.rs` | The controller's sender (`HOOKS.md` E6), unit-tested with a fake camera. Its `capture` module holds `forwards_the_camera`, `#[ignore]`d: the sender with the real camera and a host played by the test |
+| `engine/rustdesk/src/client/device_forward.rs` | The controller's sender (`HOOKS.md` E6), unit-tested with a fake camera, including one that goes away ([decision 0020](../../architecture/decisions/0020-camera-lost-mid-forward.md)). Its `capture` module holds two `#[ignore]`d tests with the real camera and a host played by the test: `forwards_the_camera`, and `tells_the_host_when_the_camera_is_unplugged`, which waits a minute for a person to unplug it |
 | `engine/rustdesk/src/platform/macos_camera_capture.rs` | The Rust side: `list()`, `access()`, `request_access()`, `Capture::start()` with `request_key_frame()`, `set_bitrate()`, `set_skipping()`, `stats()`; dropping a `Capture` stops the camera. `use_test_pattern()` (`--camera-test-pattern`) lists the test card first, as *Test pattern*. Its `capture` module holds four `#[ignore]`d tests, described below, and the test card's test, which runs with every `cargo test` |
-| `harness/Makefile` | Builds the engine's test binary and wraps it as `rd-camera-probe.app`, so camera access is asked for and granted to that bundle and not to the terminal; builds `rd-camera-decode`. Targets `list`, `nothing`, `ask`, `sends`, `forwards`, `pattern`, `revoke`, `clean` |
+| `harness/Makefile` | Builds the engine's test binary and wraps it as `rd-camera-probe.app`, so camera access is asked for and granted to that bundle and not to the terminal; builds `rd-camera-decode`. Targets `list`, `nothing`, `ask`, `sends`, `forwards`, `unplug`, `pattern`, `revoke`, `clean` |
 | `harness/decode.mm` | `rd-camera-decode`: decodes the stream the capture test saved with the host's decoder from `docs/tests/camera-extension/harness/camera_codec.mm`, checks the last frame is a picture (luma spread, chroma near neutral) and writes it as a PNG, which `make clean` deletes |
 | `harness/gate.sh` | The tests in order, with the prompt to answer; ends by revoking the grant and deleting the bundle and the frames |
 | `harness/probe-Info.plist` | The bundle's identity, `app.remotedisplay.spike.camera-probe`: no Dock icon, the camera usage text macOS requires, and the Continuity Camera key |
@@ -84,7 +84,11 @@ Final run: 227 frames captured, 193 encoded, 34 skipped (the second with skippin
 ## Not yet tested
 
 - Other cameras: a built-in FaceTime camera, Continuity Camera, a camera with only
-  4:3 or 1080p formats, and unplugging the camera while it runs.
+  4:3 or 1080p formats.
+- Unplugging the camera while it's forwarded (`make unplug`, after `make ask`). The
+  sender's side is unit-tested with a fake camera; with a real one it passes when the
+  host is told `on: false`, no frame follows and the menu hears `camera-lost`. No camera
+  was attached when it was written (2026-10-28).
 - Low light, where cameras lower their frame rate on their own.
 - The bitrate change's effect over time: the encoder's tracking of a live change was
   measured in `docs/tests/camera-extension/` (2,000 → 500 kbit/s within 3%); here only

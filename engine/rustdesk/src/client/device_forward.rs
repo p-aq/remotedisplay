@@ -6,7 +6,8 @@
 //! wrapped in `CameraFrame`. They reach the io loop through a small bounded channel of
 //! their own, which the loop serves after any input it already has, so mouse and
 //! keyboard never wait behind video. The camera stops when the user switches it off,
-//! when the host refuses or stops it, and when the session ends.
+//! when the host refuses or stops it, when the session ends, and when the camera goes
+//! away, which the host is told about (decision 0020).
 //!
 //! Every change of what the Devices menu shows is reported to the UI as JSON
 //! ([`DeviceForward::state`], decision 0018). The functions at the end back the menu's
@@ -73,8 +74,11 @@ pub(crate) struct Format {
 
 /// Called with each access unit (Annex B, key frame, presentation time in µs).
 pub(crate) type OnUnit = Box<dyn FnMut(&[u8], bool, i64) + Send>;
-type Start =
-    Box<dyn Fn(Option<&str>, OnUnit) -> ResultType<(Box<dyn Source>, Format)> + Send + Sync>;
+/// Called at most once if the camera goes away while it runs, with why.
+pub(crate) type OnLost = Box<dyn FnOnce(&str) + Send>;
+type Start = Box<
+    dyn Fn(Option<&str>, OnUnit, OnLost) -> ResultType<(Box<dyn Source>, Format)> + Send + Sync,
+>;
 /// Hands the UI the new [`DeviceForward::state`].
 type Notify = Box<dyn Fn(&str) + Send>;
 
@@ -87,8 +91,8 @@ struct CameraState {
     device: String,
     /// Why the camera stopped without being switched off, "" otherwise: the host's
     /// reason ("not-allowed", "not-installed", "not-approved", "busy", "bad-format", or
-    /// "refused" when it gave none), "no-answer", or "camera-failed" when the camera
-    /// didn't start.
+    /// "refused" when it gave none), "no-answer", "camera-failed" when the camera
+    /// didn't start, or "camera-lost" when it went away (decision 0020).
     reason: String,
     /// The host's camera status from its latest `DeviceStatus`, "" before one arrives;
     /// the menu then uses `rd_camera_sink` from the login response.
@@ -113,14 +117,18 @@ impl Source for crate::platform::macos_camera_capture::Capture {
 }
 
 #[cfg(target_os = "macos")]
-fn start_camera(device: Option<&str>, on_unit: OnUnit) -> ResultType<(Box<dyn Source>, Format)> {
+fn start_camera(
+    device: Option<&str>,
+    on_unit: OnUnit,
+    on_lost: OnLost,
+) -> ResultType<(Box<dyn Source>, Format)> {
     use crate::platform::macos_camera_capture::{Capture, Config};
     let config = Config {
         device_id: device.map(str::to_owned),
         bitrate_kbps: MAX_BITRATE_KBPS,
         ..Default::default()
     };
-    let capture = Capture::start(&config, on_unit)?;
+    let capture = Capture::start(&config, on_unit, on_lost)?;
     let info = capture.info();
     log::info!(
         "Camera {} at {}x{}, {} fps, encoder {}",
@@ -140,7 +148,7 @@ fn start_camera(device: Option<&str>, on_unit: OnUnit) -> ResultType<(Box<dyn So
 }
 
 #[cfg(not(target_os = "macos"))]
-fn start_camera(_: Option<&str>, _: OnUnit) -> ResultType<(Box<dyn Source>, Format)> {
+fn start_camera(_: Option<&str>, _: OnUnit, _: OnLost) -> ResultType<(Box<dyn Source>, Format)> {
     hbb_common::bail!("camera forwarding needs macOS on the controller")
 }
 
@@ -155,6 +163,19 @@ struct Shared {
     key_needed: AtomicBool,
     queued: AtomicUsize,
     dropped: AtomicU64,
+    /// The camera went away; `wake` tells the io loop.
+    lost: AtomicBool,
+    wake: tokio::sync::Notify,
+}
+
+impl Shared {
+    /// Resolves once the camera has gone away. Cancel-safe: the flag stays set, and a
+    /// wake-up with no one waiting is kept for the next wait.
+    async fn lost(&self) {
+        while !self.lost.load(Ordering::Acquire) {
+            self.wake.notified().await;
+        }
+    }
 }
 
 /// An encoded camera frame waiting for the io loop.
@@ -168,6 +189,8 @@ pub enum Event {
     Unit(Unit),
     /// The host didn't answer the camera request in time.
     NoAnswer,
+    /// The camera went away: unplugged, or it stopped on an error.
+    Lost,
 }
 
 enum Camera {
@@ -279,6 +302,16 @@ fn unit_sink(shared: Arc<Shared>, tx: mpsc::Sender<Unit>) -> OnUnit {
     })
 }
 
+/// Runs on an AVFoundation thread if the camera goes away; the io loop takes it from
+/// there.
+fn lost_sink(shared: Arc<Shared>) -> OnLost {
+    Box::new(move |why| {
+        log::warn!("The camera went away: {}", why);
+        shared.lost.store(true, Ordering::Release);
+        shared.wake.notify_one();
+    })
+}
+
 impl DeviceForward {
     /// The session's forwarder, telling `ui` about every change.
     pub fn new<T: InvokeUiSession>(ui: Session<T>) -> Self {
@@ -361,7 +394,11 @@ impl DeviceForward {
         self.stop_camera();
         self.reason.clear();
         let shared = Arc::new(Shared::default());
-        match (self.start)(device, unit_sink(shared.clone(), self.tx.clone())) {
+        match (self.start)(
+            device,
+            unit_sink(shared.clone(), self.tx.clone()),
+            lost_sink(shared.clone()),
+        ) {
             Ok((source, format)) => {
                 // Nothing to encode until the host accepts.
                 source.set_skipping(true);
@@ -475,23 +512,24 @@ impl DeviceForward {
         }
     }
 
-    /// The next camera frame to send, or the end of the wait for the host's answer.
-    /// Pending while there is neither. Cancel-safe, for the io loop's `select!`.
+    /// The next camera frame to send, the end of the wait for the host's answer, or the
+    /// camera going away. Pending while there is none. Cancel-safe, for the io loop's
+    /// `select!`.
     pub async fn next(&mut self) -> Event {
         let until = match &self.camera {
             Camera::Asking { until, .. } => Some(*until),
             _ => None,
         };
+        let on = !matches!(self.camera, Camera::Off);
+        let shared = self.shared.clone();
         // `self.tx` keeps the channel open, so `recv` never returns `None`.
-        match until {
-            Some(until) => tokio::select! {
-                Some(unit) = self.rx.recv() => Event::Unit(unit),
-                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(until)) => Event::NoAnswer,
-            },
-            None => match self.rx.recv().await {
-                Some(unit) => Event::Unit(unit),
-                None => std::future::pending().await,
-            },
+        tokio::select! {
+            Some(unit) = self.rx.recv() => Event::Unit(unit),
+            _ = shared.lost(), if on => Event::Lost,
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                until.unwrap_or_else(Instant::now),
+            )), if until.is_some() => Event::NoAnswer,
+            else => std::future::pending().await,
         }
     }
 
@@ -505,6 +543,18 @@ impl DeviceForward {
                 log::warn!("No answer from the host about the camera; stopping it");
                 self.stop_camera();
                 self.reason = "no-answer".to_owned();
+                self.report();
+                Some(request(Kind::CAMERA, false, None))
+            }
+            Event::Lost => {
+                if matches!(self.camera, Camera::Off) {
+                    return None;
+                }
+                // The host stops its sink now instead of waiting for frames that won't
+                // come; the user switches the camera on again, with this camera or another.
+                log::warn!("Camera lost; stopping the forward");
+                self.stop_camera();
+                self.reason = "camera-lost".to_owned();
                 self.report();
                 Some(request(Kind::CAMERA, false, None))
             }
@@ -615,6 +665,7 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         on_unit: Mutex<Option<OnUnit>>,
+        on_lost: Mutex<Option<OnLost>>,
         running: AtomicBool,
         skipping: AtomicBool,
         key_frames: AtomicUsize,
@@ -650,6 +701,12 @@ mod tests {
                 on_unit(&[0, 0, 0, 1, nal, 0x88], key, pts_us);
             }
         }
+        /// The running camera goes away.
+        fn lose(&self, why: &str) {
+            if let Some(on_lost) = self.on_lost.lock().unwrap().take() {
+                on_lost(why);
+            }
+        }
         fn running(&self) -> bool {
             self.running.load(Ordering::SeqCst)
         }
@@ -675,8 +732,9 @@ mod tests {
     fn forward(answer_timeout: Duration) -> (DeviceForward, Arc<Fake>) {
         let fake = Arc::new(Fake::default());
         let camera = fake.clone();
-        let start: Start = Box::new(move |_, on_unit| {
+        let start: Start = Box::new(move |_, on_unit, on_lost| {
             *camera.on_unit.lock().unwrap() = Some(on_unit);
+            *camera.on_lost.lock().unwrap() = Some(on_lost);
             camera.running.store(true, Ordering::SeqCst);
             let format = Format {
                 width: 1280,
@@ -964,7 +1022,7 @@ mod tests {
 
         let states = Arc::new(Mutex::new(Vec::<String>::new()));
         let ui = states.clone();
-        let start: Start = Box::new(|_, _| Err(hbb_common::anyhow::anyhow!("no camera")));
+        let start: Start = Box::new(|_, _, _| Err(hbb_common::anyhow::anyhow!("no camera")));
         let mut fwd = DeviceForward::with(
             start,
             ANSWER_TIMEOUT,
@@ -972,6 +1030,66 @@ mod tests {
         );
         assert!(fwd.switch(camera(true)).is_none());
         assert!(states.lock().unwrap()[0].contains(r#""reason":"camera-failed""#));
+    }
+
+    #[test]
+    fn a_lost_camera_stops_and_tells_the_host() {
+        let rt = runtime();
+        let (mut fwd, fake) = forward(ANSWER_TIMEOUT);
+        fwd.switch(camera(true)).unwrap();
+        fwd.on_message(response(Kind::CAMERA, true, ""));
+        fake.emit(true, 1_000);
+        assert_eq!(pts(&next(&rt, &mut fwd, 50).unwrap()), 1_000);
+        fake.heard();
+        fake.lose("disconnected");
+        let off = next(&rt, &mut fwd, 50).expect("the io loop wasn't told");
+        let off = off.device_forward_request();
+        assert_eq!((off.kind.enum_value(), off.on), (Ok(Kind::CAMERA), false));
+        assert!(!fake.running());
+        assert_eq!(fake.heard(), vec![heard("off", "camera-lost", "")]);
+        // A late answer from the host doesn't bring it back.
+        fwd.on_message(response(Kind::CAMERA, true, ""));
+        assert!(next(&rt, &mut fwd, 50).is_none());
+        // Switching on again starts afresh.
+        fwd.switch(camera(true)).unwrap();
+        assert!(fake.running());
+        assert_eq!(fake.heard(), vec![heard("asking", "", "")]);
+    }
+
+    #[test]
+    fn a_camera_lost_while_asking_withdraws_the_request() {
+        let rt = runtime();
+        let (mut fwd, fake) = forward(Duration::from_millis(100));
+        fwd.switch(camera(true)).unwrap();
+        // Before the io loop waits: the flag keeps it.
+        fake.lose("disconnected");
+        let off = next(&rt, &mut fwd, 50).expect("the io loop wasn't told");
+        assert!(!off.device_forward_request().on);
+        assert!(!fake.running());
+        assert!(
+            next(&rt, &mut fwd, 300).is_none(),
+            "the wait for the host's answer ended with it"
+        );
+        assert_eq!(fake.heard().pop(), Some(heard("off", "camera-lost", "")));
+    }
+
+    #[test]
+    fn only_the_running_camera_can_be_lost() {
+        let rt = runtime();
+        let (mut fwd, fake) = forward(ANSWER_TIMEOUT);
+        fwd.switch(camera(true)).unwrap();
+        let first = fake.on_lost.lock().unwrap().take().unwrap();
+        // Another camera replaces the first, then the first goes away.
+        fwd.switch(camera(true)).unwrap();
+        fwd.on_message(response(Kind::CAMERA, true, ""));
+        first("disconnected");
+        assert!(next(&rt, &mut fwd, 100).is_none());
+        assert!(fake.running());
+        // Switched off, then gone: nothing to tell.
+        fwd.switch(camera(false)).unwrap();
+        fake.lose("disconnected");
+        assert!(next(&rt, &mut fwd, 50).is_none());
+        assert_eq!(fake.heard().pop(), Some(heard("off", "", "")));
     }
 
     #[test]
@@ -1133,5 +1251,63 @@ mod capture {
             .take(3)
             .any(|m| m.camera_frame().frame.h264s().frames[0].key));
         assert!(after.is_empty(), "frames after the host stopped the camera");
+    }
+
+    /// Unplug the camera within a minute of the start (`make unplug`).
+    #[test]
+    #[ignore]
+    fn tells_the_host_when_the_camera_is_unplugged() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let states = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let ui = states.clone();
+        let mut fwd = DeviceForward::with(
+            Box::new(start_camera),
+            ANSWER_TIMEOUT,
+            Box::new(move |state| ui.lock().unwrap().push(state.to_owned())),
+        );
+        let ask = fwd
+            .switch(Switch {
+                kind: Kind::CAMERA,
+                on: true,
+                device: None,
+            })
+            .expect("camera started (is camera access allowed? make ask)");
+        println!(
+            "{}: unplug it now",
+            ask.device_forward_request().device_name
+        );
+        fwd.on_message(answer(true, ""));
+        let until = Instant::now() + Duration::from_secs(60);
+        let mut frames = 0;
+        let off = loop {
+            let left = until
+                .checked_duration_since(Instant::now())
+                .expect("not told within a minute");
+            match next(&rt, &mut fwd, left) {
+                Some(msg) if msg.has_camera_frame() => frames += 1,
+                Some(msg) => break msg,
+                None => panic!("not told within a minute"),
+            }
+        };
+        let after = collect(&rt, &mut fwd, Duration::from_secs(1));
+        println!(
+            "{} CameraFrames, then {:?}, {} after; the menu heard {:?}",
+            frames,
+            off,
+            after.len(),
+            states.lock().unwrap().last()
+        );
+        assert!(frames >= 10, "the camera was unplugged before it sent");
+        assert!(off.has_device_forward_request() && !off.device_forward_request().on);
+        assert!(after.is_empty(), "frames after the camera went away");
+        assert!(states
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .contains(r#""reason":"camera-lost""#));
     }
 }

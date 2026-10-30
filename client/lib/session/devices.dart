@@ -100,6 +100,8 @@ String? stopReason(String reason, String kind, {required bool hostIsMac}) {
       return "This Mac didn't answer";
     case 'camera-failed':
       return "The ${_noun(kind)} didn't start";
+    case 'camera-lost':
+      return 'The ${_noun(kind)} was disconnected or stopped working';
     case 'not-allowed':
     case 'not-installed':
     case 'not-approved':

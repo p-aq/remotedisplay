@@ -34,3 +34,4 @@ architecture README's change log (and its departures table, if it departs).
 | [0017](0017-reserved-message-range-200.md) | Reserve `Message.union` 200–219 for Remote Display | Accepted | Departs |
 | [0018](0018-devices-menu-state-and-ffi.md) | The Devices menu hears the forward's state as a session event | Accepted | Departs |
 | [0019](0019-camera-extension-in-the-server-app.md) | Remote Display Camera ships in the server app, built by its Makefile; only remotedisplayd feeds it | Accepted | Departs (build); extends |
+| [0020](0020-camera-lost-mid-forward.md) | A camera that goes away mid-forward ends the forward, and the host is told | Accepted | Extends |
