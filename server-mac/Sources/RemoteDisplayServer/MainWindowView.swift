@@ -92,7 +92,7 @@ struct MainWindowView: View {
                      cta: c.passwordSet ? "Change…" : "Set…") { openPasswordSheet() }
             // Optional, so not counted as to-do: what a controller's camera and microphone need here.
             cameraRow
-            optionalRow(title: "Microphone", detail: "Not available in this build")
+            microphoneRow
         } header: {
             HStack {
                 Text("Setup")
@@ -126,6 +126,21 @@ struct MainWindowView: View {
         }
         return optionalRow(title: "Camera", detail: c.cameraError ?? row.detail, ok: c.cameraState == .installed,
                            failed: c.cameraError != nil, cta: row.cta, action: row.action)
+    }
+
+    /// Remote Display Microphone's state, with what to do next (spec, User experience).
+    private var microphoneRow: some View {
+        let row: (detail: String, cta: String?, action: () -> Void) = switch c.microphoneState {
+        case .notBundled: ("Not available in this build", nil, {})
+        case .notInstalled: ("Lets a controller's microphone appear here as Remote Display Microphone",
+                             "Install…", { c.installMicrophone() })
+        case .outdated: ("Another version is installed", "Update…", { c.installMicrophone() })
+        case .working: ("Waiting for an admin…", nil, {})
+        case .installed: ("Installed · choose Remote Display Microphone in FaceTime, Zoom or any app", nil, {})
+        }
+        return optionalRow(title: "Microphone", detail: c.microphoneError ?? row.detail,
+                           ok: c.microphoneState == .installed, failed: c.microphoneError != nil,
+                           cta: row.cta, action: row.action)
     }
 
     private func optionalRow(title: String, detail: String, ok: Bool = false, failed: Bool = false,
@@ -275,9 +290,12 @@ struct MainWindowView: View {
             Toggle("Let controllers share their camera and microphone", isOn: Binding(
                 get: { c.deviceForwardOn }, set: { c.setDeviceForward($0) }))
                 .disabled(!c.serviceRunning)
-            if [.installed, .awaitingApproval].contains(c.cameraState) {
+            let camera = [.installed, .awaitingApproval].contains(c.cameraState)
+            let microphone = [.installed, .outdated].contains(c.microphoneState)
+            if camera || microphone {
                 HStack {
-                    Text("Remote Display Camera")
+                    Text(camera && microphone ? "Remote Display Camera and Microphone"
+                         : camera ? "Remote Display Camera" : "Remote Display Microphone")
                     Spacer()
                     Button("Remove Camera and Microphone") { c.removeCameraAndMicrophone() }.controlSize(.small)
                 }

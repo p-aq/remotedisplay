@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Remote Display Microphone, the HAL plug-in that BlackHole/BlackHole.c builds into with
+     the Makefile's constants (decisions 0013, 0027). From the Phase 0 harness's
+     docs/tests/virtual-mic/harness/driver/Info.plist. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>English</string>
+    <key>CFBundleExecutable</key>
+    <string>RemoteDisplayMicrophone</string>
+    <key>CFBundleIconFile</key>
+    <string>RemoteDisplay.icns</string>
+    <key>CFBundleIdentifier</key>
+    <string>app.remotedisplay.server.mic</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>RemoteDisplayMicrophone</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+    <!-- The driver's own version, not the app's: Setup offers Update… when the installed
+         one differs, and each install asks for an admin. Bump it only when the driver
+         changes. -->
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFPlugInFactories</key>
+    <dict>
+        <!-- Our own factory UUID, so this never collides with an installed BlackHole. -->
+        <key>2bc08970-6b20-4a8d-8c46-44eeedd95d70</key>
+        <string>BlackHole_Create</string>
+    </dict>
+    <key>CFPlugInTypes</key>
+    <dict>
+        <!-- kAudioServerPlugInTypeUUID -->
+        <key>443ABAB8-E7B3-491A-B985-BEB9187030DB</key>
+        <array>
+            <string>2bc08970-6b20-4a8d-8c46-44eeedd95d70</string>
+        </array>
+    </dict>
+</dict>
+</plist>

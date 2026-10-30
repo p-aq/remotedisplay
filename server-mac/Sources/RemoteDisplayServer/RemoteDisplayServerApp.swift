@@ -17,9 +17,12 @@ struct RemoteDisplayServerApp: App {
                 Image(systemName: c.isReady
                       ? "display"
                       : "display.trianglebadge.exclamationmark")
-                // The camera badge while a controller is sending (spec, What the user sees).
+                // A camera or mic badge while a controller is sending (spec, What the user sees).
                 if c.cameraSender != nil {
                     Image(systemName: "video.fill")
+                }
+                if c.microphoneSender != nil {
+                    Image(systemName: "mic.fill")
                 }
             }
         }
