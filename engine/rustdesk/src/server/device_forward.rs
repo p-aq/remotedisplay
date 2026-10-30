@@ -224,17 +224,42 @@ impl Drop for DecodeThread {
     }
 }
 
-/// Which connection sends each device: one at a time, across all connections.
-type Senders = Arc<Mutex<HashMap<Kind, i32>>>;
+/// Which connection sends each device, and that controller's name: one at a time,
+/// across all connections.
+type Senders = Arc<Mutex<HashMap<Kind, (i32, String)>>>;
 
 lazy_static::lazy_static! {
     static ref SENDERS: Senders = Default::default();
+}
+
+/// The longest controller name shown in the server app's menu.
+const MAX_NAME: usize = 64;
+
+/// Who is sending what, for the server app (decision 0009): `{"camera": "<controller>"}`
+/// while a controller sends its camera, `{}` otherwise. The `--server` writes it next to
+/// remotedisplay-perms.json, which must stay booleans-only.
+pub fn forwarding_json() -> String {
+    forwarding_of(&SENDERS)
+}
+
+fn forwarding_of(senders: &Senders) -> String {
+    let mut out = serde_json::Map::new();
+    for (kind, (_, name)) in senders.lock().unwrap().iter() {
+        let key = match kind {
+            Kind::CAMERA => "camera",
+            Kind::MICROPHONE => "microphone",
+        };
+        out.insert(key.to_owned(), name.clone().into());
+    }
+    serde_json::Value::Object(out).to_string()
 }
 
 pub struct Forwards {
     conn_id: i32,
     sinks: Sinks,
     senders: Senders,
+    /// The controller's name, from its login.
+    controller: String,
     camera: Option<Box<dyn Feed>>,
     /// What this controller last heard about each device; empty until the login
     /// response advertised it.
@@ -293,6 +318,7 @@ impl Forwards {
             conn_id,
             sinks,
             senders,
+            controller: String::new(),
             camera: None,
             told: HashMap::new(),
             last_key_request: None,
@@ -312,12 +338,13 @@ impl Forwards {
         }
     }
 
-    /// The `PeerInfo.platform_additions` keys for the login response. Only a Mac host
-    /// receives devices.
-    pub fn capabilities(&mut self) -> Vec<(String, serde_json::Value)> {
+    /// The `PeerInfo.platform_additions` keys for the login response of `controller`
+    /// (its name, for the server app's menu). Only a Mac host receives devices.
+    pub fn capabilities(&mut self, controller: &str) -> Vec<(String, serde_json::Value)> {
         if !cfg!(target_os = "macos") {
             return Vec::new();
         }
+        self.controller = controller.chars().take(MAX_NAME).collect();
         let camera = self.status_of(Kind::CAMERA);
         let mic = self.status_of(Kind::MICROPHONE);
         self.told.insert(Kind::CAMERA, camera);
@@ -364,11 +391,11 @@ impl Forwards {
         {
             let mut senders = self.senders.lock().unwrap();
             match senders.get(&kind) {
-                Some(&other) if other != self.conn_id => {
+                Some(&(other, _)) if other != self.conn_id => {
                     return Some(response(kind, false, BUSY));
                 }
                 _ => {
-                    senders.insert(kind, self.conn_id);
+                    senders.insert(kind, (self.conn_id, self.controller.clone()));
                 }
             }
         }
@@ -460,7 +487,7 @@ impl Forwards {
 
     fn release(&self, kind: Kind) {
         let mut senders = self.senders.lock().unwrap();
-        if senders.get(&kind) == Some(&self.conn_id) {
+        if senders.get(&kind).map(|s| s.0) == Some(self.conn_id) {
             senders.remove(&kind);
         }
     }
@@ -582,18 +609,35 @@ mod tests {
     fn advertises_what_it_can_receive() {
         let senders = Senders::default();
         let off = host(false, READY);
-        let caps = connection(1, &off, &senders).capabilities();
+        let caps = connection(1, &off, &senders).capabilities("Test Controller");
         let caps: HashMap<String, serde_json::Value> = caps.into_iter().collect();
         assert_eq!(caps["rd_device_forward"], 1);
         assert_eq!(caps["rd_camera_sink"], NOT_ALLOWED);
         assert_eq!(caps["rd_mic_sink"], NOT_ALLOWED);
         let on = host(true, NOT_INSTALLED);
         let caps: HashMap<_, _> = connection(2, &on, &senders)
-            .capabilities()
+            .capabilities("Test Controller")
             .into_iter()
             .collect();
         assert_eq!(caps["rd_camera_sink"], NOT_INSTALLED);
         assert_eq!(caps["rd_mic_sink"], NOT_INSTALLED);
+    }
+
+    #[test]
+    fn says_who_is_sending_for_the_server_app() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut conn = connection(1, &h, &senders);
+        assert_eq!(forwarding_of(&senders), "{}");
+        let long_name = format!("{}\"evil", "x".repeat(100));
+        conn.capabilities(&long_name);
+        conn.on_message(camera_on());
+        let json: serde_json::Value = serde_json::from_str(&forwarding_of(&senders)).unwrap();
+        let name = json["camera"].as_str().unwrap();
+        assert_eq!(name.chars().count(), MAX_NAME, "cut to the menu's length");
+        assert!(name.starts_with("xxx"));
+        drop(conn);
+        assert_eq!(forwarding_of(&senders), "{}");
     }
 
     #[test]
@@ -628,7 +672,10 @@ mod tests {
         let mut conn = connection(1, &h, &senders);
         assert_eq!(answer(conn.on_message(camera_on())), (true, String::new()));
         assert_eq!(*h.opened.lock().unwrap(), [(1280, 720, 30)]);
-        assert_eq!(senders.lock().unwrap().get(&Kind::CAMERA), Some(&1));
+        assert_eq!(
+            senders.lock().unwrap().get(&Kind::CAMERA).map(|s| s.0),
+            Some(1)
+        );
     }
 
     #[test]
@@ -731,7 +778,7 @@ mod tests {
             conn.on_tick().is_empty(),
             "nothing before the login response"
         );
-        conn.capabilities();
+        conn.capabilities("Test Controller");
         conn.on_message(camera_on());
         assert!(conn.on_tick().is_empty(), "nothing changed");
         h.allowed.store(false, Ordering::SeqCst);
@@ -769,7 +816,7 @@ mod tests {
         let senders = Senders::default();
         let h = host(true, READY);
         let mut conn = connection(1, &h, &senders);
-        conn.capabilities();
+        conn.capabilities("Test Controller");
         conn.on_message(camera_on());
         *h.camera.lock().unwrap() = NOT_APPROVED;
         let out = conn.on_tick();
@@ -807,7 +854,10 @@ mod tests {
             [(1280, 720, 30), (1920, 1080, 30)]
         );
         assert_eq!(h.open_feeds.load(Ordering::SeqCst), 1);
-        assert_eq!(senders.lock().unwrap().get(&Kind::CAMERA), Some(&1));
+        assert_eq!(
+            senders.lock().unwrap().get(&Kind::CAMERA).map(|s| s.0),
+            Some(1)
+        );
     }
 
     /// A decoder that records what it was given, shows key frames and whatever

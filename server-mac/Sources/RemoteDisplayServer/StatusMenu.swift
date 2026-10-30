@@ -17,6 +17,9 @@ struct StatusMenu: View {
         if c.serviceRunning && !c.sessions.isEmpty {
             Text("\(c.sessions.count) active session\(c.sessions.count == 1 ? "" : "s")")
         }
+        if let sender = c.cameraSender {
+            Label("Camera from \(sender)", systemImage: "video.fill")
+        }
         Divider()
         Button("Open Remote Display Server…") { AppDelegate.shared?.showMainWindow() }
             .keyboardShortcut("o")

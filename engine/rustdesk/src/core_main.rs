@@ -446,6 +446,17 @@ pub fn core_main() -> Option<Vec<String>> {
                     if std::fs::write(&tmp, &body).is_ok() {
                         let _ = std::fs::rename(&tmp, &path);
                     }
+                    // remotedisplay: who is sending a camera or microphone, in its own
+                    // file, for the app's menu and badge (decision 0009).
+                    let path = format!(
+                        "{}/Library/Application Support/remotedisplay-forwarding.json",
+                        home
+                    );
+                    let tmp = format!("{}.tmp", path);
+                    let body = crate::server::device_forward::forwarding_json();
+                    if std::fs::write(&tmp, &body).is_ok() {
+                        let _ = std::fs::rename(&tmp, &path);
+                    }
                     std::thread::sleep(std::time::Duration::from_secs(2));
                 });
                 // remotedisplay: ALL input on macOS (mouse/keyboard) is dispatched to

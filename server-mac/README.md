@@ -12,13 +12,16 @@ Two layers (August 2026), the whole UI in English:
 background: status line (`Ready · 192.168.1.117:21118` / `Running · N permission(s)
 missing` / `Stopped`), addresses, active sessions, **Open Remote Display Server…** (⌘O),
 *Service Active* and *Open at Login* toggles, *Quit* (⌘Q). The icon carries an alert
-badge if setup is incomplete.
+badge if setup is incomplete, and a camera badge plus a *Camera from …* line while a
+controller sends its camera (`remotedisplay-forwarding.json`).
 
 **Main window** (`MainWindowView`, grouped `Form` styled like Settings, 560×700) —
 all the configuration and status:
 - Status + service switch.
 - **Setup** (what's done and what's missing, with a button on each pending item): Service running,
-  Screen Recording, Accessibility, Permanent password. "N to do / All set" counter.
+  Screen Recording, Accessibility, Permanent password. "N to do / All set" counter. Camera and
+  Microphone rows follow, optional and not counted: *Not available in this build* until the
+  camera extension and the virtual mic are bundled.
 - **Connect from another device**: LAN and Tailscale `ip:port` with copy.
 - **Active sessions**: connected peers (lsof on the engine, port 21118) + *Disconnect all*
   (restarts the engine).

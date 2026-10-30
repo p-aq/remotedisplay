@@ -90,6 +90,10 @@ struct MainWindowView: View {
             checkRow(ok: c.passwordSet, title: "Permanent password",
                      detail: c.passwordSet ? "Set — clients use it to connect" : "Clients cannot connect without it",
                      cta: c.passwordSet ? "Change…" : "Set…") { openPasswordSheet() }
+            // Optional, so not counted as to-do: what a controller's camera and microphone need here.
+            optionalRow(title: "Camera",
+                        detail: c.cameraExtensionBundled ? "Included in this build" : "Not available in this build")
+            optionalRow(title: "Microphone", detail: "Not available in this build")
         } header: {
             HStack {
                 Text("Setup")
@@ -102,6 +106,20 @@ struct MainWindowView: View {
                 Text("Grant… asks macOS; choose “Open System Settings” in its dialog and turn on Remote Display Server. If no dialog appears, tap Grant… again to open the Settings panel. The engine restarts automatically once granted.")
             }
         }
+    }
+
+    private func optionalRow(title: String, detail: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "minus.circle")
+                .font(.system(size: 18))
+                .foregroundStyle(Color.secondary.opacity(0.5))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 13, weight: .medium))
+                Text(detail).font(.system(size: 11.5)).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 2)
     }
 
     private func checkRow(ok: Bool, title: String, detail: String,
