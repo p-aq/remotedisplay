@@ -1740,6 +1740,10 @@ pub fn main_list_cameras() -> SyncReturn<String> {
     SyncReturn(crate::client::device_forward::ui::cameras())
 }
 
+pub fn main_list_microphones() -> SyncReturn<String> {
+    SyncReturn(crate::client::device_forward::ui::microphones())
+}
+
 pub fn main_get_capture_permission(kind: String) -> SyncReturn<String> {
     SyncReturn(crate::client::device_forward::ui::permission(&kind))
 }

@@ -65,7 +65,8 @@
   the microphone forward no longer goes through it.
 - A microphone forward next to a voice call on the same session would send two audio
   streams, and the host plays both into Remote Display Microphone (decision 0021). The
-  Devices menu should keep them apart. That's left to the menu's change.
+  Devices menu keeps the microphone off during a voice call
+  ([decision 0024](0024-devices-menu-microphone-row.md)).
 - **Echo isn't handled yet.** Without headphones, the host's sound played on the
   controller reaches its microphone and goes back into the host's call. Next, with a
   microphone attached:
