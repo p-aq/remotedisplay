@@ -1,7 +1,7 @@
 #!/bin/sh
-# Phase 2 controller-microphone tests in order (../README.md), after `make`. MIC= and
-# SPEAKER= pass through to make. Test 4 plays a 1 kHz tone for a second; test 7 speaks
-# through the speaker for about half a minute.
+# Phase 2 controller-microphone tests in order (../README.md), after `make`. MIC and
+# SPEAKER in the environment reach make. Test 4 plays a 1 kHz tone for a second; test 7
+# speaks through the speaker for up to two minutes.
 set -e
 cd "$(dirname "$0")"
 

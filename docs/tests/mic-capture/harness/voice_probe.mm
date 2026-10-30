@@ -13,7 +13,7 @@
 // without processing, so what voice processing removed is the difference between the two.
 // See ../README.md.
 //
-//   rd-voice-probe --mic NAME --speaker NAME --speech FILE      the measurement
+//   rd-voice-probe --mic NAME --speaker NAME --speech FILE [--pick after,before,input,none]
 //   rd-voice-probe --list                                       the devices, no microphone
 //   rd-voice-probe --play SPEAKER --speech FILE --seconds S     the "other process"
 
@@ -299,8 +299,8 @@ struct Step {
 
 int main(int argc, char** argv) {
     @autoreleasepool {
-        std::string mic, speaker, speechPath;
-        double seconds = 5;
+        std::string mic, speaker, speechPath, picks = "after,before,input,none";
+        double seconds = 4;
         bool list = false, play = false;
         for (int i = 1; i < argc; i++) {
             std::string a = argv[i];
@@ -309,6 +309,7 @@ int main(int argc, char** argv) {
             else if (a == "--speaker") speaker = next();
             else if (a == "--speech") speechPath = next();
             else if (a == "--seconds") seconds = atof(next().c_str());
+            else if (a == "--pick") picks = next();
             else if (a == "--list") list = true;
             else if (a == "--play") { play = true; speaker = next(); }
         }
@@ -359,10 +360,10 @@ int main(int argc, char** argv) {
         printf("devices before:\n");
         listDevices();
 
-        std::vector<Step> steps;
         SpeechOutput out;
 
         // 1. Without voice processing: what the input hears of the speaker.
+        double unprocessed;
         {
             PlainInput plain;
             if (!plain.start(in)) return 1;
@@ -376,136 +377,151 @@ int main(int argc, char** argv) {
             double voice = plain.rec.db(from, plain.rec.now());
             out.stop();
             plain.stop();
-            steps.push_back({"no voice processing, another output", room, voice, room, voice});
+            unprocessed = over(voice, room);
+            printf("\nwithout voice processing: room %.1f dBFS, the voice %.1f dB over it\n", room,
+                   unprocessed);
         }
         wait(0.5);
 
-        // 2. Voice processing on, then the devices picked on its unit.
-        AVAudioEngine* engine = [AVAudioEngine new];
-        AVAudioInputNode* input = engine.inputNode;
-        NSError* err = nil;
-        if (![input setVoiceProcessingEnabled:YES error:&err]) {
-            printf("voice processing not enabled: %s\n", err.localizedDescription.UTF8String);
-            return 1;
-        }
-        AudioUnit unit = input.audioUnit;
-        printf("input and output nodes share one unit: %s\n",
-               unit == engine.outputNode.audioUnit ? "yes" : "no");
-        OSStatus inSet = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
-                                              kAudioUnitScope_Global, 1, &in, sizeof(in));
-        OSStatus outSet = AudioUnitSetProperty(engine.outputNode.audioUnit,
-                                               kAudioOutputUnitProperty_CurrentDevice,
-                                               kAudioUnitScope_Global, 0, &spk, sizeof(spk));
-        printf("picking the input: %d, the output: %d\n", (int)inSet, (int)outSet);
-        for (UInt32 element : {0u, 1u}) {
-            AudioDeviceID id = kAudioObjectUnknown;
-            UInt32 size = sizeof(id);
-            OSStatus s = AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
-                                              kAudioUnitScope_Global, element, &id, &size);
-            printf("the unit's device, element %u: %s (%d)\n", element, deviceName(id).c_str(), (int)s);
-        }
-
-        Recording vp;
-        Recording* vpRec = &vp;
-        AVAudioFormat* tapFormat = [input outputFormatForBus:0];
-        vp.rate = tapFormat.sampleRate;
-        printf("voice-processed input: %.0f Hz, %u channel(s)\n", tapFormat.sampleRate,
-               (unsigned)tapFormat.channelCount);
-        [input installTapOnBus:0
-                    bufferSize:2048
-                        format:tapFormat
-                         block:^(AVAudioPCMBuffer* buf, AVAudioTime*) {
-                           vpRec->add(buf.floatChannelData[0], buf.frameLength);
-                         }];
-        AVAudioPlayerNode* player = [AVAudioPlayerNode new];
-        [engine attachNode:player];
-        [engine connect:player to:engine.mainMixerNode format:speechBuffer.format];
-        [engine prepare];
-        if (![engine startAndReturnError:&err]) {
-            printf("the engine didn't start: %s\n", err.localizedDescription.UTF8String);
-            return 1;
-        }
-        wait(1.5);
-        printf("devices with voice processing running:\n");
-        listDevices();
-
-        // The same input without processing, alongside.
-        PlainInput plain;
-        if (!plain.start(in)) return 1;
-        wait(1.5);
-
-        // Plays the voice for `seconds` through `how`, after a second of room; leaves out
-        // the first two seconds of the voice, while the canceller adapts.
-        auto measure = [&](const char* what, void (^startVoice)(void), void (^stopVoice)(void)) {
-            size_t v0 = vp.now(), p0 = plain.rec.now();
-            wait(1);
-            Step s = {what, vp.db(v0, vp.now()), 0, plain.rec.db(p0, plain.rec.now()), 0};
-            startVoice();
-            wait(2);
-            size_t v1 = vp.now(), p1 = plain.rec.now();
-            wait(seconds - 2);
-            s.vpVoice = vp.db(v1, vp.now());
-            s.plainVoice = plain.rec.db(p1, plain.rec.now());
-            stopVoice();
-            steps.push_back(s);
-            wait(0.5);
-        };
-
-        measure(
-            "voice processing, its own output",
-            ^{
-              [player scheduleBuffer:speechBuffer atTime:nil options:AVAudioPlayerNodeBufferLoops
-                   completionHandler:nil];
-              [player play];
-            },
-            ^{ [player stop]; });
+        // 2. Voice processing, once for each way of picking its devices:
+        //    after   enable it, then set the input (element 1) and output (element 0) on its unit
+        //    before  set them on the engine's plain units, then enable it
+        //    input   enable it, then set only the input
+        //    none    enable it and leave the system's default input and output
         SpeechOutput* o = &out;
         AudioDeviceID speakerID = spk;
         const std::vector<float>* voice = &speech;
-        measure(
-            "voice processing, another output", ^{ o->start(speakerID, *voice); }, ^{ o->stop(); });
-        __block pid_t child = 0;
         std::string exe = exePath(), speakerName = deviceName(spk);
         std::string secs = std::to_string(seconds + 0.5);
-        measure(
-            "voice processing, another process",
-            ^{
-              const char* args[] = {exe.c_str(), "--play", speakerName.c_str(), "--speech",
-                                    speechPath.c_str(), "--seconds", secs.c_str(), nullptr};
-              posix_spawn(&child, exe.c_str(), nullptr, nullptr, (char**)args, environ);
-            },
-            ^{
-              int status;
-              waitpid(child, &status, 0);
-            });
-        // macOS 14's setting for how much the other audio is lowered.
-        AVAudioVoiceProcessingOtherAudioDuckingConfiguration least = {
-            .enableAdvancedDucking = NO, .duckingLevel = AVAudioVoiceProcessingOtherAudioDuckingLevelMin};
-        input.voiceProcessingOtherAudioDuckingConfiguration = least;
-        measure(
-            "voice processing, least ducking, another output",
-            ^{ o->start(speakerID, *voice); }, ^{ o->stop(); });
-        input.voiceProcessingBypassed = YES;
-        measure(
-            "voice processing bypassed, another output",
-            ^{ o->start(speakerID, *voice); }, ^{ o->stop(); });
+        auto setDevice = [](AudioUnit unit, UInt32 element, AudioDeviceID id) {
+            return (int)AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+                                             kAudioUnitScope_Global, element, &id, sizeof(id));
+        };
+        for (NSString* pick in [@(picks.c_str()) componentsSeparatedByString:@","]) {
+            printf("\n== voice processing, devices picked: %s\n", pick.UTF8String);
+            AVAudioEngine* engine = [AVAudioEngine new];
+            AVAudioInputNode* input = engine.inputNode;
+            NSError* err = nil;
+            if ([pick isEqualToString:@"before"]) {
+                printf("picking the input: %d, the output: %d\n", setDevice(input.audioUnit, 0, in),
+                       setDevice(engine.outputNode.audioUnit, 0, spk));
+            }
+            if (![input setVoiceProcessingEnabled:YES error:&err]) {
+                printf("voice processing not enabled: %s\n", err.localizedDescription.UTF8String);
+                continue;
+            }
+            AudioUnit unit = input.audioUnit;
+            if ([pick isEqualToString:@"after"]) {
+                printf("picking the input: %d, the output: %d\n", setDevice(unit, 1, in),
+                       setDevice(engine.outputNode.audioUnit, 0, spk));
+            } else if ([pick isEqualToString:@"input"]) {
+                printf("picking the input: %d\n", setDevice(unit, 1, in));
+            }
+            for (UInt32 element : {0u, 1u}) {
+                AudioDeviceID id = kAudioObjectUnknown;
+                UInt32 size = sizeof(id);
+                OSStatus s = AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+                                                  kAudioUnitScope_Global, element, &id, &size);
+                printf("the unit's device, element %u: %s (%d)\n", element, deviceName(id).c_str(),
+                       (int)s);
+            }
 
-        plain.stop();
-        [engine stop];
-        [input removeTapOnBus:0];
+            Recording vp;
+            Recording* vpRec = &vp;
+            AVAudioFormat* tapFormat = [input outputFormatForBus:0];
+            vp.rate = tapFormat.sampleRate;
+            printf("voice-processed input: %.0f Hz, %u channel(s)\n", tapFormat.sampleRate,
+                   (unsigned)tapFormat.channelCount);
+            [input installTapOnBus:0
+                        bufferSize:2048
+                            format:tapFormat
+                             block:^(AVAudioPCMBuffer* buf, AVAudioTime*) {
+                               vpRec->add(buf.floatChannelData[0], buf.frameLength);
+                             }];
+            AVAudioPlayerNode* player = [AVAudioPlayerNode new];
+            [engine attachNode:player];
+            [engine connect:player to:engine.mainMixerNode format:speechBuffer.format];
+            [engine prepare];
+            if (![engine startAndReturnError:&err]) {
+                printf("the engine didn't start: %s\n", err.localizedDescription.UTF8String);
+                [input removeTapOnBus:0];
+                continue;
+            }
+            wait(1.5);
+            printf("devices with voice processing running:\n");
+            listDevices();
 
-        // The voice over the room in each, and the difference between the two inputs.
-        // Without voice processing both columns are the same input.
-        double unprocessed = over(steps[0].plainVoice, steps[0].plainRoom);
-        printf("\n%-48s %9s %9s %9s %9s\n", "step (dB; the voice over the room)", "processed",
-               "plain", "taken out", "ducked");
-        for (const Step& s : steps) {
-            double v = over(s.vpVoice, s.vpRoom), p = over(s.plainVoice, s.plainRoom);
-            printf("%-48s %9.1f %9.1f %9.1f %9.1f\n", s.what, v, p, p - v, unprocessed - p);
+            // The same input without processing, alongside.
+            PlainInput plain;
+            if (!plain.start(in)) return 1;
+            wait(1.5);
+
+            // Plays the voice for `seconds` after a second of room; leaves out its first two
+            // seconds, while the canceller adapts.
+            std::vector<Step> steps;
+            auto measure = [&](const char* what, void (^startVoice)(void), void (^stopVoice)(void)) {
+                size_t v0 = vp.now(), p0 = plain.rec.now();
+                wait(1);
+                Step s = {what, vp.db(v0, vp.now()), 0, plain.rec.db(p0, plain.rec.now()), 0};
+                startVoice();
+                wait(2);
+                size_t v1 = vp.now(), p1 = plain.rec.now();
+                wait(seconds - 2);
+                s.vpVoice = vp.db(v1, vp.now());
+                s.plainVoice = plain.rec.db(p1, plain.rec.now());
+                stopVoice();
+                steps.push_back(s);
+                wait(0.5);
+            };
+            measure(
+                "its own output",
+                ^{
+                  [player scheduleBuffer:speechBuffer atTime:nil options:AVAudioPlayerNodeBufferLoops
+                       completionHandler:nil];
+                  [player play];
+                },
+                ^{ [player stop]; });
+            measure("another output", ^{ o->start(speakerID, *voice); }, ^{ o->stop(); });
+            __block pid_t child = 0;
+            measure(
+                "another process",
+                ^{
+                  const char* args[] = {exe.c_str(), "--play", speakerName.c_str(), "--speech",
+                                        speechPath.c_str(), "--seconds", secs.c_str(), nullptr};
+                  posix_spawn(&child, exe.c_str(), nullptr, nullptr, (char**)args, environ);
+                },
+                ^{
+                  int status;
+                  waitpid(child, &status, 0);
+                });
+            // macOS 14's setting for how much the other audio is lowered.
+            AVAudioVoiceProcessingOtherAudioDuckingConfiguration least = {
+                .enableAdvancedDucking = NO,
+                .duckingLevel = AVAudioVoiceProcessingOtherAudioDuckingLevelMin};
+            input.voiceProcessingOtherAudioDuckingConfiguration = least;
+            measure("another output, least ducking", ^{ o->start(speakerID, *voice); },
+                    ^{ o->stop(); });
+            input.voiceProcessingBypassed = YES;
+            measure("another output, processing bypassed", ^{ o->start(speakerID, *voice); },
+                    ^{ o->stop(); });
+
+            plain.stop();
+            [engine stop];
+            [input removeTapOnBus:0];
+
+            // The voice over the room in each input, the difference between the two, and how
+            // much quieter the plain input heard it than without voice processing.
+            printf("%-40s %9s %9s %9s %9s\n", "the voice (dB over the room)", "processed", "plain",
+                   "taken out", "ducked");
+            for (const Step& s : steps) {
+                double v = over(s.vpVoice, s.vpRoom), p = over(s.plainVoice, s.plainRoom);
+                printf("%-40s %9.1f %9.1f %9.1f %9.1f\n", s.what, v, p, p - v, unprocessed - p);
+            }
+            printf("room (dBFS, processed/plain): ");
+            for (const Step& s : steps) printf("%.1f/%.1f  ", s.vpRoom, s.plainRoom);
+            printf("\n");
+            wait(1);
         }
-        printf("\nroom (dBFS): ");
-        for (const Step& s : steps) printf("%.1f/%.1f  ", s.vpRoom, s.plainRoom);
-        printf("\n");
     }
     return 0;
 }
