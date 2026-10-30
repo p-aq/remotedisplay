@@ -882,6 +882,16 @@ pub mod ui {
         serde_json::Value::from(cameras).to_string()
     }
 
+    /// The microphones the menu offers, as JSON `[{"id", "name"}]`, both the input's
+    /// name: none on Linux, where the engine doesn't build cpal.
+    pub fn microphones() -> String {
+        let microphones: Vec<_> = mic::list()
+            .into_iter()
+            .map(|name| serde_json::json!({ "id": name, "name": name }))
+            .collect();
+        serde_json::Value::from(microphones).to_string()
+    }
+
     /// The controller's own access to `kind`: "allowed", "denied", "restricted",
     /// "not-determined", or "unsupported" anywhere but a Mac.
     pub fn permission(kind: &str) -> String {

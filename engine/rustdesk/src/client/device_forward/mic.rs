@@ -58,6 +58,29 @@ pub(crate) fn start(_: Option<&str>, _: OnAudio, _: OnLost) -> ResultType<Captur
     hbb_common::bail!("microphone forwarding needs a Mac or Windows controller")
 }
 
+/// The host's own virtual microphone, never forwarded: on a Mac that is also a host it
+/// would send the host's audio back into itself.
+const REMOTE_DISPLAY_MICROPHONE: &str = "Remote Display Microphone";
+
+/// The inputs a forward can capture, by name, without Remote Display Microphone. Needs no
+/// microphone access.
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "ios")))]
+pub(crate) fn list() -> Vec<String> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    let Ok(devices) = cpal::default_host().input_devices() else {
+        return Vec::new();
+    };
+    devices
+        .filter_map(|d| d.name().ok())
+        .filter(|name| name != REMOTE_DISPLAY_MICROPHONE)
+        .collect()
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "ios"))]
+pub(crate) fn list() -> Vec<String> {
+    Vec::new()
+}
+
 /// `on_lost`, called at most once from whichever thread notices first.
 #[derive(Clone)]
 struct Lost(std::sync::Arc<std::sync::Mutex<Option<OnLost>>>);
@@ -86,6 +109,9 @@ fn find(name: Option<&str>) -> ResultType<(cpal::Device, cpal::SupportedStreamCo
         != crate::platform::macos_camera_capture::Access::Allowed
     {
         hbb_common::bail!("microphone access isn't allowed");
+    }
+    if name == Some(REMOTE_DISPLAY_MICROPHONE) {
+        hbb_common::bail!("{} is never forwarded", REMOTE_DISPLAY_MICROPHONE);
     }
     let host = cpal::default_host();
     let device = match name {
@@ -289,5 +315,10 @@ mod tests {
         );
         assert!(started.is_err());
         assert_eq!(*called.lock().unwrap(), 0, "nothing sent, nothing reported");
+    }
+
+    #[test]
+    fn remote_display_microphone_is_never_listed() {
+        assert!(!list().iter().any(|m| m == REMOTE_DISPLAY_MICROPHONE));
     }
 }

@@ -7,6 +7,8 @@ void main() {
       '{"camera":{"forward":"asking","device":"cam-1","reason":"","host":""}}';
   const refused =
       '{"camera":{"forward":"off","device":"","reason":"busy","host":"ready"}}';
+  const both =
+      '{"camera":{"forward":"off","device":"","reason":"","host":""},"microphone":{"forward":"on","device":"USB Mic","reason":"","host":"ready"}}';
 
   group('ForwardState', () {
     test('reads the camera out of the engine event', () {
@@ -15,6 +17,12 @@ void main() {
           ('asking', 'cam-1', true, false));
       final r = ForwardState.parse(refused, 'camera');
       expect((r.forward, r.reason, r.host), ('off', 'busy', 'ready'));
+    });
+
+    test('reads the microphone beside the camera', () {
+      final m = ForwardState.parse(both, 'microphone');
+      expect((m.on, m.device, m.host), (true, 'USB Mic', 'ready'));
+      expect(ForwardState.parse(both, 'camera').forward, 'off');
     });
 
     test(
@@ -84,6 +92,24 @@ void main() {
           'This Mac turned the camera off');
     });
 
+    test('a microphone forward that stopped on its own', () {
+      expect(stopReason('microphone-failed', 'microphone', hostIsMac: true),
+          "The microphone didn't start");
+      expect(stopReason('microphone-lost', 'microphone', hostIsMac: true),
+          'The microphone was disconnected or stopped working');
+      expect(stopReason('busy', 'microphone', hostIsMac: true),
+          'Another controller is sending its microphone to this Mac');
+      expect(permissionReason('denied', 'microphone'),
+          'Allow microphone access in System Settings');
+    });
+
+    test('headphones while the microphone and the sound are both on', () {
+      expect(echoHint(micOn: true, soundOn: true),
+          'Use headphones, or the call hears its own echo');
+      expect(echoHint(micOn: true, soundOn: false), isNull);
+      expect(echoHint(micOn: false, soundOn: true), isNull);
+    });
+
     test("the controller's own access", () {
       expect(permissionReason('allowed', 'camera'), isNull);
       expect(permissionReason('not-determined', 'camera'), isNull);
@@ -122,6 +148,20 @@ void main() {
       expect(pickCamera(cameras, const ForwardState(), 'b')?.id, 'b');
       expect(pickCamera(cameras, const ForwardState(), 'unplugged')?.id, 'a');
       expect(pickCamera(const [], const ForwardState(), 'a'), isNull);
+    });
+  });
+
+  group('microphones', () {
+    const list =
+        '[{"id":"MacBook Pro Microphone","name":"MacBook Pro Microphone"},{"id":"USB Mic","name":"USB Mic"}]';
+
+    test('reads the engine list and picks like cameras', () {
+      final mics = Microphone.parseList(list);
+      expect(mics.map((m) => m.name), ['MacBook Pro Microphone', 'USB Mic']);
+      expect(
+          pickMicrophone(mics, const ForwardState(), 'USB Mic')?.id, 'USB Mic');
+      expect(pickMicrophone(mics, const ForwardState(), 'unplugged')?.id,
+          'MacBook Pro Microphone');
     });
   });
 }

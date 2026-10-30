@@ -18,7 +18,7 @@ class ForwardState {
   /// "off", "asking" or "on".
   final String forward;
 
-  /// The camera's unique ID while asking or on.
+  /// The camera's unique ID, or the microphone's name, while asking or on.
   final String device;
 
   /// Why the forward stopped without being switched off, or "".
@@ -99,8 +99,10 @@ String? stopReason(String reason, String kind, {required bool hostIsMac}) {
     case 'no-answer':
       return "This Mac didn't answer";
     case 'camera-failed':
+    case 'microphone-failed':
       return "The ${_noun(kind)} didn't start";
     case 'camera-lost':
+    case 'microphone-lost':
       return 'The ${_noun(kind)} was disconnected or stopped working';
     case 'not-allowed':
     case 'not-installed':
@@ -127,24 +129,28 @@ String? permissionReason(String permission, String kind) {
   }
 }
 
-/// One of the controller's cameras, from `mainListCameras`.
-class Camera {
-  const Camera(this.id, this.name);
+/// One of the controller's cameras (`mainListCameras`) or microphones
+/// (`mainListMicrophones`, whose ID is the input's name).
+class CaptureDevice {
+  const CaptureDevice(this.id, this.name);
   final String id;
   final String name;
 
-  static List<Camera> parseList(String json) {
+  static List<CaptureDevice> parseList(String json) {
     try {
       return [
         for (final c in jsonDecode(json) as List)
           if (c is Map && c['id'] is String && c['name'] is String)
-            Camera(c['id'] as String, c['name'] as String)
+            CaptureDevice(c['id'] as String, c['name'] as String)
       ];
     } catch (_) {
       return const [];
     }
   }
 }
+
+typedef Camera = CaptureDevice;
+typedef Microphone = CaptureDevice;
 
 /// The engine's test card, listed as a camera when the app runs with
 /// `--camera-test-pattern` (src/platform/macos_camera_capture.rs).
@@ -156,11 +162,26 @@ bool needsCameraAccess(String id) => id != kTestPatternCamera;
 
 /// The camera to forward: the one on, else the one picked last time if it's
 /// still there, else the first.
-Camera? pickCamera(List<Camera> cameras, ForwardState state, String saved) {
+Camera? pickCamera(List<Camera> cameras, ForwardState state, String saved) =>
+    _pick(cameras, state, saved);
+
+/// The microphone to forward, picked the same way.
+Microphone? pickMicrophone(
+        List<Microphone> microphones, ForwardState state, String saved) =>
+    _pick(microphones, state, saved);
+
+CaptureDevice? _pick(
+    List<CaptureDevice> devices, ForwardState state, String saved) {
   for (final id in [if (state.device.isNotEmpty) state.device, saved]) {
-    for (final c in cameras) {
-      if (c.id == id) return c;
+    for (final d in devices) {
+      if (d.id == id) return d;
     }
   }
-  return cameras.isEmpty ? null : cameras.first;
+  return devices.isEmpty ? null : devices.first;
 }
+
+/// The spec's hint against echo (decision 0023): with the microphone going to
+/// the host and the host's sound playing here, the speakers would reach the
+/// microphone and the call would hear itself.
+String? echoHint({required bool micOn, required bool soundOn}) =>
+    micOn && soundOn ? 'Use headphones, or the call hears its own echo' : null;
