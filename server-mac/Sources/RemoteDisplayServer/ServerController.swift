@@ -40,12 +40,20 @@ final class ServerController {
     /// The controller sending its camera, from remotedisplay-forwarding.json, which the
     /// engine rewrites every 2 s (decision 0009). Nil when no one is, or the service is off.
     var cameraSender: String?
+    /// The same for the microphone.
+    var microphoneSender: String?
     /// Remote Display Camera, the camera extension: bundled only in builds signed with its
     /// provisioning profiles (decision 0019). Setup's Camera row shows its state.
     var cameraState: CameraExtension.State = CameraExtension.bundled ? .notInstalled : .notBundled
     /// Why the last install or removal failed, until the next one.
     var cameraError: String?
     @ObservationIgnored private let cameraExtension = CameraExtension()
+    /// Remote Display Microphone, the virtual mic's driver, which every build bundles
+    /// (decision 0027). Setup's Microphone row shows its state.
+    var microphoneState: MicrophoneDriver.State = .notInstalled
+    /// Why the last install or removal failed, until the next one.
+    var microphoneError: String?
+    @ObservationIgnored private let microphoneDriver = MicrophoneDriver()
     var engineVersion = "—"
     /// Newer release published on GitHub (e.g. "1.0.3"), or nil. Checked at launch and
     /// every 6 hours; the update itself stays manual (the link opens the releases page).
@@ -155,6 +163,13 @@ final class ServerController {
                 if let error { self.cameraError = error }
             }
         }
+        microphoneDriver.onChange = { [weak self] state, error in
+            self?.whenMenuClosed {
+                guard let self else { return }
+                if self.microphoneState != state { self.microphoneState = state }
+                if let error { self.microphoneError = error }
+            }
+        }
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.refresh()
@@ -218,7 +233,9 @@ final class ServerController {
             accessibilityOK = Permissions.accessibility()
         }
         // A file left behind by a stopped engine names no one.
-        cameraSender = serviceRunning ? readForwarding()["camera"] : nil
+        let forwarding = serviceRunning ? readForwarding() : [:]
+        cameraSender = forwarding["camera"]
+        microphoneSender = forwarding["microphone"]
         // TCC caches Screen Recording per process: neither the already-running engine
         // nor this app sees a permission just granted. While something's missing, ask a
         // FRESH process (`remotedisplayd --check-perms`); if it's already granted,
@@ -238,6 +255,7 @@ final class ServerController {
         passwordSet = readPasswordSet()
         sessions = serviceRunning ? readSessions() : []
         cameraExtension.refresh()
+        microphoneDriver.refresh()
 
         // If a permission flipped from NO to YES, restart the engine so it starts with
         // the permission already in effect.
@@ -283,7 +301,8 @@ final class ServerController {
         return (obj["screen"] ?? false, obj["accessibility"] ?? false, obj["device_forward"] ?? false)
     }
 
-    /// Who sends which device: {"camera": "<controller>"}; strings, unlike the perms file.
+    /// Who sends which device: {"camera": "<controller>", "microphone": "<controller>"};
+    /// strings, unlike the perms file.
     private func readForwarding() -> [String: String] {
         guard let data = FileManager.default.contents(atPath: forwardingPath),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String]
@@ -773,11 +792,23 @@ final class ServerController {
         cameraExtension.install()
     }
 
-    /// Remove camera and microphone (spec, Packaging): deactivates the camera extension;
-    /// the microphone's driver joins it in Phase 2.
+    /// Setup's Install… for Microphone: one admin prompt, then the device is there.
+    func installMicrophone() {
+        microphoneError = nil
+        microphoneDriver.install()
+    }
+
+    /// Remove camera and microphone (spec, Packaging): deactivates the camera extension
+    /// and deletes the microphone's driver, whichever of them is there.
     func removeCameraAndMicrophone() {
-        cameraError = nil
-        cameraExtension.remove()
+        if [.installed, .awaitingApproval].contains(cameraState) {
+            cameraError = nil
+            cameraExtension.remove()
+        }
+        if [.installed, .outdated].contains(microphoneState) {
+            microphoneError = nil
+            microphoneDriver.remove()
+        }
     }
 
 }

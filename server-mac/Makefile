@@ -49,11 +49,35 @@ APP_ENTITLEMENTS = $(if $(filter yes,$(CAMERA)),$(CAMERA_DIR)/app.entitlements,E
 # The extension carries the app's version, so a new app version updates it.
 VERSION       := $(shell /usr/libexec/PlistBuddy -c 'Print CFBundleVersion' $(INFO_PLIST))
 SHORT_VERSION := $(shell /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' $(INFO_PLIST))
+# Remote Display Microphone, the virtual mic (spec, Packaging; decisions 0013, 0027): a
+# HAL plug-in built from BlackHole's unmodified source with these constants, the ones
+# the Phase 0 harness measured (docs/tests/virtual-mic/harness). An input-only device
+# apps read, and its hidden output-only twin that remotedisplayd plays into; BlackHole
+# mirrors one into the other. It needs no provisioning profile, so every build bundles
+# it, and Setup's Microphone row copies it to /Library/Audio/Plug-Ins/HAL.
+DRIVER_NAME   := RemoteDisplayMicrophone
+DRIVER_ID     := $(CODE_ID).mic
+DRIVER_DIR     = $(OUT_DIR)/driver
+DRIVER_BIN     = $(DRIVER_DIR)/$(DRIVER_NAME)
+DRIVER_BUNDLE  = $(CONTENTS)/Library/Audio/Plug-Ins/HAL/$(DRIVER_NAME).driver
+DRIVER_DEFINES := \
+  -DkDriver_Name='"$(DRIVER_NAME)"' \
+  -DkPlugIn_BundleID='"$(DRIVER_ID)"' \
+  -DkPlugIn_Icon='"RemoteDisplay.icns"' \
+  -DkManufacturer_Name='"Remote Display"' \
+  -DkHas_Driver_Name_Format=false \
+  -DkDevice_Name='"Remote Display Microphone"' \
+  -DkDevice_IsHidden=false -DkDevice_HasInput=true -DkDevice_HasOutput=false \
+  -DkDevice2_Name='"Remote Display Microphone Feeder"' \
+  -DkDevice2_IsHidden=true -DkDevice2_HasInput=false -DkDevice2_HasOutput=true \
+  -DkNumber_Of_Channels=2 -DkSampleRates=48000 \
+  -DkCanBeDefaultDevice=false -DkCanBeDefaultSystemDevice=false
+
 # $(call fill,template,output): substitute the team and version placeholders.
 fill = sed -e 's/@TEAM_ID@/$(TEAM_ID)/g' -e 's/@VERSION@/$(VERSION)/g' \
   -e 's/@SHORT_VERSION@/$(SHORT_VERSION)/g' "$(1)" > "$(2)"
 
-.PHONY: all build camera bundle sign run clean
+.PHONY: all build camera driver bundle sign run clean
 
 all: sign
 
@@ -69,7 +93,15 @@ camera:
 	done
 	@lipo -create -output "$(CAMERA_BIN)" "$(CAMERA_DIR)/camera-arm64" "$(CAMERA_DIR)/camera-x86_64"
 
-bundle: build $(if $(filter yes,$(CAMERA)),camera)
+# The driver, universal, built as the Phase 0 harness builds it. Our names have no %d for
+# the channel count BlackHole formats into them, so clang warns once per name; harmless.
+driver:
+	@mkdir -p "$(DRIVER_DIR)"
+	@xcrun clang -O2 -bundle -arch arm64 -arch x86_64 -mmacosx-version-min=12.0 -Wno-format-extra-args \
+	  $(DRIVER_DEFINES) AudioDriver/BlackHole/BlackHole.c -o "$(DRIVER_BIN)" \
+	  -framework CoreAudio -framework CoreFoundation -framework Accelerate
+
+bundle: build driver $(if $(filter yes,$(CAMERA)),camera)
 	@rm -rf "$(APP_BUNDLE)"
 	@mkdir -p "$(MACOS_DIR)" "$(RES_DIR)"
 	@cp "$(BINARY)" "$(MACOS_DIR)/$(APP_NAME)"
@@ -78,6 +110,11 @@ bundle: build $(if $(filter yes,$(CAMERA)),camera)
 	@chmod +x "$(MACOS_DIR)/remotedisplayd"
 	@cp "$(INFO_PLIST)" "$(CONTENTS)/Info.plist"
 	@test -f AppIcon.icns && cp AppIcon.icns "$(RES_DIR)/AppIcon.icns" || true
+	@mkdir -p "$(DRIVER_BUNDLE)/Contents/MacOS" "$(DRIVER_BUNDLE)/Contents/Resources"
+	@cp "$(DRIVER_BIN)" "$(DRIVER_BUNDLE)/Contents/MacOS/$(DRIVER_NAME)"
+	@cp AudioDriver/Info.plist "$(DRIVER_BUNDLE)/Contents/Info.plist"
+	@test -f AppIcon.icns && cp AppIcon.icns "$(DRIVER_BUNDLE)/Contents/Resources/RemoteDisplay.icns" || true
+	@echo "Bundled Remote Display Microphone ($(DRIVER_ID))"
 ifeq ($(CAMERA),yes)
 	@test -f "$(APP_PROFILE)" || { echo "ERROR: APP_PROFILE=$(APP_PROFILE) does not exist"; exit 1; }
 	@test -f "$(EXT_PROFILE)" || { echo "ERROR: EXT_PROFILE=$(EXT_PROFILE) does not exist"; exit 1; }
@@ -97,6 +134,8 @@ endif
 sign: bundle
 ifeq ($(strip $(SIGN_ID)),)
 	@echo "WARNING: no stable identity — ad-hoc signing (TCC permissions are invalidated on every rebuild)"
+	@# --deep doesn't count Library/Audio as nested code, so the driver is signed on its own.
+	@codesign --sign - --identifier "$(DRIVER_ID)" --options runtime --force "$(DRIVER_BUNDLE)"
 	@codesign --sign - --options runtime --entitlements Entitlements.plist --force --deep "$(APP_BUNDLE)"
 else
 	@echo "Signing with stable identity: $(SIGN_ID)  (id=$(CODE_ID))"
@@ -108,6 +147,10 @@ ifeq ($(CAMERA),yes)
 	@codesign --sign "$(SIGN_ID)" --identifier "$(EXT_ID)" --options runtime --timestamp \
 	  --entitlements "$(CAMERA_DIR)/camera.entitlements" --force "$(EXT_BUNDLE)"
 endif
+	@# The driver on its own too, with its own identifier: coreaudiod loads it, not the app,
+	@# and codesign doesn't count Library/Audio as nested code.
+	@codesign --sign "$(SIGN_ID)" --identifier "$(DRIVER_ID)" --options runtime --timestamp \
+	  --force "$(DRIVER_BUNDLE)"
 	@codesign $(SIGN_FLAGS) --entitlements Entitlements.plist "$(MACOS_DIR)/remotedisplayd"
 	@codesign $(SIGN_FLAGS) --entitlements "$(APP_ENTITLEMENTS)" "$(MACOS_DIR)/$(APP_NAME)"
 	@codesign $(SIGN_FLAGS) --entitlements "$(APP_ENTITLEMENTS)" "$(APP_BUNDLE)"

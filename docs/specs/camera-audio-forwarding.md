@@ -332,6 +332,8 @@ The camera extension is what changes how Remote Display Server is built and sign
 
 As built ([decision 0019](../architecture/decisions/0019-camera-extension-in-the-server-app.md)): server-mac/Makefile builds the extension with swiftc rather than xcodebuild, as the Phase 0 harness did, and bundles it only when SIGN_ID, APP_PROFILE and EXT_PROFILE are all given; release-mac.sh passes the profiles from RD_SERVER_PROFILE and RD_CAMERA_PROFILE. The extension accepts a sink client only when it is remotedisplayd signed by the extension's own team. The Remove camera and microphone button is in Settings, shown while the extension is installed or waiting for approval.
 
+As built for the microphone ([decision 0027](../architecture/decisions/0027-microphone-driver-in-the-server-app.md)): the driver ships inside the app, at Contents/Library/Audio/Plug-Ins/HAL, built by server-mac/Makefile from BlackHole's source, which is vendored unmodified in server-mac/AudioDriver/. Every build bundles it and signs it on its own. Setup's Microphone row installs it with one admin prompt, the way upstream RustDesk runs admin steps: an AppleScript through osascript copies it to /Library/Audio/Plug-Ins/HAL and restarts coreaudiod. The row offers Update… when another version is installed. Remove camera and microphone deletes it the same way, and shows while either device is there.
+
 ## Testing plan
 
 Every test runs against real apps on macOS 14 and macOS 26 hosts, on the project's Tart VM bench where no hardware is needed and on two physical Macs where it is.
