@@ -31,3 +31,21 @@
 
 - Mic latency gets a target (under 150 ms on a LAN) instead of "measured".
 - Several small, separate hooks in engine audio code, each listed in HOOKS.md.
+
+## Phase 3 results (2026-10-26)
+
+Details in `docs/tests/system-sound/`. The system-sound bullet above is built
+(`host_sound.rs`, `HOOKS.md` E1) and the release build turns `screencapturekit` on for
+the server binary only.
+
+- "Never falls back to an input device" covers two upstream fallbacks: ScreenCaptureKit
+  unavailable, and an owner-named `audio-input` that isn't found. An owner-named device
+  that exists is still used, as upstream does: that is the owner's choice, not a
+  fallback. Voice calls keep their microphone.
+- On macOS 13+ the fork's `is_screen_capture_kit_available()` is always true, so a host
+  without Screen Recording fails inside ScreenCaptureKit and sends nothing at all. The
+  guard covers the named-input case and older systems.
+- The frames a controller receives carry a tone played on the host (100% of 20 ms
+  windows), at 48 kHz stereo.
+- Capture happens before the host's volume and mute. Muting the host doesn't stop its
+  sound reaching the controller; only the controller's switch does.

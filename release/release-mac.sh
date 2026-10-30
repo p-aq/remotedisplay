@@ -86,10 +86,13 @@ export VCPKG_ROOT="${VCPKG_ROOT:-$HOME/vcpkg}"   # scrap/build.rs needs libyuv f
 #    `strip -x` afterwards: rustc's own strip leaves the LINKEDIT string pool 4-byte
 #    aligned and Xcode 27's linker refuses to link the app against it ("ld: mis-aligned
 #    LINKEDIT string pool"); Xcode's strip keeps it 8-byte aligned (same final size).
+#    `screencapturekit` on the server binary only: host sound is the Mac's system audio,
+#    never its microphone (decision 0008; host_sound.rs). The client library keeps
+#    capturing the controller's mic. The feature's cidre crate needs full Xcode.
 ( cd "$ROOT/engine/rustdesk" \
   && CARGO_PROFILE_RELEASE_STRIP=false cargo build --release --features flutter,hwcodec --lib \
   && strip -x target/release/liblibrustdesk.dylib \
-  && cargo build --release --features hwcodec --bin rustdesk )
+  && cargo build --release --features hwcodec,screencapturekit --bin rustdesk )
 
 # 1) Android
 if [ $SKIP_ANDROID = 0 ]; then
