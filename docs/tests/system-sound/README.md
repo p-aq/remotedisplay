@@ -10,12 +10,17 @@ sent ([results](#what-was-tested-and-the-result)). Still to do: listening from a
 controller, the *Play the Mac's sound here* switch, and a call running on the host
 ([not yet tested](#not-yet-tested)).
 
+**Found in Phase 2 (2026-10-29):** the host's sound carries a controller's forwarded
+microphone back to it. `remotedisplayd` plays the microphone, and cpal's ScreenCaptureKit
+capture includes the process's own audio. Turning on `excludesCurrentProcessAudio`
+fixes it and keeps the host's sound ([results](#own-microphone-phase-2)).
+
 ## What's here
 
 | Piece | What it is |
 |---|---|
-| `engine/rustdesk/src/server/audio_service/host_sound.rs` | `source()`, where host sound comes from, with its unit tests (`HOOKS.md` E1). Its `capture` module holds two `#[ignore]`d gate tests. Each subscribes to the engine's audio service the way a controller's connection does, plays a 2 s, 1 kHz tone through the default output with `afplay` and decodes the Opus frames it receives. `controller_hears_system_sound` counts the 20 ms windows that are mostly the tone (Goertzel power against the window's energy); `nothing_without_screen_recording` requires zero frames |
-| `harness/Makefile` | Builds the engine's test binary with `--features hwcodec,screencapturekit` (full Xcode, see `tools/README.md`) and wraps it as `rd-sound-probe.app`, so Screen Recording is granted to that bundle and not to the terminal. Targets `hears`, `nothing`, `revoke`, `clean` |
+| `engine/rustdesk/src/server/audio_service/host_sound.rs` | `source()`, where host sound comes from, with its unit tests (`HOOKS.md` E1). Its `capture` module holds three `#[ignore]`d tests. Each subscribes to the engine's audio service the way a controller's connection does, plays a 2 s, 1 kHz tone through the default output with `afplay` and decodes the Opus frames it receives. `controller_hears_system_sound` counts the 20 ms windows that are mostly the tone (Goertzel power against the window's energy); `nothing_without_screen_recording` requires zero frames. `controller_never_hears_its_own_microphone` plays the tone into Remote Display Microphone instead, through the engine's own microphone path (decision 0021); it needs `../virtual-mic`'s driver installed and passes when none of it comes back |
+| `harness/Makefile` | Builds the engine's test binary with `--features hwcodec,screencapturekit` (full Xcode, see `tools/README.md`) and wraps it as `rd-sound-probe.app`, so Screen Recording is granted to that bundle and not to the terminal. Targets `hears`, `nothing`, `own-mic`, `revoke`, `clean` |
 | `harness/gate.sh` | The tests in order, with the prompts to answer; ends by revoking the grant and deleting the bundle |
 | `harness/probe-Info.plist` | The bundle's identity, `app.remotedisplay.spike.sound-probe`, with no Dock icon |
 
@@ -42,6 +47,25 @@ carry it, in every window. Listening on a real controller is still to do. *The h
 microphone is never sent*: with Screen Recording refused the service sends nothing at
 all, and `source()`'s unit tests cover the fallbacks the guard refuses (a missing named
 input, ScreenCaptureKit unavailable).
+
+### Own microphone (Phase 2)
+
+Run 2026-10-29 with `../virtual-mic`'s driver installed and rd-sound-probe allowed. The
+`make own-mic` test plays 2 s of a controller's 1 kHz tone into Remote Display
+Microphone from the test's own process, as `remotedisplayd` does, while subscribed to
+host sound:
+
+| Build | `make own-mic` | `make hears` |
+|---|---|---|
+| cpal as the engine has it (`excludesCurrentProcessAudio` false) | **FAIL**: 100 of 100 tone windows came back, peak 0.311 for 0.3 sent | — |
+| cpal with `excludesCurrentProcessAudio` true (a scratch copy, this test only) | **PASS**: 380 frames of silence, peak 0.000, 0 tone windows | **PASS**: 100 of 100, peak 0.344; `afplay` is another process |
+
+- **ScreenCaptureKit captures by process, not by device.** The tone went to the driver's
+  hidden feeder, not the speakers, and still came back. So a controller with *Play the
+  Mac's sound here* on would hear its own voice about 50 ms late.
+- **Rebuilding the bundle cancels the grant.** The ad-hoc signature changes with the
+  binary, and turning rd-sound-probe off and on didn't help: `make revoke`, one refused
+  run, then turning it on again did.
 
 ## Runtime findings
 
@@ -77,6 +101,8 @@ input, ScreenCaptureKit unavailable).
   Devices menu and `DeviceStatus` (Phase 1, [decision 0012](../../architecture/decisions/0012-devices-menu-and-device-status.md)).
   Until then the engine's existing Mute toggle (Input › Session) controls host sound.
 - A call running on the host (echo, ducking), the spec's open question.
+- `make own-mic` passes only once the engine's cpal excludes `remotedisplayd`'s own
+  audio; until then it fails as above.
 - The release build itself (`release/release-mac.sh` on the release Mac, Xcode 27).
 
 ## Re-running
@@ -88,6 +114,7 @@ source <toolchains>/env.sh
 cd harness
 make
 ./gate.sh     # tone through the speakers three times; keep other sound off
+make own-mic  # with ../virtual-mic's driver installed and the grant on
 ```
 
 `gate.sh` asks you to deny the first prompt and to turn rd-sound-probe on for test 3.

@@ -6,6 +6,7 @@
 #   sudo make install-driver     Option A: install the driver and restart coreaudiod
 #   build/rd-mic-feeder --option a   (or b)   then, in another terminal:
 #   build/rd-mic-probe --seconds 10
+#   make engine                  Phase 2: the engine's own path instead of the feeder
 
 SIGN_ID     ?=
 ARCH        ?= arm64
@@ -41,7 +42,7 @@ DRIVER_DEFINES   := \
   -DkNumber_Of_Channels=2 -DkSampleRates=48000 \
   -DkCanBeDefaultDevice=false -DkCanBeDefaultSystemDevice=false
 
-.PHONY: all feeder probe driver install-driver uninstall-driver list clean
+.PHONY: all feeder probe driver install-driver uninstall-driver list engine clean
 
 all: feeder probe driver
 
@@ -91,6 +92,21 @@ uninstall-driver:
 
 list:
 	$(PROBE) --list
+
+# Phase 2 (decision 0021): with the driver installed, the engine plays a controller's
+# Opus tone bursts into Remote Display Microphone through its jitter buffer while the
+# probe records, so the probe's latency runs from a frame reaching the host to its sound
+# in the device. Needs the toolchain (tools/README.md); run it from Terminal, since the
+# probe hears only silence from a background shell.
+ENGINE   := ../../../../engine/rustdesk
+MIC_TEST := server::device_forward::mic::tests::plays_a_controllers_bursts_into_remote_display_microphone
+engine:
+	@mkdir -p $(BUILD)/home
+	cd $(ENGINE) && HOME=$(CURDIR)/$(BUILD)/home cargo test --locked --release \
+	  --features hwcodec,screencapturekit --lib --no-run 2>&1 | grep -E '^error|Finished'
+	cd $(ENGINE) && HOME=$(CURDIR)/$(BUILD)/home cargo test --locked --release \
+	  --features hwcodec,screencapturekit --lib -- --ignored --exact --nocapture $(MIC_TEST) & \
+	  sleep 3; $(PROBE) --seconds 10; probe=$$?; wait $$! && exit $$probe
 
 clean:
 	rm -rf $(BUILD)
