@@ -210,7 +210,10 @@ impl Device {
         }
         unsafe {
             cfg.set_captures_audio(true);
-            cfg.set_excludes_current_process_audio(false);
+            // remotedisplay: remotedisplayd plays a controller's microphone into Remote
+            // Display Microphone, and capture is per process, whatever the device: with
+            // false the controller hears itself (decision 0022).
+            cfg.set_excludes_current_process_audio(true);
             cfg.set_shows_cursor(false);
         }
         let windows = ns::Array::new();

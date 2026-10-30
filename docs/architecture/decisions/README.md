@@ -36,3 +36,4 @@ architecture README's change log (and its departures table, if it departs).
 | [0019](0019-camera-extension-in-the-server-app.md) | Remote Display Camera ships in the server app, built by its Makefile; only remotedisplayd feeds it | Accepted | Departs (build); extends |
 | [0020](0020-camera-lost-mid-forward.md) | A camera that goes away mid-forward ends the forward, and the host is told | Accepted | Extends |
 | [0021](0021-microphone-forward-on-the-host.md) | The host plays a microphone forward into Remote Display Microphone through its own jitter buffer | Accepted | Departs (not through `AudioHandler`); extends |
+| [0022](0022-vendored-cpal-excludes-own-audio.md) | cpal is vendored into the engine, and host sound leaves out remotedisplayd's own audio | Accepted | Extends; departs from upstream (cpal from git) |

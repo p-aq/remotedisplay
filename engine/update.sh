@@ -8,9 +8,11 @@
 # Flow:
 #   1. Compute OUR complete diff: upstream(baseline) → current engine/rustdesk/.
 #      libs/hbb_common (a submodule upstream, vendored here) is diffed separately
-#      against the submodule commit of the old tag (see engine/lib.sh).
+#      against the submodule commit of the old tag, and libs/cpal against the commit
+#      the old tag's Cargo.lock pins (see engine/lib.sh).
 #   2. Replace engine/rustdesk/ with the pristine snapshot of the new tag — with the
-#      new tag's hbb_common expanded in place of the gitlink — and commit it
+#      new tag's hbb_common expanded in place of the gitlink and its cpal at
+#      libs/cpal — and commit it
 #      ("engine: snapshot upstream X.Y.Z"): history always tells upstream from ours.
 #      Only the tag's files are added (build artifacts living in engine/ are untouched).
 #   3. Re-apply our diff with `git apply --3way`. Where upstream touched the same
@@ -37,16 +39,20 @@ OLD_HBB=$(hbb_commit_of "$OLD"); NEW_HBB=$(hbb_commit_of "$NEW")
 echo "→ fetching hbb_common ${OLD_HBB:0:7} (old) and ${NEW_HBB:0:7} (new)…"
 ensure_hbb_commit "$OLD_HBB"
 ensure_hbb_commit "$NEW_HBB"
+OLD_CPAL=$(cpal_commit_of "$OLD"); NEW_CPAL=$(cpal_commit_of "$NEW")
+echo "→ fetching cpal ${OLD_CPAL:0:7} (old) and ${NEW_CPAL:0:7} (new)…"
+ensure_cpal_commit "$OLD_CPAL"
+ensure_cpal_commit "$NEW_CPAL"
 
-echo "→ 1/4 extracting our diff ($OLD + hbb_common ${OLD_HBB:0:7} → current engine/rustdesk/)…"
+echo "→ 1/4 extracting our diff ($OLD + hbb_common ${OLD_HBB:0:7} + cpal ${OLD_CPAL:0:7} → current engine/rustdesk/)…"
 OURS=$(mktemp -t rustdesk-ours.XXXXXX)
-our_diff HEAD "$OLD" "$OLD_HBB" > "$OURS"
+our_diff HEAD "$OLD" "$OLD_HBB" "$OLD_CPAL" > "$OURS"
 echo "   $(grep -c '^diff --git' "$OURS") files of ours ($OURS)"
 
 echo "→ 2/4 pristine snapshot of upstream $NEW into engine/rustdesk/…"
 git rm -rq engine/rustdesk
-stage_pristine_snapshot "$NEW" "$NEW_HBB"   # see engine/lib.sh
-git commit -qm "engine: snapshot upstream $NEW + hbb_common ${NEW_HBB:0:7} (pristine, none of our changes)"
+stage_pristine_snapshot "$NEW" "$NEW_HBB" "$NEW_CPAL"   # see engine/lib.sh
+git commit -qm "engine: snapshot upstream $NEW + hbb_common ${NEW_HBB:0:7} + cpal ${NEW_CPAL:0:7} (pristine, none of our changes)"
 git checkout -q -- engine/rustdesk
 
 echo "→ 3/4 re-applying our diff with 3-way (in the index)…"
@@ -79,8 +85,8 @@ if [ -n "$CONFLICTS" ]; then
 else
     RES="✓ clean ($NFILES files re-applied)"
 fi
-printf '| %s | update **%s** → **%s** (hbb_common %s → %s) | %s |
-' "$(date +%F)" "$OLD" "$NEW" "${OLD_HBB:0:7}" "${NEW_HBB:0:7}" "$RES" >> engine/SYNC.md
+printf '| %s | update **%s** → **%s** (hbb_common %s → %s, cpal %s → %s) | %s |
+' "$(date +%F)" "$OLD" "$NEW" "${OLD_HBB:0:7}" "${NEW_HBB:0:7}" "${OLD_CPAL:0:7}" "${NEW_CPAL:0:7}" "$RES" >> engine/SYNC.md
 git add engine/BASELINE engine/SYNC.md
 
 echo
