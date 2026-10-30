@@ -89,5 +89,5 @@
 - **Remote Display Microphone isn't in System Settings › Sound › Input.**
   `kCanBeDefaultDevice=false`, which decision 0013 set to keep it out of Sound › Output,
   also keeps it out of Input, and it can't be the Mac's default input. Apps with their
-  own picker list it (QuickTime did), as the row's wording says. Whether Dictation and
-  other default-input apps need it is the Phase 2 gate's question.
+  own picker list it (QuickTime did), as the row's wording says. Decision 0031 lets it be
+  the default input, from driver build 2.

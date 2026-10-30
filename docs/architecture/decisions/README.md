@@ -27,7 +27,7 @@ architecture README's change log (and its departures table, if it departs).
 | [0010](0010-entitlements-per-binary.md) | One entitlements file per binary; extension signed first | Accepted | Departs |
 | [0011](0011-extension-owns-placeholder.md) | The camera extension owns the placeholder and drains the sink | Accepted | Extends |
 | [0012](0012-devices-menu-and-device-status.md) | Devices menu always shown; status strings and `DeviceStatus` | Accepted | Departs |
-| [0013](0013-virtual-mic-input-only-driver.md) | Virtual mic as an input-only driver fed by a hidden device (Option A) | Accepted | Extends |
+| [0013](0013-virtual-mic-input-only-driver.md) | Virtual mic as an input-only driver fed by a hidden device (Option A) | Accepted; amended by 0031 | Extends |
 | [0014](0014-phase0-camera-harness.md) | The camera harness follows the repo's harness, engine and server-app patterns | Accepted (Phase 0) | Departs (build only) |
 | [0015](0015-virtual-mic-harness.md) | Virtual-mic harness: BlackHole configured, not modified; one engine-side module for both options | Accepted (Phase 0) | Extends; departs from vendoring for Phase 0 |
 | [0016](0016-camera-encoder-and-decoder-contract.md) | Camera encoder settings (low-latency, hardware required) and decoder contract (limits, outcomes, sanitizer fuzz) | Accepted | Extends |
@@ -45,3 +45,4 @@ architecture README's change log (and its departures table, if it departs).
 | [0028](0028-host-sound-status.md) | The host says whether it can share its sound, and the Devices menu shows it | Accepted | Extends (a login key the spec doesn't have) |
 | [0029](0029-speaker-path-jitter-buffer.md) | The client plays received audio through the spec's jitter buffer, shared with the host's microphone path | Accepted; on 1.5.1 its AudioHandler part is 0030's | Follows; departs from upstream (`AudioHandler`'s buffer) |
 | [0030](0030-engine-rustdesk-1-5-1.md) | The engine moves to RustDesk 1.5.1, and the speaker path keeps upstream's new playback | Accepted | Follows (SYNC.md's update flow); 1.5.1 rather than 1.5.0 |
+| [0031](0031-virtual-mic-can-be-the-default-input.md) | Remote Display Microphone can be the Mac's default input | Accepted | Departs ("can't become a default device"); keeps its goal |

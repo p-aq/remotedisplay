@@ -7,6 +7,7 @@
 #   build/rd-mic-feeder --option a   (or b)   then, in another terminal:
 #   build/rd-mic-probe --seconds 10
 #   make engine                  Phase 2: the engine's own path instead of the feeder
+#   make default-check           with the server app's driver installed: decision 0031
 
 SIGN_ID     ?=
 ARCH        ?= arm64
@@ -42,7 +43,7 @@ DRIVER_DEFINES   := \
   -DkNumber_Of_Channels=2 -DkSampleRates=48000 \
   -DkCanBeDefaultDevice=false -DkCanBeDefaultSystemDevice=false
 
-.PHONY: all feeder probe driver install-driver uninstall-driver list engine clean
+.PHONY: all feeder probe driver install-driver uninstall-driver list engine default-check clean
 
 all: feeder probe driver
 
@@ -107,6 +108,15 @@ engine:
 	cd $(ENGINE) && HOME=$(CURDIR)/$(BUILD)/home cargo test --locked --release \
 	  --features hwcodec,screencapturekit --lib -- --ignored --exact --nocapture $(MIC_TEST) & \
 	  sleep 3; $(PROBE) --seconds 10; probe=$$?; wait $$! && exit $$probe
+
+# Decision 0031: the server app's driver can be the default input, and neither it nor its
+# hidden feeder the default output. Sets each default and puts it back; no prompts.
+CHECK := $(BUILD)/rd-default-check
+default-check:
+	@mkdir -p $(BUILD)
+	xcrun clang -O2 -Wall -Wextra -arch $(ARCH) default_check.c -o $(CHECK) \
+	  -framework CoreFoundation -framework CoreAudio
+	$(CHECK)
 
 clean:
 	rm -rf $(BUILD)
