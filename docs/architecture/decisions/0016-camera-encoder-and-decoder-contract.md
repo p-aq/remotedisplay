@@ -51,3 +51,19 @@ check when the code moves into the engine.
 - The decoder never crashes on bad input, and every failure maps to one host action:
   ask for a key frame.
 - Raising the size limit for 1080p+ cameras (Phase 5) is one constant, plus this record.
+
+## In the engine (2026-10-27)
+
+- **The decoder moved** into `src/platform/macos_camera_sink.mm` (`HOOKS.md` E8)
+  unchanged, apart from the size limit below. The fuzz pass under the sanitizers now
+  runs against the engine's copy: `docs/tests/camera-sink/` (`make test-asan`, 20,000
+  cases), required after any change to the decoder.
+- **The size limit applies in either orientation.** It is now a long side up to 1920
+  and a short side up to 1080, with neither under 16. Read as width ≤ 1920 and
+  height ≤ 1080, the limit rejected every portrait stream, which the spec requires to
+  work. The pixel bound is unchanged, only turned on its side. The controller's format
+  choice and the host's request check use the same rule.
+- **The host decodes on a thread of its own,** behind a two-unit queue. When that
+  queue is full the unit is dropped, everything up to the next key frame is dropped
+  too, and the controller is asked for a key frame. A unit that fails to decode leads
+  to the same.

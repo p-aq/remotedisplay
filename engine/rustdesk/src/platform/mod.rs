@@ -18,6 +18,10 @@ pub mod macos;
 #[cfg(target_os = "macos")]
 pub mod macos_camera_capture;
 
+// remotedisplay: the host's camera sink for camera forwarding.
+#[cfg(target_os = "macos")]
+pub mod macos_camera_sink;
+
 #[cfg(target_os = "macos")]
 pub mod delegate;
 

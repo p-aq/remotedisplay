@@ -54,9 +54,11 @@ pub const NOT_ALLOWED: &str = "not-allowed";
 pub const BUSY: &str = "busy";
 /// A request whose format is outside what the host accepts (decision 0016).
 pub const BAD_FORMAT: &str = "bad-format";
-/// The camera formats the host accepts (decision 0016).
-const MAX_WIDTH: i32 = 1920;
-const MAX_HEIGHT: i32 = 1080;
+/// The camera formats the host accepts (decision 0016): 16×16 to 1920×1080 in either
+/// orientation, so a portrait camera fits too.
+const MIN_SIDE: i32 = 16;
+const MAX_LONG_SIDE: i32 = 1920;
+const MAX_SHORT_SIDE: i32 = 1080;
 const MAX_FPS: i32 = 60;
 /// Key frame requests to a controller, at most one per this (spec, Protocol changes › Rate).
 const KEY_FRAME_INTERVAL: Duration = Duration::from_millis(500);
@@ -69,20 +71,155 @@ pub(crate) trait Feed: Send {
     fn feed(&mut self, annex_b: &[u8], key: bool, capture_time_us: i64) -> bool;
 }
 
-/// Where camera forwards go. The real one is the camera extension's sink
-/// (`macos_camera_sink.mm`); until that exists, the camera is not installed.
+/// Where camera forwards go: on a Mac, the camera extension's sink
+/// (`platform/macos_camera_sink.mm`); elsewhere, nowhere.
 pub(crate) struct Sinks {
     camera_status: Box<dyn Fn() -> &'static str + Send + Sync>,
     open_camera: Box<dyn Fn(i32, i32, i32) -> ResultType<Box<dyn Feed>> + Send + Sync>,
     allowed: Box<dyn Fn() -> bool + Send + Sync>,
 }
 
+#[cfg(target_os = "macos")]
+impl Default for Sinks {
+    fn default() -> Self {
+        use crate::platform::macos_camera_sink::{self as sink, Outcome};
+        Self {
+            camera_status: Box::new(|| {
+                if camera_sink_present() {
+                    READY
+                } else {
+                    NOT_INSTALLED
+                }
+            }),
+            open_camera: Box::new(|_, _, fps| {
+                let mut sink = sink::Feed::open(fps)?;
+                Ok(
+                    Box::new(DecodeThread::spawn(move |annex_b, capture_time_us| {
+                        sink.push(annex_b, capture_time_us) == Outcome::Decoded
+                    })?) as Box<dyn Feed>,
+                )
+            }),
+            allowed: Box::new(is_allowed),
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 impl Default for Sinks {
     fn default() -> Self {
         Self {
             camera_status: Box::new(|| NOT_INSTALLED),
-            open_camera: Box::new(|_, _, _| hbb_common::bail!("no camera sink in this build")),
+            open_camera: Box::new(|_, _, _| hbb_common::bail!("only a Mac host receives a camera")),
             allowed: Box::new(is_allowed),
+        }
+    }
+}
+
+/// Whether Remote Display Camera's sink exists, asked of CoreMediaIO at most once a
+/// second for all connections. Only asked while the owner's switch is on.
+#[cfg(target_os = "macos")]
+fn camera_sink_present() -> bool {
+    lazy_static::lazy_static! {
+        static ref LAST: Mutex<Option<(Instant, bool)>> = Default::default();
+    }
+    let mut last = LAST.lock().unwrap();
+    match *last {
+        Some((at, present)) if at.elapsed() < Duration::from_secs(1) => present,
+        _ => {
+            let present = crate::platform::macos_camera_sink::sink_present();
+            *last = Some((Instant::now(), present));
+            present
+        }
+    }
+}
+
+/// Decoded frames waiting for the decode thread. When it's busy, the frame is dropped
+/// and so is everything up to the next key frame.
+const DECODE_QUEUE: usize = 2;
+
+struct Unit {
+    annex_b: Vec<u8>,
+    key: bool,
+    capture_time_us: i64,
+    /// The first unit queued after one was dropped.
+    after_gap: bool,
+}
+
+/// Decodes on a thread of its own (spec, Security: "decode on a guarded thread"), so a
+/// slow or stuck decoder never holds up the connection. Dropping it ends the thread,
+/// and with it the sink.
+struct DecodeThread {
+    tx: Option<std::sync::mpsc::SyncSender<Unit>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    /// Set by either side when the picture is broken until the next key frame.
+    need_key: Arc<std::sync::atomic::AtomicBool>,
+    /// A unit was dropped; the next one queued says so.
+    gap: bool,
+}
+
+impl DecodeThread {
+    /// `push(annex_b, capture_time_us)` decodes one unit and returns whether it showed.
+    fn spawn(mut push: impl FnMut(&[u8], i64) -> bool + Send + 'static) -> ResultType<Self> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Unit>(DECODE_QUEUE);
+        let need_key = Arc::new(AtomicBool::new(false));
+        let need = need_key.clone();
+        let thread = std::thread::Builder::new()
+            .name("camera-decode".to_owned())
+            .spawn(move || {
+                let mut waiting_for_key = false;
+                while let Ok(unit) = rx.recv() {
+                    if unit.after_gap {
+                        waiting_for_key = true;
+                    }
+                    // Nothing after a gap or a failure decodes cleanly until a key frame.
+                    if waiting_for_key && !unit.key {
+                        continue;
+                    }
+                    if push(&unit.annex_b, unit.capture_time_us) {
+                        waiting_for_key = false;
+                    } else {
+                        waiting_for_key = true;
+                        need.store(true, Ordering::Release);
+                    }
+                }
+            })?;
+        Ok(Self {
+            tx: Some(tx),
+            thread: Some(thread),
+            need_key,
+            gap: false,
+        })
+    }
+}
+
+impl Feed for DecodeThread {
+    fn feed(&mut self, annex_b: &[u8], key: bool, capture_time_us: i64) -> bool {
+        use std::sync::atomic::Ordering;
+        if let Some(tx) = &self.tx {
+            let unit = Unit {
+                annex_b: annex_b.to_vec(),
+                key,
+                capture_time_us,
+                after_gap: self.gap,
+            };
+            if tx.try_send(unit).is_ok() {
+                self.gap = false;
+            } else {
+                self.gap = true;
+                self.need_key.store(true, Ordering::Release);
+            }
+        }
+        !self.need_key.swap(false, Ordering::AcqRel)
+    }
+}
+
+impl Drop for DecodeThread {
+    fn drop(&mut self) {
+        // Closing the queue ends the thread after the unit it's on.
+        self.tx = None;
+        if let Some(thread) = self.thread.take() {
+            thread.join().ok();
         }
     }
 }
@@ -138,8 +275,11 @@ fn key_frame_request() -> Message {
 }
 
 fn valid_format(request: &DeviceForwardRequest) -> bool {
-    (16..=MAX_WIDTH).contains(&request.width)
-        && (16..=MAX_HEIGHT).contains(&request.height)
+    let long = request.width.max(request.height);
+    let short = request.width.min(request.height);
+    short >= MIN_SIDE
+        && long <= MAX_LONG_SIDE
+        && short <= MAX_SHORT_SIDE
         && (1..=MAX_FPS).contains(&request.fps)
 }
 
@@ -522,12 +662,21 @@ mod tests {
             (1280, 720, 0),
             (1280, 720, 1000),
             (8, 720, 30),
+            (1080, 2000, 30),
         ] {
             let reply = conn.on_message(ask(Kind::CAMERA, true, w, h_, fps));
             assert_eq!(answer(reply), (false, BAD_FORMAT.into()), "{w}x{h_} {fps}");
         }
         assert!(h.opened.lock().unwrap().is_empty());
         assert!(senders.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn accepts_a_portrait_camera_within_the_same_bound() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut conn = connection(1, &h, &senders);
+        assert!(answer(conn.on_message(ask(Kind::CAMERA, true, 1080, 1920, 30))).0);
     }
 
     #[test]
@@ -659,5 +808,89 @@ mod tests {
         );
         assert_eq!(h.open_feeds.load(Ordering::SeqCst), 1);
         assert_eq!(senders.lock().unwrap().get(&Kind::CAMERA), Some(&1));
+    }
+
+    /// A decoder that records what it was given, shows key frames and whatever
+    /// `shows` says, and can be held up.
+    fn decode_thread(
+        shows: Arc<AtomicBool>,
+        hold: Arc<Mutex<()>>,
+    ) -> (DecodeThread, Arc<Mutex<Vec<i64>>>) {
+        let seen: Arc<Mutex<Vec<i64>>> = Default::default();
+        let record = seen.clone();
+        let thread = DecodeThread::spawn(move |_, capture_time_us| {
+            let _held = hold.lock().unwrap();
+            record.lock().unwrap().push(capture_time_us);
+            shows.load(Ordering::SeqCst)
+        })
+        .unwrap();
+        (thread, seen)
+    }
+
+    fn settle(seen: &Arc<Mutex<Vec<i64>>>, count: usize) {
+        let until = Instant::now() + Duration::from_secs(2);
+        while seen.lock().unwrap().len() < count && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    #[test]
+    fn the_decode_thread_decodes_in_order() {
+        let (mut thread, seen) = decode_thread(Arc::new(AtomicBool::new(true)), Default::default());
+        for t in 1..=5 {
+            assert!(thread.feed(&[0, 0, 0, 1, 0x41], t == 1, t));
+            settle(&seen, t as usize);
+        }
+        assert_eq!(*seen.lock().unwrap(), [1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn a_busy_decoder_drops_to_the_next_key_frame_and_asks_for_one() {
+        let hold: Arc<Mutex<()>> = Default::default();
+        let (mut thread, seen) = decode_thread(Arc::new(AtomicBool::new(true)), hold.clone());
+        let held = hold.lock().unwrap();
+        // One unit is being decoded and two wait; the next one doesn't fit.
+        thread.feed(&[], true, 1);
+        settle(&seen, 0);
+        thread.feed(&[], false, 2);
+        thread.feed(&[], false, 3);
+        assert!(!thread.feed(&[], false, 4), "dropped: asks for a key frame");
+        thread.feed(&[], false, 5);
+        drop(held);
+        settle(&seen, 3);
+        // 5 is after the gap and isn't a key frame; 6 is.
+        assert!(thread.feed(&[], true, 6));
+        settle(&seen, 4);
+        assert_eq!(*seen.lock().unwrap(), [1, 2, 3, 6]);
+    }
+
+    #[test]
+    fn a_failed_decode_asks_for_a_key_frame_and_waits_for_it() {
+        let shows = Arc::new(AtomicBool::new(false));
+        let (mut thread, seen) = decode_thread(shows.clone(), Default::default());
+        assert!(thread.feed(&[], false, 1));
+        settle(&seen, 1);
+        assert!(
+            !thread.feed(&[], false, 2),
+            "the failure is reported on the next unit"
+        );
+        settle(&seen, 1);
+        shows.store(true, Ordering::SeqCst);
+        thread.feed(&[], true, 3);
+        settle(&seen, 2);
+        assert_eq!(*seen.lock().unwrap(), [1, 3], "2 waited for the key frame");
+    }
+
+    #[test]
+    fn dropping_the_feed_ends_the_decode_thread() {
+        let (mut thread, seen) = decode_thread(Arc::new(AtomicBool::new(true)), Default::default());
+        thread.feed(&[], true, 1);
+        drop(thread);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [1],
+            "finished the unit it had, then stopped"
+        );
     }
 }
