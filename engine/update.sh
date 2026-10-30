@@ -56,6 +56,7 @@ git commit -qm "engine: snapshot upstream $NEW + hbb_common ${NEW_HBB:0:7} + cpa
 git checkout -q -- engine/rustdesk
 
 echo "→ 3/4 re-applying our diff with 3-way (in the index)…"
+follow_moves "$OURS" HEAD | sed 's/^/   /'
 APPLYLOG=$(mktemp -t rustdesk-apply.XXXXXX)
 # --cached: applies against the index — immune to CRLF/locks of the working tree.
 git apply --binary --cached --3way --directory=engine/rustdesk "$OURS" 2>"$APPLYLOG" || true
