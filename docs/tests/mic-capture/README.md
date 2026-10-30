@@ -43,7 +43,7 @@ Output for the tone: the Mac mini Speakers, at volume 0.44.
 | 9 | The sender | `make forwards`, with the default input and with `MIC="Microsoft® LifeCam HD-3000"` | The request names the input; nothing before the host accepts; `AudioFormat` 48000 Hz, 1 channel first, then only `AudioFrame`s, about 100 a second; nothing after the host stops it | **PASS** both ways: 300 `AudioFrame`s in 3 s, 0 after `not-allowed`. The request named the LifeCam when picked, and "" for the default |
 | 10 | Unplugging | `make unplug MIC="Paolo-Jabra-headset"`, the headset turned off within a minute | The host is told `on: false`, no frame follows, the menu hears `microphone-lost` | **Not yet**: the headset wasn't turned off within the minute |
 | 11 | Voice processing | `make voice MIC="Microsoft® LifeCam HD-3000" SPEAKER="Mac mini Speakers"` | The engine starts with voice processing at least one way, recording the picked input | **FAIL** all four ways: the engine didn't start (-10875), the system's defaults included. Each time, turning voice processing on blocked for minutes. Decision 0026 |
-| 12 | Nothing left behind | `make clean` | Both grants reset, both bundles unregistered and deleted, the logs deleted, no `~/Library/Preferences/RemoteDisplay` | Pending, after tests 8 and 10 |
+| 12 | Nothing left behind | `make clean` | Both grants reset, both bundles unregistered and deleted, the logs deleted, no `~/Library/Preferences/RemoteDisplay` | **PASS**: also no Launch Services entry and no probe process left, and the home folder's usual build locations unchanged |
 
 ## Runtime findings
 
