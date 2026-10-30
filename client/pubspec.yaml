@@ -28,9 +28,11 @@ dependencies:
   window_manager:
     git:
       url: https://github.com/rustdesk-org/window_manager
+      ref: cf4aef0512092fad9344a27ffe1c47ad83269dfc
   desktop_multi_window:
     git:
       url: https://github.com/rustdesk-org/rustdesk_desktop_multi_window
+      ref: cddc2e64f8fefce4f80db87b20bcda2dd019bed6
   # Deep links on mobile (remotedisplay://connection/new/<host>?password=…) — same
   # source as flutter_hbb's to avoid duplicating the resolution.
   uni_links:
