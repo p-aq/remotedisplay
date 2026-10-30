@@ -436,7 +436,13 @@ pub fn core_main() -> Option<Vec<String>> {
                     // make its permission checklist flicker and could trigger a mid-
                     // session engine restart).
                     let tmp = format!("{}.tmp", path);
-                    let body = format!("{{\"accessibility\":{},\"screen\":{}}}", acc, scr);
+                    // remotedisplay: plus the owner's switch (decision 0009). Booleans
+                    // only: the app reads this file as [String: Bool].
+                    let fwd = crate::server::device_forward::is_allowed();
+                    let body = format!(
+                        "{{\"accessibility\":{},\"screen\":{},\"device_forward\":{}}}",
+                        acc, scr, fwd
+                    );
                     if std::fs::write(&tmp, &body).is_ok() {
                         let _ = std::fs::rename(&tmp, &path);
                     }
@@ -553,6 +559,21 @@ pub fn core_main() -> Option<Vec<String>> {
                         Err(err) => println!("set-lan-password failed: {err}"),
                     },
                     None => println!("set-lan-password failed: no password on stdin"),
+                }
+            }
+            return None;
+        } else if args[0] == "--set-device-forward" {
+            // remotedisplay: the owner's switch for camera and microphone forwarding
+            // (decision 0009). User-level like --set-lan-password: it reaches the running
+            // --server over IPC (same user) and persists the option.
+            if !is_cli_setting_change_disabled() {
+                use crate::server::device_forward;
+                match args.get(1).and_then(|a| device_forward::option_value(a)) {
+                    Some(value) if args.len() == 2 => {
+                        crate::ipc::set_option(device_forward::OPTION, value);
+                        println!("Done!");
+                    }
+                    _ => println!("set-device-forward failed: use on or off"),
                 }
             }
             return None;

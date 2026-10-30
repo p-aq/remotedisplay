@@ -120,7 +120,7 @@ cargo build --locked --release --features hwcodec,screencapturekit --bin rustdes
 It builds in about 3 minutes and the binary links `ScreenCaptureKit.framework`. `pomace`
 needs only the macOS SDK: no iOS platform, simulator or Metal toolchain. `xcodebuild`
 leaves a small `pomace-*` folder in `~/Library/Developer/Xcode/DerivedData` and creates
-`~/Library/Caches/org.swift.swiftpm`. Opening the Xcode app the first time does much
+`~/Library/Caches/org.swift.swiftpm`, `~/Library/org.swift.swiftpm` and `~/.swiftpm`. Opening the Xcode app the first time does much
 more: it installs system packages into `/Library/Developer` and `/Library/Apple` (the
 latter protected by SIP, so it can't be removed by hand) and offers iOS and watchOS
 simulators (about 18 GB, not needed). To keep a Mac closer to how it was, accept the

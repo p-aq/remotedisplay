@@ -22,7 +22,10 @@ all the configuration and status:
 - **Connect from another device**: LAN and Tailscale `ip:port` with copy.
 - **Active sessions**: connected peers (lsof on the engine, port 21118) + *Disconnect all*
   (restarts the engine).
-- **Settings**: Open at Login, password (Set…/Change…), access mode.
+- **Settings**: Open at Login, password (Set…/Change…), access mode, *Let controllers share their
+  camera and microphone* (off by default; `remotedisplayd --set-device-forward on|off` over IPC,
+  state read back from `remotedisplay-perms.json`'s `device_forward`). Forwarding itself comes with
+  the camera & audio forwarding spec's Phases 1 and 2.
 - **About**: engine version, open logs, reveal configuration.
 
 Opens by itself on startup if setup or password is missing; also on double-click on the app
