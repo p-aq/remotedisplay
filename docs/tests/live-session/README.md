@@ -55,7 +55,8 @@ Run 2026-10-30. A person at both Macs did the steps and typed the admin password
   meant to keep it out of Sound › Output. It also keeps it out of Input, and it can't be
   the Mac's default input. Apps with their own picker, such as QuickTime, still list it,
   which matches Setup's wording. An app that only uses the default input can't use it,
-  and the Phase 2 gate names Dictation.
+  and the Phase 2 gate names Dictation. [Decision 0031](../../architecture/decisions/0031-virtual-mic-can-be-the-default-input.md)
+  lets it be the default input.
 - **Without Screen Recording there's no session to show the switch in.** The client
   waits for the first frame behind a modal dialog. On a macOS 14+ host the only
   "unavailable" case is Screen Recording being off, so the switch's note

@@ -2,7 +2,8 @@
 
 - **Status:** Accepted, 2026-10-24, on Phase 0's results (`docs/tests/virtual-mic/`).
   Proposed earlier the same day from review findings A-5, O-2, O-3, O-4 (PR #16).
-  Answers issues #8 and #9; Zoom and Teams (test 8) are still to be confirmed.
+  Answers issues #8 and #9; Zoom and Teams (test 8) are still to be confirmed. Amended
+  by decision 0031: the device can be the default input.
 - **Original design:** Extends the spec's Option A. The spec spiked both options and
   left the choice open; this leans towards A.
 

@@ -30,6 +30,7 @@ host, with no glitches ([results](#phase-2-the-engines-path)).
 | `harness/driver/Info.plist` + Makefile `driver` | Option A: BlackHole v0.7.2 (commit `561d934`) fetched at build time and configured, not modified, with its own build constants ([decision 0015](../../architecture/decisions/0015-virtual-mic-harness.md)). | `server-mac/AudioDriver/` |
 | `harness/Makefile` | Builds everything with the Command Line Tools; `install-driver` / `uninstall-driver` need an admin and touch only our own bundle. `make engine` runs the engine's own path instead of the feeder (Phase 2). | Folded into `server-mac/Makefile` |
 | `harness/gate.sh` | One command per gate test: starts the feeder, waits with nothing reading (phase 1), probes (phase 2), stops. `ANNOUNCE=1` speaks the phases aloud for listening tests. | — |
+| `harness/default_check.c` + Makefile `default-check` | `rd-default-check`: with the server app's driver installed, checks [decision 0031](../../architecture/decisions/0031-virtual-mic-can-be-the-default-input.md)'s defaults (below). Sets each default and puts it back | — |
 
 ## What was tested and the result
 
@@ -105,6 +106,24 @@ to its sound in the device.
 - **Nothing left behind.** After `a-uninstall` the HAL folder holds the same four drivers
   as before, and the probe lists no Remote Display device.
 
+### Default input (decision 0031)
+
+The first live session found Remote Display Microphone missing from System Settings ›
+Sound › Input ([live session](../live-session/README.md)). The server app's driver
+(build 2) can now be the default input. This harness's own driver keeps the constants
+its tests measured.
+
+**Not run yet:** it needs an admin. With the server app's driver installed,
+`make default-check` passes when:
+
+- Remote Display Microphone is listed and becomes the default input when set;
+- neither it nor the feeder becomes the default output or the system output;
+- the feeder stays out of the device list.
+
+By hand, Sound › Input should list it and Sound › Output shouldn't. Built without
+installing, the driver answers "can be default" on both devices, and the feeder is
+hidden (decision 0031).
+
 ## Runtime findings
 
 - **`killall coreaudiod`, not `launchctl kickstart`.** With SIP on (macOS 15.7),
@@ -155,6 +174,12 @@ ANNOUNCE=1 ./gate.sh b-when-tapped     # listen: beeps in phase one only
 ./gate.sh a-signal
 source <toolchains>/env.sh && make engine   # Phase 2: the engine's own path
 ./gate.sh a-uninstall
+
+# Decision 0031: the server app's driver (cd ../../../../server-mac && make first)
+D="../../../../server-mac/.build/Remote Display Server.app/Contents/Library/Audio/Plug-Ins/HAL/RemoteDisplayMicrophone.driver"
+sudo sh -c 'rm -rf /Library/Audio/Plug-Ins/HAL/RemoteDisplayMicrophone.driver && cp -RX "$0" /Library/Audio/Plug-Ins/HAL/ && killall coreaudiod' "$D"
+make default-check                     # then look at Sound › Input and Output
+sudo sh -c 'rm -rf /Library/Audio/Plug-Ins/HAL/RemoteDisplayMicrophone.driver && killall coreaudiod'
 ```
 
 `LEVEL` sets the burst volume (default 0.3, or 0.1 for muted-when-tapped), `LISTEN` the
