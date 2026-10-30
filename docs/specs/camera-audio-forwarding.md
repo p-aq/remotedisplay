@@ -221,6 +221,8 @@ Microphone capture (exists, needs fixes). start_voice_call() in src/client/io_lo
 - It sets the input with set_voice_call_input_device(…, false), which keeps any device already set, so a later pick is ignored. Pass the chosen device with set_if_present = true and restart capture when it changes.
 - The chosen device is a process-wide global, shared by every session. Scope it per session.
 
+As built ([decision 0023](../architecture/decisions/0023-controller-microphone-capture.md)): the forward doesn't reuse start_voice_call(). That capture is one per process with a global device, so a per-session device would mean reworking upstream's audio service. Each forward opens its own capture of the chosen input instead (src/client/device_forward/mic.rs, cpal on its own thread), encoded as a voice call is: Opus, low delay, 10 ms frames, always 48 kHz mono. The voice call is unchanged. The capture fails at once without macOS's microphone access, which the Devices menu asks for first.
+
 Echo. Without headphones, the far end's voice goes host → controller speakers → controller mic → host virtual mic → back into the call. The host app's echo canceller can't remove it: the speaker is on another machine and 100–300 ms away. Capture the controller mic with Apple's voice processing (AVAudioEngine's input node with voice processing on), which cancels echo against the controller's own speaker output. If Phase 2 shows that isn't enough, v1 asks for headphones, with a hint in the Devices menu when both Microphone and Play the Mac's sound here are on.
 
 Sending (new). A new src/client/device_forward.rs owns the camera thread: capture, encode, wrap in CameraFrame, hand to the session's sender. Its rules:

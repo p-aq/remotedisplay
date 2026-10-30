@@ -18,6 +18,10 @@ pub mod macos;
 #[cfg(target_os = "macos")]
 pub mod macos_camera_capture;
 
+// remotedisplay: the controller's microphone access for microphone forwarding.
+#[cfg(target_os = "macos")]
+pub mod macos_mic_capture;
+
 // remotedisplay: the host's camera sink for camera forwarding.
 #[cfg(target_os = "macos")]
 pub mod macos_camera_sink;
