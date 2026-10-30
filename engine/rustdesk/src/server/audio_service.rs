@@ -168,6 +168,17 @@ pub fn is_screen_capture_kit_available() -> bool {
         .any(|host| *host == cpal::HostId::ScreenCaptureKit)
 }
 
+/// remotedisplay: whether a controller can hear this Mac's sound, for its Devices menu
+/// (host_sound.rs, decision 0028).
+#[cfg(all(target_os = "macos", feature = "screencapturekit"))]
+pub fn host_sound_status() -> &'static str {
+    host_sound::status(
+        &get_audio_input(),
+        is_screen_capture_kit_available(),
+        crate::platform::macos::is_can_screen_recording(false),
+    )
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 mod cpal_impl {
     use self::service::{Reset, ServiceSwap};
