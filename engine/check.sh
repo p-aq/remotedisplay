@@ -29,19 +29,23 @@ ensure_upstream_tag "$NEW"
 OLD_HBB=$(hbb_commit_of "$BASE"); NEW_HBB=$(hbb_commit_of "$NEW")
 ensure_hbb_commit "$OLD_HBB"
 ensure_hbb_commit "$NEW_HBB"
+OLD_CPAL=$(cpal_commit_of "$BASE"); NEW_CPAL=$(cpal_commit_of "$NEW")
+ensure_cpal_commit "$OLD_CPAL"
+ensure_cpal_commit "$NEW_CPAL"
 
 echo "upstream $BASE → $NEW:$(git diff --shortstat "$BASE" "$NEW" -- . ':(exclude)libs/hbb_common')"
 echo "hbb_common ${OLD_HBB:0:7} → ${NEW_HBB:0:7}:$(git diff --shortstat "$OLD_HBB" "$NEW_HBB")"
+echo "cpal ${OLD_CPAL:0:7} → ${NEW_CPAL:0:7}:$(git diff --shortstat "$OLD_CPAL" "$NEW_CPAL")"
 
 OURS=$(mktemp -t rustdesk-ours.XXXXXX)
-our_diff HEAD "$BASE" "$OLD_HBB" > "$OURS"
+our_diff HEAD "$BASE" "$OLD_HBB" "$OLD_CPAL" > "$OURS"
 echo "our diff: $(grep -c '^diff --git' "$OURS") files"
 
 # Pristine snapshot of NEW in a TEMPORARY index, then 3-way apply of our diff on it.
 TMPIDX=$(mktemp -t rustdesk-idx.XXXXXX); rm -f "$TMPIDX"
 LOG=$(mktemp -t rustdesk-apply.XXXXXX)
 export GIT_INDEX_FILE="$TMPIDX"
-stage_pristine_snapshot "$NEW" "$NEW_HBB"
+stage_pristine_snapshot "$NEW" "$NEW_HBB" "$NEW_CPAL"
 PRISTINE=$(git write-tree)
 RC=0
 git apply --binary --cached --3way --directory=engine/rustdesk "$OURS" 2>"$LOG" || RC=$?

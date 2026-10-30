@@ -272,6 +272,8 @@ As built ([decision 0021](../architecture/decisions/0021-microphone-forward-on-t
 
 Speakers: turn on the existing ScreenCaptureKit path. RustDesk captures system sound through ScreenCaptureKit behind the screencapturekit cargo feature. release/release-mac.sh builds the host without it (--features hwcodec), so src/server/audio_service.rs falls back to the default input device, usually the Mac's microphone. Enabling the feature gives controllers the host's real sound, but isn't enough on its own: with the feature on, get_device() still falls back to get_audio_input(""), which ends at the host's default input device, whenever ScreenCaptureKit is unavailable or an audio-input option is set. On a Mac host, system-sound capture must never fall back to an input device; when ScreenCaptureKit audio is unavailable, the feature reports itself unavailable. This is a code change in Phase 3, not just a build flag. release/release-mac.sh builds both the client library and the server binary, so the change applies only to the server's loopback and leaves the client's mic capture alone. Core Audio taps are the fallback.
 
+As built ([decision 0022](../architecture/decisions/0022-vendored-cpal-excludes-own-audio.md)): the capture leaves out remotedisplayd's own audio. ScreenCaptureKit captures by process, so without that the microphone remotedisplayd plays into Remote Display Microphone went back to the controller. cpal is vendored into the engine to carry the change.
+
 Accepting requests. src/server/connection.rs handles the new messages:
 
 - Check the owner's setting, a new engine option rd-allow-device-forward, and that the pieces are installed.
