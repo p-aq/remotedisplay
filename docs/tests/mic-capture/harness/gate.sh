@@ -21,7 +21,7 @@ make --no-print-directory sends
 echo "== 5. The controller's sender: AudioFormat, then AudioFrames, only after the host accepts"
 make --no-print-directory forwards
 
-echo "== 6. Unplug the microphone, or turn the headset off, when asked"
+echo "== 6. Unplug the microphone, or turn the headset off, when the Mac says so"
 make --no-print-directory unplug
 
 echo "== 7. Apple's voice processing; macOS asks for rd-voice-probe too: click Allow"

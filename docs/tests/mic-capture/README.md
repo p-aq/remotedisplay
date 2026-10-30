@@ -9,7 +9,7 @@ Microphone capture; decisions
 [0026](../../architecture/decisions/0026-echo-headphones-not-voice-processing.md)). Also
 measures Apple's voice processing against echo.
 
-**Status:** capture and the sender pass on this Mac with a USB webcam's microphone: 100 frames a second of 48 kHz mono Opus, a tone through the speakers heard 60 dB over the room, nothing before the host accepts or after it stops. The microphone list answers in under 0.1 s before macOS has been asked. A Bluetooth headset's 16 kHz input sends at 100 frames a second too. The first run found three bugs, now fixed: a 100 Hz buzz on 16 kHz inputs, a list that waited on the microphone prompt (and output-only speakers with no configs), and a default input that went away unnoticed. Apple's voice processing didn't start here in any of four ways, so echo stays the headphones hint (decision 0026). Still to do: a voice through the headset, and unplugging ([not yet tested](#not-yet-tested)).
+**Status:** capture and the sender pass on this Mac with a USB webcam's microphone: 100 frames a second of 48 kHz mono Opus, a tone through the speakers heard 60 dB over the room, nothing before the host accepts or after it stops. The microphone list answers in under 0.1 s before macOS has been asked. A Bluetooth headset's 16 kHz input carries a voice at 100 frames a second too. Turning the headset off ends the forward, and the host and the menu are told. The first run found three bugs, now fixed: a 100 Hz buzz on 16 kHz inputs, a list that waited on the microphone prompt (and output-only speakers with no configs), and a default input that went away unnoticed. Apple's voice processing didn't start here in any of four ways, so echo stays the headphones hint (decision 0026).
 
 ## What's here
 
@@ -39,11 +39,11 @@ Output for the tone: the Mac mini Speakers, at volume 0.44.
 | 5 | Access refused | `make revoke`, then `make nothing` | `start` fails at once with "microphone access isn't allowed"; nothing is sent | **PASS**: refused in 0.15–0.2 ms |
 | 6 | Prompt | `make ask` | macOS asks; Allow grants access | **PASS**: answered in 23 s, and again after each rebuild |
 | 7 | Capture, USB | `make sends MIC="Microsoft® LifeCam HD-3000" SPEAKER="Mac mini Speakers"` | 95–105 frames a second, each 10 ms of 48 kHz mono Opus; the room isn't digital silence; a second of 1 kHz tone is at least 10 dB over the room at 1 kHz; at most one frame after the capture is dropped | **PASS**: the first frame 240 ms after starting, 100.1 a second; room −44.6 dBFS RMS; 1 kHz at −100.2 dBFS before the tone and −39.9 dBFS during it; 0 frames after stopping |
-| 8 | Capture, Bluetooth | `make sends MIC="Paolo-Jabra-headset" SPEAKER="Mac mini Speakers"`, run five times | As test 7 | The path works and the checks fail: 99.8–100.0 frames a second, at most one after stopping. The first second of the first run was digital zeros ([findings](#runtime-findings)). The headset heard the room at −95 dBFS and the tone at −94 dBFS: almost nothing. That fits a muted mic, one not worn, or its own noise suppression. The tone check doesn't suit a noise-cancelling headset; a voice check is [still to do](#not-yet-tested) |
+| 8 | Capture, Bluetooth | `make sends MIC="Paolo-Jabra-headset" SPEAKER="Mac mini Speakers"`, silent five times, then three times while a person counts out loud | As test 7; and a voice is heard over the silent runs | The path works, but the test's own checks fail. 99.8–100.0 frames a second, at most one after stopping. The first second after opening is digital zeros ([findings](#runtime-findings)). Silent, the headset gave −95 dBFS, and the tone only −94 dBFS. Counting, it gave −64 to −71 dBFS: the voice comes through, 25–30 dB over silence, though quietly for a headset mic. The tone check doesn't suit a noise-cancelling headset |
 | 9 | The sender | `make forwards`, with the default input and with `MIC="Microsoft® LifeCam HD-3000"` | The request names the input; nothing before the host accepts; `AudioFormat` 48000 Hz, 1 channel first, then only `AudioFrame`s, about 100 a second; nothing after the host stops it | **PASS** both ways: 300 `AudioFrame`s in 3 s, 0 after `not-allowed`. The request named the LifeCam when picked, and "" for the default |
-| 10 | Unplugging | `make unplug MIC="Paolo-Jabra-headset"`, the headset turned off within a minute | The host is told `on: false`, no frame follows, the menu hears `microphone-lost` | **Not yet**: the headset wasn't turned off within the minute |
+| 10 | Unplugging | `make unplug MIC="Paolo-Jabra-headset"`, the headset powered off when the Mac says so | The host is told `on: false`, no frame follows, the menu hears `microphone-lost` | **PASS**: 640 `AudioFrame`s, then `on: false` about 4 s after the cue, 0 after, and the menu heard `microphone-lost`. The first tries had no spoken cue: the headset was muted (macOS logged a mic gain of 0) or turned off before the test started. Hence the cue ([findings](#runtime-findings)) |
 | 11 | Voice processing | `make voice MIC="Microsoft® LifeCam HD-3000" SPEAKER="Mac mini Speakers"` | The engine starts with voice processing at least one way, recording the picked input | **FAIL** all four ways: the engine didn't start (-10875), the system's defaults included. Each time, turning voice processing on blocked for minutes. Decision 0026 |
-| 12 | Nothing left behind | `make clean` | Both grants reset, both bundles unregistered and deleted, the logs deleted, no `~/Library/Preferences/RemoteDisplay` | **PASS**: also no Launch Services entry and no probe process left, and the home folder's usual build locations unchanged |
+| 12 | Nothing left behind | `make clean` | Both grants reset, both bundles unregistered and deleted, the logs deleted, no `~/Library/Preferences/RemoteDisplay` | **PASS**, after both rounds: also no Launch Services entry and no probe process left, and the home folder's usual build locations unchanged |
 
 ## Runtime findings
 
@@ -67,6 +67,14 @@ Output for the tone: the Mac mini Speakers, at volume 0.44.
   output at 44.1 kHz. Opening its input sends digital zeros for about a second while the
   call link comes up; a second capture right after starts with sound. The host hears
   silence for that second, which is harmless.
+- **Muting a headset isn't losing it.** Its mute button sends macOS a mic gain of 0, then
+  silence. The device stays, so the forward stays on, sending silence, which is right.
+  Powered off, the device goes. macOS then moves the default input and output to the
+  next devices, and back when the headset reconnects.
+- **A person needs a cue to unplug at the right moment.** Working remotely, a typed
+  "unplug it now" arrives late. Twice the headset was off before the test started, and
+  once not within its minute. `make unplug` now says "Unplug the microphone now" through
+  the default output once the forward is sending, so a headset hears it.
 - **Voice processing reported 16 kHz, 2 channels** in all four ways: the headset's rate,
   whatever was picked. That suggests it took its formats from the default devices
   before the picked ones applied.
@@ -80,10 +88,10 @@ Output for the tone: the Mac mini Speakers, at volume 0.44.
 
 ## Not yet tested
 
-- A voice through the Bluetooth headset (test 8): speak during `make sends`, and the
-  "tone" window's RMS should be well above −95 dBFS.
-- Unplugging (test 10), with a named input and with the default: the headset turned
-  off, or the webcam unplugged.
+- Unplugging the default input without naming it. The default is looked up by name, the
+  same way a named input is (test 9 passed with the default), but only a named input was
+  unplugged.
+- A USB microphone unplugged mid-forward.
 - A built-in microphone, and voice processing on a Mac whose defaults are its own
   microphone and speakers (decision 0026).
 - The capture inside a real session, with a host playing it into Remote Display

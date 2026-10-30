@@ -13,7 +13,7 @@
 #   make ask        macOS's microphone prompt for the probe; waits up to 5 minutes
 #   make sends      10 ms Opus frames from the microphone; a tone through the speaker is heard
 #   make forwards   the controller's sender (src/client/device_forward.rs) with the microphone
-#   make unplug     the sender with the microphone, which a person unplugs within a minute
+#   make unplug     the sender with the microphone, which a person unplugs when the Mac says so
 #   make voice      rd-voice-probe: Apple's voice processing, speaking through the speaker
 #   make revoke     forget both probes' microphone access
 #   make clean      revoke, unregister and delete build/ and the logs
@@ -74,8 +74,10 @@ sends:
 forwards:
 	@$(MAKE) --no-print-directory run TESTS=client::device_forward::capture TEST=forwards_the_microphone
 
-# Unplug the microphone, or turn the headset off, once the test says so.
+# Unplug the microphone, or turn the headset off, when the Mac says so. It speaks through
+# the default output once the forward is sending, so a headset hears it too.
 unplug:
+	@(sleep 4; say "Unplug the microphone now") &
 	@$(MAKE) --no-print-directory run TESTS=client::device_forward::capture \
 	  TEST=tells_the_host_when_the_microphone_is_unplugged WAIT=75
 
