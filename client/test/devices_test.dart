@@ -104,6 +104,12 @@ void main() {
       expect(Camera.parseList('nonsense'), isEmpty);
     });
 
+    test('only the test card goes without camera access', () {
+      expect(needsCameraAccess('0x1100000046d0821'), isTrue);
+      expect(needsCameraAccess(kTestPatternCamera), isFalse);
+      expect(kTestPatternCamera, 'remotedisplay-test-pattern');
+    });
+
     test('picks the one on, else the saved one, else the first', () {
       final cameras = Camera.parseList(list);
       expect(

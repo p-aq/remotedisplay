@@ -8,8 +8,8 @@ Camera capture and encode on macOS; decisions
 [0006](../../architecture/decisions/0006-camera-channel-drop-before-encode.md) and
 [0016](../../architecture/decisions/0016-camera-encoder-and-decoder-contract.md)).
 
-**Status:** capture and encode pass on this Mac with a USB camera: 1280×720 at 29.8 fps from Apple's low-latency hardware encoder, and the host's decoder decodes every unit. Without camera access nothing is captured, and the controller's sender sends `CameraFrame`s only between the host's accept and stop. Still to do: the host side, the Devices menu, and other cameras
-([not yet tested](#not-yet-tested)).
+**Status:** capture and encode pass on this Mac with a USB camera: 1280×720 at 29.8 fps from Apple's low-latency hardware encoder, and the host's decoder decodes every unit. Without camera access nothing is captured, and the controller's sender sends `CameraFrame`s only between the host's accept and stop. With `--camera-test-pattern` a generated test card takes the camera's place and decodes the same way, with no camera or camera access. Still to do: other cameras ([not yet tested](#not-yet-tested)).
+
 
 ## What's here
 
@@ -17,8 +17,8 @@ Camera capture and encode on macOS; decisions
 |---|---|
 | `engine/rustdesk/src/platform/macos_camera_capture.mm` | Capture and encode (`HOOKS.md` E5): `AVCaptureSession` in NV12 → `VTCompressionSession` with the encoder settings measured in `docs/tests/camera-extension/` → H.264 Annex B, SPS and PPS in front of each key frame. Lists cameras without Remote Display Camera; picks the camera's own format closest to the request, up to 1920×1080; drops frames only before encoding (decision 0006) |
 | `engine/rustdesk/src/client/device_forward.rs` | The controller's sender (`HOOKS.md` E6), unit-tested with a fake camera. Its `capture` module holds `forwards_the_camera`, `#[ignore]`d: the sender with the real camera and a host played by the test |
-| `engine/rustdesk/src/platform/macos_camera_capture.rs` | The Rust side: `list()`, `access()`, `request_access()`, `Capture::start()` with `request_key_frame()`, `set_bitrate()`, `set_skipping()`, `stats()`; dropping a `Capture` stops the camera. Its `capture` module holds four `#[ignore]`d tests, described below |
-| `harness/Makefile` | Builds the engine's test binary and wraps it as `rd-camera-probe.app`, so camera access is asked for and granted to that bundle and not to the terminal; builds `rd-camera-decode`. Targets `list`, `nothing`, `ask`, `sends`, `forwards`, `revoke`, `clean` |
+| `engine/rustdesk/src/platform/macos_camera_capture.rs` | The Rust side: `list()`, `access()`, `request_access()`, `Capture::start()` with `request_key_frame()`, `set_bitrate()`, `set_skipping()`, `stats()`; dropping a `Capture` stops the camera. `use_test_pattern()` (`--camera-test-pattern`) lists the test card first, as *Test pattern*. Its `capture` module holds four `#[ignore]`d tests, described below, and the test card's test, which runs with every `cargo test` |
+| `harness/Makefile` | Builds the engine's test binary and wraps it as `rd-camera-probe.app`, so camera access is asked for and granted to that bundle and not to the terminal; builds `rd-camera-decode`. Targets `list`, `nothing`, `ask`, `sends`, `forwards`, `pattern`, `revoke`, `clean` |
 | `harness/decode.mm` | `rd-camera-decode`: decodes the stream the capture test saved with the host's decoder from `docs/tests/camera-extension/harness/camera_codec.mm`, checks the last frame is a picture (luma spread, chroma near neutral) and writes it as a PNG, which `make clean` deletes |
 | `harness/gate.sh` | The tests in order, with the prompt to answer; ends by revoking the grant and deleting the bundle and the frames |
 | `harness/probe-Info.plist` | The bundle's identity, `app.remotedisplay.spike.camera-probe`: no Dock icon, the camera usage text macOS requires, and the Continuity Camera key |
@@ -39,6 +39,7 @@ with a person answering the camera prompt. The camera is a Microsoft LifeCam HD-
 | 6 | Capture and encode | `make sends` | See the checks below | **PASS**: 1280×720, 30 fps, `h264.rtvc` with the hardware required. 119 units in the first 4 s (29.8 fps, 1,918 kbit/s), 4 key frames; key frame on request, skipping and stop as required. The first run failed only the stop check, which wrongly counted a unit handed out *during* stop; the test now drains that one first ([findings](#runtime-findings)) |
 | 7 | Decodes on the host | `rd-camera-decode` on what test 6 sent | Every unit decodes; the last frame is a picture | **PASS**: 193 of 193 decoded, none needing a key frame, none rejected. Last frame 1280×720, luma mean 100, spread 52.7, chroma mean 128. The first run's 192 units decoded the same way |
 | 8 | Nothing left behind | `make clean` | Grant reset, bundle unregistered and deleted, frames deleted, no `~/Library/Preferences/RemoteDisplay` | **PASS**; also no Launch Services entry and no probe process left |
+| 10 | The test card | `make pattern` (or `cargo test --lib sends_the_test_pattern_as_h264`); no camera or camera access needed | Refused without `--camera-test-pattern`; with it, listed first; 1280×720 at 30 fps; at least 40 units in 2 s, the first a key frame with SPS and PPS; a key frame on request; timestamps only increase; nothing refused by the encoder or sent after stopping; the host's decoder takes every unit | **PASS**: `h264.rtvc` with the hardware required, 58 units in 2 s, 0 refused; `rd-camera-decode`: 73 of 73 decoded, none needing a key frame, none rejected. The last frame shows the bars, the clock (with milliseconds), the frame counter and the sweeping box |
 | 9 | The sender | `make forwards`, run after the sender was added | The request carries the camera's real format; no `CameraFrame` before the host accepts; frames at camera rate, each one Annex B unit with `pts` = capture time in ms, starting with a key frame; a key frame within three frames of a request; none after the host stops it | **PASS**: 1280×720, 30 fps, *Microsoft® LifeCam HD-3000*; 0 frames in the second before accepting, 90 `CameraFrame`s in 3 s, 2 key frames, 15 in the half second after the request, 0 after the host's `not-allowed` |
 
 Test 6 starts the default camera at the spec's 1280×720, 30 fps, 2 Mbit/s and checks:
@@ -88,6 +89,8 @@ Final run: 227 frames captured, 193 encoded, 34 skipped (the second with skippin
 - The bitrate change's effect over time: the encoder's tracking of a live change was
   measured in `docs/tests/camera-extension/` (2,000 → 500 kbit/s within 3%); here only
   that the change is accepted.
+- The test card in a real session, chosen from the Devices menu of a client started with
+  `--camera-test-pattern`.
 - The sender inside a real session: the io loop's camera branch and a host's answers over
   the network need the host side and a second machine (or a live `--server` here). The
   backlog and full-queue rules are unit-tested with a fake camera only. And the client

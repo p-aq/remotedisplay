@@ -809,7 +809,9 @@ class _SessionToolbarState extends State<SessionToolbar> {
     final hostWhy = hostReason(
         hostStatus(camera, pi.platformAdditions, 'camera'), 'camera',
         hostIsMac: hostIsMac);
-    final permissionWhy = permissionReason(permission, 'camera');
+    final permissionWhy = picked != null && !needsCameraAccess(picked.id)
+        ? null
+        : permissionReason(permission, 'camera');
     if (!mounted) return;
 
     final items = <PopupMenuEntry<void>>[_header('CAMERA')];
@@ -833,8 +835,8 @@ class _SessionToolbarState extends State<SessionToolbar> {
               (cameras.length > 1 ? null : picked.name),
           onTap: () => _setCamera(true, picked.id)));
     }
-    if (cameras.length > 1 &&
-        (sending || (hostWhy == null && permissionWhy == null))) {
+    // Also without camera access, so the test card can still be picked.
+    if (cameras.length > 1 && (sending || hostWhy == null)) {
       for (final c in cameras) {
         items.add(_radio(c.id == picked?.id, Text(c.name), () {
           bind.mainSetLocalOption(key: _optCamera, value: c.id);
@@ -872,18 +874,19 @@ class _SessionToolbarState extends State<SessionToolbar> {
   }
 
   /// Turns this Mac's camera on (as [device]) or off for the host. The first
-  /// time, macOS asks for camera access and the camera goes on only if allowed.
+  /// time, macOS asks for camera access and the camera goes on only if allowed;
+  /// the test card needs none.
   Future<void> _setCamera(bool on, String device) async {
     final sessionId = _ffi.sessionId;
-    if (on) {
+    if (on && needsCameraAccess(device)) {
       final permission = bind.mainGetCapturePermission(kind: 'camera');
       if (permission == 'not-determined') {
         if (!await bind.mainRequestCapturePermission(kind: 'camera')) return;
       } else if (permission != 'allowed') {
         return;
       }
-      bind.mainSetLocalOption(key: _optCamera, value: device);
     }
+    if (on) bind.mainSetLocalOption(key: _optCamera, value: device);
     await bind.sessionSetDeviceForward(
         sessionId: sessionId, kind: 'camera', on: on, device: device);
   }

@@ -77,6 +77,11 @@ pub fn core_main() -> Option<Vec<String>> {
                 _is_quick_support = true;
             } else if arg == "--no-server" {
                 no_server = true;
+            } else if arg == "--camera-test-pattern" {
+                // remotedisplay: offer a test card as a camera, for testing camera
+                // forwarding without one (src/platform/macos_camera_capture.rs).
+                #[cfg(target_os = "macos")]
+                crate::platform::macos_camera_capture::use_test_pattern();
             } else {
                 args.push(arg);
             }

@@ -11,6 +11,7 @@
 #   make ask        macOS's camera prompt for the probe; waits up to 5 minutes for the answer
 #   make sends      720p H.264 from the camera, then decoded by the host's decoder
 #   make forwards   the controller's sender (src/client/device_forward.rs) with the camera
+#   make pattern    the test card (--camera-test-pattern), decoded; needs no camera or access
 #   make revoke     forget the probe's camera access
 #   make clean      revoke, unregister and delete build/ and the captured frames
 
@@ -29,7 +30,7 @@ LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/Launc
 # Same language mode as the engine's build.rs (no ARC).
 CXX       := xcrun clang++ -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -mmacosx-version-min=14.0
 
-.PHONY: all list nothing ask sends forwards run revoke clean
+.PHONY: all list nothing ask sends forwards pattern run revoke clean
 
 # cargo prints where it put the test binary; the bundle wraps that binary.
 all:
@@ -62,6 +63,14 @@ sends:
 
 forwards:
 	@$(MAKE) --no-print-directory run TESTS=client::device_forward::capture TEST=forwards_the_camera
+
+# The test card needs no camera access, so the test binary runs as it is, not as the app.
+pattern:
+	@mkdir -p $(LOGS)
+	HOME=$(BUILD)/home RD_CAMERA_DUMP=1 $(APP)/Contents/MacOS/rd-camera-probe \
+	  $(TESTS)::sends_the_test_pattern_as_h264 --exact --nocapture --test-threads=1
+	$(DECODE) $(LOGS)/stream.bin $(LOGS)/pattern.png
+	@echo "Last frame: $(LOGS)/pattern.png (deleted by make clean)"
 
 # `open` makes the bundle its own app, so macOS asks about the camera for it. The
 # bundle's LSEnvironment points HOME into build/, so the engine's config

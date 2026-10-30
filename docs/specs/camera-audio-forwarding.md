@@ -242,6 +242,8 @@ As built ([decision 0018](../architecture/decisions/0018-devices-menu-state-and-
 
 Testing without a camera. A --camera-test-pattern option sends a moving test card with a running clock, so the VM test bench can run the whole path without hardware.
 
+As built: the option lists the card first among the cameras, as Test pattern, and needs no camera access. The card has colour bars, a box that sweeps across and back every 4 seconds, and a clock with milliseconds plus a frame counter. It's drawn in macos_camera_capture.mm and encoded by the same encoder as a camera. Its engine test runs with every cargo test (docs/tests/camera-capture/, test 10). Start the client with it from a terminal, for example open -n RemoteDisplay.app --args --camera-test-pattern; a client that's already running ignores new arguments.
+
 ## Host side
 
 The host decodes what arrives and re-exposes it through two standard macOS mechanisms: a camera extension for video and an audio device for the mic.
