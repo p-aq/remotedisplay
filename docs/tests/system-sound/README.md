@@ -101,7 +101,10 @@ engine now builds what passed. It wasn't run again on the device.
 ## Not yet tested
 
 - Listening on a real controller. It decodes the same frames, but needs a second
-  machine with the client.
+  machine with the client. The controller now plays them through the spec's jitter
+  buffer ([decision 0029](../../architecture/decisions/0029-speaker-path-jitter-buffer.md)):
+  check for gaps on Tailscale and a busy network, and read the "Audio playback ended" log
+  line for underruns.
 - The *Play the Mac's sound here* switch and its "unavailable" status in a live session.
   The switch is in the Devices menu ([decision 0018](../../architecture/decisions/0018-devices-menu-state-and-ffi.md)),
   and the host's `rd_host_sound` login key, from `host_sound::status`, makes it say

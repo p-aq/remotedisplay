@@ -11,8 +11,6 @@ use cpal::{
 };
 use crossbeam_queue::ArrayQueue;
 use magnum_opus::{Channels::*, Decoder as AudioDecoder};
-#[cfg(not(target_os = "linux"))]
-use ringbuf::{ring_buffer::RbBase, Rb};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -91,6 +89,9 @@ pub use super::lang::*;
 
 // remotedisplay: camera and microphone forwarding on the controller.
 pub mod device_forward;
+// remotedisplay: the real-time audio playback buffer, shared with the host's microphone
+// path (decision 0029).
+pub(crate) mod jitter;
 pub mod file_trait;
 pub mod helper;
 pub mod io_loop;
@@ -134,7 +135,6 @@ pub const SCRAP_X11_REQUIRED: &str = "x11 expected";
 pub const SCRAP_X11_REF_URL: &str = "https://rustdesk.com/docs/en/manual/linux/#x11-required";
 
 #[cfg(not(target_os = "linux"))]
-pub const AUDIO_BUFFER_MS: usize = 3000;
 
 #[cfg(feature = "flutter")]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1186,8 +1186,10 @@ pub struct AudioHandler {
     audio_decoder: Option<(AudioDecoder, Vec<f32>)>,
     #[cfg(target_os = "linux")]
     simple: Option<psimple::Simple>,
+    // remotedisplay: the spec's jitter buffer instead of upstream's AudioBuffer (decision
+    // 0029), with what it did, for the log.
     #[cfg(not(target_os = "linux"))]
-    audio_buffer: AudioBuffer,
+    jitter: Option<(jitter::Writer, Arc<jitter::Stats>)>,
     sample_rate: (u32, u32),
     #[cfg(not(target_os = "linux"))]
     audio_stream: Option<Box<dyn StreamTrait>>,
@@ -1196,128 +1198,6 @@ pub struct AudioHandler {
     device_channel: u16,
     #[cfg(not(target_os = "linux"))]
     ready: Arc<std::sync::Mutex<bool>>,
-}
-
-#[cfg(not(target_os = "linux"))]
-struct AudioBuffer(
-    pub Arc<std::sync::Mutex<ringbuf::HeapRb<f32>>>,
-    usize,
-    [usize; 30],
-);
-
-#[cfg(not(target_os = "linux"))]
-impl Default for AudioBuffer {
-    fn default() -> Self {
-        Self(
-            Arc::new(std::sync::Mutex::new(
-                ringbuf::HeapRb::<f32>::new(48000 * 2 * AUDIO_BUFFER_MS / 1000), // 48000hz, 2 channel
-            )),
-            48000 * 2,
-            [0; 30],
-        )
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-impl AudioBuffer {
-    pub fn resize(&mut self, sample_rate: usize, channels: usize) {
-        let capacity = sample_rate * channels * AUDIO_BUFFER_MS / 1000;
-        let old_capacity = self.0.lock().unwrap().capacity();
-        if capacity != old_capacity {
-            *self.0.lock().unwrap() = ringbuf::HeapRb::<f32>::new(capacity);
-            self.1 = sample_rate * channels;
-            log::info!("Audio buffer resized from {old_capacity} to {capacity}");
-        }
-    }
-
-    fn try_shrink(&mut self, having: usize) {
-        extern crate chrono;
-        use chrono::prelude::*;
-
-        let mut i = (having * 10) / self.1;
-        if i > 29 {
-            i = 29;
-        }
-        self.2[i] += 1;
-
-        #[allow(non_upper_case_globals)]
-        static mut tms: i64 = 0;
-        let dt = Local::now().timestamp_millis();
-        unsafe {
-            if tms == 0 {
-                tms = dt;
-                return;
-            } else if dt < tms + 12000 {
-                return;
-            }
-            tms = dt;
-        }
-
-        // the safer water mark to drop
-        let mut zero = 0;
-        // the water mark taking most of time
-        let mut max = 0;
-        for i in 0..30 {
-            if self.2[i] == 0 && zero == i {
-                zero += 1;
-            }
-
-            if self.2[i] > self.2[max] {
-                self.2[max] = 0;
-                max = i;
-            } else {
-                self.2[i] = 0;
-            }
-        }
-        zero = zero * 2 / 3;
-
-        // how many data can be dropped:
-        // 1. will not drop if buffered data is less than 600ms
-        // 2. choose based on min(zero, max)
-        const N: usize = 4;
-        self.2[max] = 0;
-        if max < 6 {
-            return;
-        } else if max > zero * N {
-            max = zero * N;
-        }
-
-        let mut lock = self.0.lock().unwrap();
-        let cap = lock.capacity();
-        let having = lock.occupied_len();
-        let skip = (cap * max / (30 * N) + 1) & (!1);
-        if (having > skip * 3) && (skip > 0) {
-            lock.skip(skip);
-            log::info!("skip {skip}, based {max} {zero}");
-        }
-    }
-
-    /// append pcm to audio buffer, if buffered data
-    /// exceeds AUDIO_BUFFER_MS,  only AUDIO_BUFFER_MS
-    /// will be kept.
-    fn append_pcm2(&self, buffer: &[f32]) -> usize {
-        let mut lock = self.0.lock().unwrap();
-        let cap = lock.capacity();
-        if buffer.len() > cap {
-            lock.push_slice_overwrite(buffer);
-            return cap;
-        }
-
-        let having = lock.occupied_len() + buffer.len();
-        if having > cap {
-            lock.skip(having - cap);
-        }
-        lock.push_slice_overwrite(buffer);
-        lock.occupied_len()
-    }
-
-    /// append pcm to audio buffer, trying to drop data
-    /// when data is too much (per 12 seconds) based
-    /// statistics.
-    pub fn append_pcm(&mut self, buffer: &[f32]) {
-        let having = self.append_pcm2(buffer);
-        self.try_shrink(having);
-    }
 }
 
 impl AudioHandler {
@@ -1454,7 +1334,9 @@ impl AudioHandler {
                             self.device_channel,
                         );
                     }
-                    self.audio_buffer.append_pcm(&buffer);
+                    if let Some((jitter, _)) = self.jitter.as_mut() {
+                        jitter.write(&buffer);
+                    }
                 }
                 #[cfg(target_os = "linux")]
                 {
@@ -1478,59 +1360,25 @@ impl AudioHandler {
             // too many errors, will improve later
             log::trace!("an error occurred on stream: {}", err);
         };
-        self.audio_buffer
-            .resize(config.sample_rate.0 as _, config.channels as _);
-        let audio_buffer = self.audio_buffer.0.clone();
+        // remotedisplay: the reading side never sleeps or locks the buffer (decision 0029).
+        let (writer, mut reader, stats) =
+            jitter::jitter(config.sample_rate.0, config.channels);
+        self.jitter = Some((writer, stats));
+        // 100 ms of room, so a cycle never allocates.
+        let mut pcm: Vec<f32> =
+            Vec::with_capacity(config.sample_rate.0 as usize / 10 * config.channels as usize);
         let ready = self.ready.clone();
         let timeout = None;
         let stream = device.build_output_stream(
             config,
-            move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
+            move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
                 if !*ready.lock().unwrap() {
                     *ready.lock().unwrap() = true;
                 }
-
-                let mut n = data.len();
-                let mut lock = audio_buffer.lock().unwrap();
-                let mut having = lock.occupied_len();
-                // android two timestamps, one from zero, another not
-                #[cfg(not(target_os = "android"))]
-                if having < n {
-                    let tms = info.timestamp();
-                    let how_long = tms
-                        .playback
-                        .duration_since(&tms.callback)
-                        .unwrap_or(Duration::from_millis(0));
-
-                    // must long enough to fight back scheuler delay
-                    if how_long > Duration::from_millis(6) && how_long < Duration::from_millis(3000)
-                    {
-                        drop(lock);
-                        std::thread::sleep(how_long.div_f32(1.2));
-                        lock = audio_buffer.lock().unwrap();
-                        having = lock.occupied_len();
-                    }
-
-                    if having < n {
-                        n = having;
-                    }
-                }
-                #[cfg(target_os = "android")]
-                if having < n {
-                    n = having;
-                }
-                let mut elems = vec![0.0f32; n];
-                if n > 0 {
-                    lock.pop_slice(&mut elems);
-                }
-                drop(lock);
-
-                let mut input = elems.into_iter();
-                for sample in data.iter_mut() {
-                    *sample = match input.next() {
-                        Some(x) => T::from_sample(x),
-                        _ => T::from_sample(0.),
-                    };
+                pcm.resize(data.len(), 0.0);
+                reader.read(&mut pcm);
+                for (sample, &x) in data.iter_mut().zip(pcm.iter()) {
+                    *sample = T::from_sample(x);
                 }
             },
             err_fn,
@@ -1539,6 +1387,29 @@ impl AudioHandler {
         stream.play()?;
         self.audio_stream = Some(Box::new(stream));
         Ok(())
+    }
+}
+
+// remotedisplay: what the jitter buffer did, for the log (decision 0029).
+#[cfg(not(target_os = "linux"))]
+impl Drop for AudioHandler {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering;
+        if let Some((_, stats)) = &self.jitter {
+            log::info!(
+                "Audio playback ended: {} samples played, {} underruns, {} samples dropped",
+                stats.played.load(Ordering::Relaxed),
+                stats.underruns.load(Ordering::Relaxed),
+                stats.dropped.load(Ordering::Relaxed)
+            );
+        }
+    }
+}
+
+#[cfg(all(test, not(target_os = "linux")))]
+impl AudioHandler {
+    pub(crate) fn jitter_stats(&self) -> Option<Arc<jitter::Stats>> {
+        self.jitter.as_ref().map(|(_, stats)| stats.clone())
     }
 }
 

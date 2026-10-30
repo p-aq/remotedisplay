@@ -43,3 +43,4 @@ architecture README's change log (and its departures table, if it departs).
 | [0026](0026-echo-headphones-not-voice-processing.md) | Echo on the controller: the headphones hint, not Apple's voice processing | Accepted | Departs (no voice processing, measured) |
 | [0027](0027-microphone-driver-in-the-server-app.md) | Remote Display Microphone ships in the server app, BlackHole vendored, installed by an admin AppleScript | Accepted | Follows; extends |
 | [0028](0028-host-sound-status.md) | The host says whether it can share its sound, and the Devices menu shows it | Accepted | Extends (a login key the spec doesn't have) |
+| [0029](0029-speaker-path-jitter-buffer.md) | The client plays received audio through the spec's jitter buffer, shared with the host's microphone path | Accepted | Follows; departs from upstream (`AudioHandler`'s buffer) |
