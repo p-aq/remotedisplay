@@ -7,7 +7,9 @@ FaceTime, Zoom and other apps through its source stream.
 
 **Status:** the harness builds, and the codec path (encode, wire format, decode) passes
 every check. The extension's gate tests haven't run yet, because they need an Apple
-Developer team to sign the extension. Results go in the tables as they come in.
+Developer team to sign the extension. Results go in the tables as they come in. The
+next live session plans them on the server app's extension
+([plan](../live-session/README.md#next-session-the-camera-and-the-calls)).
 
 **Phase 1:** the extension and the container app's install and remove are now in Remote
 Display Server (`server-mac/CameraExtension/`, Setup's Camera row; [decision
