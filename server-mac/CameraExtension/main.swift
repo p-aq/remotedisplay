@@ -52,6 +52,7 @@ final class CameraDevice: NSObject, CMIOExtensionDeviceSource {
     private var sinkRunning = false
     private var lastSinkNs: UInt64 = 0
     private var droppedMismatched = 0
+    private var sourceFormat = SourceFormat()
 
     init(localizedName: String) {
         var fd: CMVideoFormatDescription?
@@ -132,21 +133,16 @@ final class CameraDevice: NSObject, CMIOExtensionDeviceSource {
         if let pb = placeholder { send(pb) }
     }
 
+    /// Sends a placeholder or sink frame to the apps reading the camera. Sink frames keep
+    /// their colour tags, so each gets a format description of its own (SourceFormat.swift).
     private func send(_ pixelBuffer: CVPixelBuffer) {
         let now = hostTimeNs()
-        var timing = CMSampleTimingInfo(
-            duration: CMTime(value: 1, timescale: kCameraFPS),
-            presentationTimeStamp: CMTime(value: CMTimeValue(now), timescale: CMTimeScale(NSEC_PER_SEC)),
-            decodeTimeStamp: .invalid)
-        var sbuf: CMSampleBuffer?
-        let err = CMSampleBufferCreateReadyWithImageBuffer(
-            allocator: nil, imageBuffer: pixelBuffer, formatDescription: format,
-            sampleTiming: &timing, sampleBufferOut: &sbuf)
-        guard err == noErr, let sbuf else {
-            log.error("CMSampleBufferCreateReadyWithImageBuffer failed: \(err)")
-            return
+        do {
+            let sbuf = try sourceFormat.sampleBuffer(for: pixelBuffer, hostTimeNs: now)
+            sourceStream.stream.send(sbuf, discontinuity: [], hostTimeInNanoseconds: now)
+        } catch {
+            log.error("Couldn't wrap a frame for the source stream: \(error.localizedDescription)")
         }
-        sourceStream.stream.send(sbuf, discontinuity: [], hostTimeInNanoseconds: now)
     }
 
     private func makePlaceholder() -> CVPixelBuffer? {

@@ -9,6 +9,7 @@
 #   make feed FEED_ARGS="--seconds 30"
 #   make codec-test            H.264 encode → Annex B → decode checks (no signing needed)
 #   make codec-test-asan       the same under AddressSanitizer, with 20,000 fuzzed frames
+#   make format-test           server-mac's source stream wraps decoded frames (no signing needed)
 
 TEAM_ID     ?=
 SIGN_ID     ?=
@@ -27,6 +28,8 @@ FRAMEWORKS  := -framework CoreFoundation -framework CoreMedia -framework CoreMed
 CODEC_FRAMEWORKS := -framework CoreFoundation -framework CoreMedia -framework CoreVideo -framework VideoToolbox \
                -framework CoreGraphics -framework CoreText
 CODEC_TEST   = $(BUILD)/rd-camera-codec-test
+FORMAT_TEST  = $(BUILD)/rd-camera-format-test
+SERVER_EXT  := ../../../../server-mac/CameraExtension
 BUILD       := build
 APP_ID      := app.remotedisplay.spike
 EXT_ID      := app.remotedisplay.spike.camera
@@ -49,7 +52,7 @@ endif
 # $(call fill,template,output): substitute the team and version placeholders.
 fill = sed -e 's/@TEAM_ID@/$(TEAM)/g' -e 's/@VERSION@/$(VERSION)/g' "$(1)" > "$(2)"
 
-.PHONY: all camera feeder codec codec-test codec-test-asan check-signing install activate deactivate list feed clean
+.PHONY: all camera feeder codec codec-test codec-test-asan format-test check-signing install activate deactivate list feed clean
 
 all: camera feeder codec
 
@@ -111,6 +114,15 @@ codec-test-asan:
 	xcrun clang++ -std=c++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -arch $(ARCH) \
 	  -mmacosx-version-min=14.0 camera_codec.mm test_card.mm codec_test.mm -o $(CODEC_TEST)-asan $(CODEC_FRAMEWORKS)
 	$(CODEC_TEST)-asan --fuzz 20000
+
+# Remote Display Camera's source stream, in the server app's extension
+# (server-mac/CameraExtension/SourceFormat.swift), with frames tagged as the engine's
+# decoder tags them.
+format-test:
+	@mkdir -p $(BUILD)
+	$(SWIFTC) -parse-as-library -o $(FORMAT_TEST) format_test.swift $(SERVER_EXT)/SourceFormat.swift \
+	  $(SERVER_EXT)/NV12Canvas.swift
+	$(FORMAT_TEST)
 
 install: camera
 	rm -rf "$(INSTALLED)"
