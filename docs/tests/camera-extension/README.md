@@ -15,7 +15,10 @@ next live session plans them on the server app's extension
 Display Server (`server-mac/CameraExtension/`, Setup's Camera row; [decision
 0019](../../architecture/decisions/0019-camera-extension-in-the-server-app.md)). Its sink
 accepts only `remotedisplayd`, so the feeder here works only with the harness's own
-extension, which keeps its `app.remotedisplay.spike` identifiers.
+extension, which keeps its `app.remotedisplay.spike` identifiers. The server app's
+extension also wraps each frame for apps with a format made from that frame, because
+decoded frames carry colour tags ([Runtime findings](#runtime-findings)); `make
+format-test` checks it.
 
 ## What's here
 
@@ -28,6 +31,7 @@ extension, which keeps its `app.remotedisplay.spike` identifiers.
 | `harness/test_card.mm`, `.h` | The test card: a moving bar, a millisecond clock and colour bands, drawn straight into NV12. Shared by the feeder and the codec test. | — |
 | `harness/camera_codec.mm`, `.h` | H.264 encode with `VTCompressionSession` → Annex B, and Annex B → AVCC → `VTDecompressionSession`, with input limits ([decisions 0004, 0005, 0016](../../architecture/decisions/README.md)). | Encoder: `src/platform/macos_camera_capture.mm`. Decoder: in front of `macos_camera_sink.mm` |
 | `harness/codec_test.mm` | `rd-camera-codec-test`: ten checks of the codec path in one process. Needs no camera, extension, signing or permission. | A Phase 1 test |
+| `harness/format_test.swift` | `rd-camera-format-test`: five checks that the server app's extension (`server-mac/CameraExtension/SourceFormat.swift`) can send decoded frames and its placeholder to apps. Needs no camera, extension, signing or permission. | A Phase 1 test |
 | `harness/Makefile` | Builds and signs everything with the Command Line Tools ([decision 0014](../../architecture/decisions/0014-phase0-camera-harness.md)). | Folded into `server-mac/Makefile` |
 
 ## What was tested and the result
@@ -88,6 +92,21 @@ Encoder comparison (both pass every check):
 | Luma PSNR, median / min | 60 / 47 dB | 50 / 41 dB |
 | Bitrate after 2,000 → 500 | 488 kbit/s | 499 kbit/s |
 
+### Source stream formats (2026-10-30, issue #2)
+
+`make format-test` on the same Mac mini (macOS 15.7.7). The decoded frames carry the
+tags that the engine's decoder attached in a probe ([Runtime findings](#runtime-findings)):
+
+| Check | What it shows | Result |
+|---|---|---|
+| advertised-format | The stream's advertised format, which has no colour tags, wrapping a decoded frame | **PASS**: refused with −12743, which is what every frame from a controller hit before the fix |
+| placeholder | The placeholder wraps, stamped with the host time, one frame long | **PASS** |
+| decoded-720p | A decoded 720p frame (BT.709) wraps, and apps get its tags | **PASS** |
+| decoded-sd-letterboxed | A 640×360 stream's frame, letterboxed (BT.601, guessed), wraps | **PASS** |
+| switching | Placeholder and decoded frames in turn: all wrap, with a new format only when the tags change | **PASS**: 8/8, 5 formats |
+
+Built against the code before the fix, the three decoded checks fail with −12743.
+
 ## Runtime findings
 
 - **Low-latency mode uses a different encoder.** Asking VideoToolbox for low-latency
@@ -108,6 +127,18 @@ Encoder comparison (both pass every check):
 - TCC charges a process launched from Terminal to Terminal (the "responsible
   process"). Test 7 has to start the feeder with `launchctl submit` so it is responsible
   for itself, as `remotedisplayd` is when the server app launches it.
+- **Decoded frames carry colour tags, and the extension refused them.** VideoToolbox's
+  decoder attaches colour primaries, transfer function, YCbCr matrix and chroma location
+  to every frame. When the stream has none, it guesses: BT.709 at 1280×720, BT.601 at
+  640×360. CoreMedia won't wrap a frame with a format description that lacks its tags
+  (`kCMSampleBufferError_InvalidMediaFormat`, −12743), and the extension wrapped every
+  frame with its advertised format, which has none. So no controller's frame would have
+  reached an app, and with the sink busy the placeholder would have stopped too. The
+  exception would be macOS dropping the tags between `remotedisplayd` and the extension,
+  which only a signed build can show. The harness's feeder sends the test card untagged,
+  so its gate tests wouldn't have caught it. The server app's extension now gives each
+  frame a description made from it (`SourceFormat.swift`, `make format-test`). The
+  harness's extension keeps the old code, which suits its untagged feeder.
 
 ## Re-running
 
@@ -139,12 +170,13 @@ log stream --predicate 'subsystem == "app.remotedisplay.spike.camera"'
 
 5. Remove: `make deactivate`, then delete `/Applications/RDCameraSpike.app`.
 
-The codec checks need none of the above:
+These checks need none of the above:
 
 ```sh
 cd docs/tests/camera-extension/harness
 make codec-test        # both encoders
 make codec-test-asan   # sanitizers, 20,000 fuzzed access units
+make format-test       # the server app's source stream, with decoded frames' tags
 ```
 
 Not covered here: the two microphone options, which get their own harness in
