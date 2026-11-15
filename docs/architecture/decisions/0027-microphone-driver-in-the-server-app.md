@@ -56,6 +56,19 @@
   remove any installed copy, `cp -RX` the bundled one to `/Library/Audio/Plug-Ins/HAL`,
   then `killall coreaudiod` (decision 0013). Cancelling the prompt isn't an error;
   any other failure shows in the row.
+
+  **Since 2026-11-15 root checks what it installs** (`DriverInstallCommand.swift`). The
+  app's bundle belongs to the user, so anything running as the user could change the
+  driver inside it, and root would have installed that for every user. Root now:
+  - copies the bundled driver to a new folder in `/Library/Audio/Plug-Ins` that only it
+    can write;
+  - refuses a copy that contains symbolic links;
+  - verifies the copy with `codesign --verify --strict` against the driver's identifier
+    and, in a build signed by a team, the app's own team;
+  - only then removes the installed driver and moves the copy in.
+
+  A copy or a check that fails leaves the installed driver as it was. An ad-hoc build has
+  no team to pin, so there the check shows only that the driver is whole.
 - ***Remove Camera and Microphone*** removes whichever is there: it deactivates the camera
   extension and deletes the driver, with an admin prompt, then restarts coreaudiod.
 - **The badge.** The menu-bar icon gains a mic badge, and the menu a *Microphone from …*
@@ -77,6 +90,10 @@
     state;
   - the install and remove scripts, run unprivileged on paths with spaces. The copy
     replaced a stale one, its signature verified, and no extended attributes came along.
+- **Tested** without an admin (2026-11-15): `make install-test` in
+  `docs/tests/virtual-mic/harness` runs the checking install command on scratch folders,
+  in eight cases. The signed build's driver passes its team's requirement and fails
+  another team's. Not yet run as root.
 
 - **Tested live** (2026-10-30, an ad-hoc build on a second Mac,
   [live session](../../tests/live-session/README.md)):
