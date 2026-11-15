@@ -159,8 +159,13 @@ final class ServerController {
             // macOS answers whenever it likes, possibly while the menu is open (menuOpenSince).
             self?.whenMenuClosed {
                 guard let self else { return }
+                if let error {
+                    self.cameraError = error
+                } else if self.cameraState != state, state != .working {
+                    // macOS moved on from the failure, as when an admin allows it later.
+                    self.cameraError = nil
+                }
                 if self.cameraState != state { self.cameraState = state }
-                if let error { self.cameraError = error }
             }
         }
         microphoneDriver.onChange = { [weak self] state, error in

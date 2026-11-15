@@ -46,3 +46,4 @@ architecture README's change log (and its departures table, if it departs).
 | [0029](0029-speaker-path-jitter-buffer.md) | The client plays received audio through the spec's jitter buffer, shared with the host's microphone path | Accepted; on 1.5.1 its AudioHandler part is 0030's | Follows; departs from upstream (`AudioHandler`'s buffer) |
 | [0030](0030-engine-rustdesk-1-5-1.md) | The engine moves to RustDesk 1.5.1, and the speaker path keeps upstream's new playback | Accepted | Follows (SYNC.md's update flow); 1.5.1 rather than 1.5.0 |
 | [0031](0031-virtual-mic-can-be-the-default-input.md) | Remote Display Microphone can be the Mac's default input | Accepted | Departs ("can't become a default device"); keeps its goal |
+| [0032](0032-app-update-replaces-the-camera-extension.md) | A new app version asks macOS to replace the installed camera extension | Accepted | Follows (Packaging › Updates); says how |
