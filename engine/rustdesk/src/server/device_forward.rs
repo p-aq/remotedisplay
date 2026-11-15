@@ -304,6 +304,9 @@ pub struct Forwards {
     /// response advertised it.
     told: HashMap<Kind, &'static str>,
     last_key_request: Option<Instant>,
+    /// A key frame request the rate limit held back. The decode thread skips to the next
+    /// key frame without asking again, so it stays owed until sent or a key frame comes.
+    key_owed: bool,
     frames: u64,
     dropped: u64,
     mic_frames: u64,
@@ -363,6 +366,7 @@ impl Forwards {
             mic: None,
             told: HashMap::new(),
             last_key_request: None,
+            key_owed: false,
             frames: 0,
             dropped: 0,
             mic_frames: 0,
@@ -461,6 +465,7 @@ impl Forwards {
                 );
                 self.camera = Some(Mutex::new(feed));
                 self.last_key_request = None;
+                self.key_owed = false;
                 response(Kind::CAMERA, true, "")
             }
             Err(err) => {
@@ -519,13 +524,17 @@ impl Forwards {
             self.dropped += 1;
             return None;
         };
-        let shown = match frame.frame.h264s().frames.first() {
-            Some(unit) => feed.feed(&unit.data, unit.key, frame.capture_time_us),
+        let (shown, key) = match frame.frame.h264s().frames.first() {
+            Some(unit) => (
+                feed.feed(&unit.data, unit.key, frame.capture_time_us),
+                unit.key,
+            ),
             // Only H.264 is forwarded (decision 0005).
-            None => false,
+            None => (false, false),
         };
         self.frames += 1;
-        if shown {
+        self.key_owed = !shown || (self.key_owed && !key);
+        if !self.key_owed {
             return None;
         }
         let now = Instant::now();
@@ -536,6 +545,7 @@ impl Forwards {
             return None;
         }
         self.last_key_request = Some(now);
+        self.key_owed = false;
         Some(key_frame_request())
     }
 
@@ -927,6 +937,42 @@ mod tests {
         assert!(conn.on_message(frame(false, 2)).is_none(), "within 500 ms");
         std::thread::sleep(KEY_FRAME_INTERVAL + Duration::from_millis(20));
         assert!(conn.on_message(frame(false, 3)).is_some());
+    }
+
+    #[test]
+    fn a_key_frame_request_the_rate_limit_held_back_is_sent_later() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut conn = connection(1, &h, &senders);
+        conn.on_message(camera_on());
+        h.shows.store(false, Ordering::SeqCst);
+        assert!(conn.on_message(frame(false, 1)).is_some());
+        assert!(conn.on_message(frame(false, 2)).is_none(), "within 500 ms");
+        // The decode thread now skips to the next key frame without asking again.
+        h.shows.store(true, Ordering::SeqCst);
+        assert!(conn.on_message(frame(false, 3)).is_none(), "within 500 ms");
+        std::thread::sleep(KEY_FRAME_INTERVAL + Duration::from_millis(20));
+        let late = conn
+            .on_message(frame(false, 4))
+            .expect("the request that was held back");
+        assert!(late.camera_control().key_frame_request);
+        std::thread::sleep(KEY_FRAME_INTERVAL + Duration::from_millis(20));
+        assert!(conn.on_message(frame(false, 5)).is_none(), "asked once");
+    }
+
+    #[test]
+    fn a_key_frame_settles_a_request_the_rate_limit_held_back() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut conn = connection(1, &h, &senders);
+        conn.on_message(camera_on());
+        h.shows.store(false, Ordering::SeqCst);
+        assert!(conn.on_message(frame(false, 1)).is_some());
+        assert!(conn.on_message(frame(false, 2)).is_none(), "within 500 ms");
+        h.shows.store(true, Ordering::SeqCst);
+        assert!(conn.on_message(frame(true, 3)).is_none());
+        std::thread::sleep(KEY_FRAME_INTERVAL + Duration::from_millis(20));
+        assert!(conn.on_message(frame(false, 4)).is_none(), "nothing owed");
     }
 
     #[test]
