@@ -41,8 +41,10 @@ enum InstallTest {
         (NSDictionary(contentsOfFile: destination + "/Contents/Info.plist")?["CFBundleVersion"] as? String) ?? "nothing"
     }
 
-    /// Installs `source` over a driver marked "old" and reports what is there afterwards.
-    static func check(_ name: String, source: String, requirement: String? = nil, expect: String, saying: String = "") {
+    /// Installs `source` over a driver marked "old", reports what is there afterwards and
+    /// returns where it is.
+    @discardableResult
+    static func check(_ name: String, source: String, requirement: String? = nil, expect: String, saying: String = "") -> String {
         let hal = root + "/hal-" + name.replacingOccurrences(of: " ", with: "-"), staging = hal + "-staging"
         try! fm.createDirectory(atPath: staging, withIntermediateDirectories: true)
         try! fm.createDirectory(atPath: hal, withIntermediateDirectories: true)
@@ -50,7 +52,8 @@ enum InstallTest {
         try! fm.copyItem(atPath: makeDriver("old-" + name.replacingOccurrences(of: " ", with: "-"), marker: "old"), toPath: destination)
         let command = DriverInstallCommand.install(
             source: source, destination: destination, staging: staging,
-            requirement: requirement ?? DriverInstallCommand.requirement(identifier: id, team: nil), restartAudio: false)
+            requirement: requirement ?? DriverInstallCommand.requirement(identifier: id, team: nil), restartAudio: false,
+            owner: nil)
         let r = run("/bin/sh", ["-c", command])
         let now = installed(destination)
         let left = (try? fm.contentsOfDirectory(atPath: staging)) ?? []
@@ -61,6 +64,7 @@ enum InstallTest {
             failures += 1
             print(r.output)
         }
+        return destination
     }
 
     static func main() {
@@ -85,6 +89,20 @@ enum InstallTest {
               requirement: DriverInstallCommand.requirement(identifier: id, team: "ABCDE12345"), expect: "old",
               saying: "isn't the one it was built with")
         check("the app's driver is missing", source: root + "/nowhere.driver", expect: "old")
+
+        // Whatever started the app chose its umask; under 0 the bundle's files are writable by all.
+        let mask = umask(0)
+        let driver = check("under a umask of 0", source: makeDriver("loose", marker: "new"), expect: "new")
+        umask(mask)
+        let writable = ([driver] + (fm.subpaths(atPath: driver) ?? []).map { driver + "/" + $0 }).filter { path in
+            let mode = (try? fm.attributesOfItem(atPath: path)[.posixPermissions] as? Int) ?? 0o777
+            return mode & 0o022 != 0
+        }
+        print("only its owner can write it".padding(toLength: 30, withPad: " ", startingAt: 0) + " " + (writable.isEmpty ? "PASS" : "FAIL"))
+        if !writable.isEmpty {
+            failures += 1
+            print(writable.joined(separator: "\n"))
+        }
 
         let pinned = DriverInstallCommand.requirement(identifier: "app.remotedisplay.server.mic", team: "ABCDE12345")
         let expected = "=identifier \"app.remotedisplay.server.mic\" and anchor apple generic and certificate leaf[subject.OU] = \"ABCDE12345\""
