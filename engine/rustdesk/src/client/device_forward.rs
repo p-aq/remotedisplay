@@ -515,7 +515,7 @@ impl DeviceForward {
 
     fn camera_on(&mut self, device: Option<&str>) -> Option<Message> {
         // A different camera replaces the running one.
-        self.stop_camera();
+        let was_on = self.stop_camera();
         self.reason.clear();
         let shared = Arc::new(Shared::default());
         match (self.start)(
@@ -538,7 +538,8 @@ impl DeviceForward {
             Err(err) => {
                 log::warn!("Camera not started: {}", err);
                 self.reason = "camera-failed".to_owned();
-                None
+                // The host still holds the forward of the camera it replaced.
+                was_on.then(|| request(Kind::CAMERA, false, None))
             }
         }
     }
@@ -834,8 +835,10 @@ impl DeviceForward {
                 if self.shared.key_needed.swap(false, Ordering::AcqRel) {
                     source.request_key_frame();
                 }
-                // Skip camera frames while units wait too long, until the queue drains.
-                let backlog = left > 0 && unit.at.elapsed() > BACKLOG;
+                // Skip camera frames while units wait too long or the queue is one short of
+                // full, until it drains, so frames are dropped before encoding rather than after.
+                let backlog = left > 0
+                    && (self.skipping || left + 1 >= QUEUE || unit.at.elapsed() > BACKLOG);
                 if backlog != self.skipping {
                     source.set_skipping(backlog);
                     self.skipping = backlog;
@@ -1261,6 +1264,54 @@ mod tests {
         );
         next(&rt, &mut fwd, 50).unwrap();
         assert!(!fake.skipping(), "drained");
+    }
+
+    #[test]
+    fn a_queue_one_short_of_full_skips_before_anything_overflows() {
+        let rt = runtime();
+        let (mut fwd, fake) = forward(ANSWER_TIMEOUT);
+        fwd.switch(camera(true)).unwrap();
+        fwd.on_message(response(Kind::CAMERA, true, ""));
+        fake.emit(true, 1_000);
+        fake.emit(false, 2_000);
+        fake.emit(false, 3_000);
+        next(&rt, &mut fwd, 50).unwrap();
+        assert!(fake.skipping(), "two waiting, none of them old");
+        next(&rt, &mut fwd, 50).unwrap();
+        assert!(fake.skipping(), "stays on until the queue drains");
+        next(&rt, &mut fwd, 50).unwrap();
+        assert!(!fake.skipping(), "drained");
+        assert_eq!(fake.key_frames(), 1, "nothing dropped after encoding");
+    }
+
+    #[test]
+    fn a_new_camera_that_fails_ends_the_forward_it_replaced() {
+        let fake = Arc::new(Fake::default());
+        let camera_fake = fake.clone();
+        let started = AtomicBool::new(false);
+        let start: Start = Box::new(move |_, _, _| {
+            if started.swap(true, Ordering::SeqCst) {
+                hbb_common::bail!("in use");
+            }
+            camera_fake.running.store(true, Ordering::SeqCst);
+            Ok((
+                Box::new(FakeSource(camera_fake.clone())) as Box<dyn Source>,
+                Format::default(),
+            ))
+        });
+        let mut fwd = DeviceForward::with(start, fake_mic(&fake), ANSWER_TIMEOUT, Box::new(|_| {}));
+        fwd.switch(camera(true)).unwrap();
+        fwd.on_message(response(Kind::CAMERA, true, ""));
+        let off = fwd
+            .switch(Switch {
+                device: Some("cam-2".into()),
+                ..camera(true)
+            })
+            .expect("the host is told");
+        let off = off.device_forward_request();
+        assert_eq!((off.kind.enum_value(), off.on), (Ok(Kind::CAMERA), false));
+        assert!(!fake.running());
+        assert!(fwd.state().contains(r#""reason":"camera-failed""#));
     }
 
     #[test]
