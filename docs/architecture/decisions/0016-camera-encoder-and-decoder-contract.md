@@ -17,9 +17,9 @@
   5.6 ms. Both forced key frames on demand and followed a live bitrate change.
 - **Correction (2026-11-16, review of PR #20).** Both runs targeted 2 Mbit/s, but on the
   test card neither came near it, and they spent different amounts: a re-run measured
-  438 kbit/s for `h264.rtvc` and 268 kbit/s for `ave.avc`. So the PSNR gap mostly
-  reflects bits spent, not a better encoder. The latency gap was within one run's noise:
-  the re-run gave 5.2 ms against 2.6 ms.
+  about 438 kbit/s for `h264.rtvc` and 268 to 287 kbit/s for `ave.avc`. So the PSNR gap
+  mostly reflects bits spent, not a better encoder. The latency gap is within run-to-run
+  noise: re-runs put `ave.avc` anywhere from 2.6 to 6.1 ms.
 - The host decodes bytes that arrive from the network. The FreeRDP CVE in the spec
   came from one unchecked field.
 
