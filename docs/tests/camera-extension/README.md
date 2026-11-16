@@ -92,6 +92,11 @@ Encoder comparison (both pass every check):
 | Encode latency, median / p95 / max | 5.1 / 5.6 / 42.6 ms | 5.6 / 6.2 / 11.2 ms |
 | Luma PSNR, median / min | 60 / 47 dB | 50 / 41 dB |
 | Bitrate after 2,000 → 500 | 488 kbit/s | 499 kbit/s |
+| Bits spent on the test card at a 2,000 kbit/s target (re-run 2026-11-16) | 438 kbit/s | 268 kbit/s |
+
+The PSNR row comes from runs that spent these different amounts, so it doesn't compare
+quality per bit ([decision 0016](../../architecture/decisions/0016-camera-encoder-and-decoder-contract.md),
+correction).
 
 ### Source stream formats (2026-10-30, issue #2)
 
