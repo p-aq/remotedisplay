@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>Remote Display Camera</string>
+    <key>CFBundleExecutable</key>
+    <string>app.remotedisplay.server.camera</string>
+    <key>CFBundleIdentifier</key>
+    <string>app.remotedisplay.server.camera</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>app.remotedisplay.server.camera</string>
+    <key>CFBundlePackageType</key>
+    <string>SYSX</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@SHORT_VERSION@</string>
+    <key>CFBundleVersion</key>
+    <string>@VERSION@</string>
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>MacOSX</string>
+    </array>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>CMIOExtension</key>
+    <dict>
+        <!-- Must start with an app group the extension belongs to (see Extension.entitlements). -->
+        <key>CMIOExtensionMachServiceName</key>
+        <string>@TEAM_ID@.app.remotedisplay.server.camera</string>
+    </dict>
+    <key>NSSystemExtensionUsageDescription</key>
+    <string>Shows a Remote Display controller's camera as a webcam on this Mac.</string>
+</dict>
+</plist>
