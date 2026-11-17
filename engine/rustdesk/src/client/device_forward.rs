@@ -567,7 +567,7 @@ impl DeviceForward {
 
     fn mic_on(&mut self, device: Option<&str>) -> Option<Message> {
         // Another microphone replaces the running one.
-        self.stop_mic();
+        let was_on = self.stop_mic();
         self.mic_reason.clear();
         let shared = Arc::new(Shared::default());
         match (self.start_mic)(
@@ -591,7 +591,8 @@ impl DeviceForward {
             Err(err) => {
                 log::warn!("Microphone not started: {}", err);
                 self.mic_reason = "microphone-failed".to_owned();
-                None
+                // The host still holds the forward of the microphone it replaced.
+                was_on.then(|| request(Kind::MICROPHONE, false, None))
             }
         }
     }
@@ -1661,6 +1662,37 @@ mod tests {
             fake.heard_mic(),
             vec![heard("off", "microphone-failed", "")]
         );
+    }
+
+    #[test]
+    fn a_new_microphone_that_fails_ends_the_forward_it_replaced() {
+        let fake = Arc::new(Fake::default());
+        let mic_fake = fake.clone();
+        let started = AtomicBool::new(false);
+        let start: Start = Box::new(|_, _, _| Err(hbb_common::anyhow::anyhow!("unused")));
+        let start_mic: StartMic = Box::new(move |_, _, _| {
+            if started.swap(true, Ordering::SeqCst) {
+                hbb_common::bail!("in use");
+            }
+            mic_fake.mic_running.store(true, Ordering::SeqCst);
+            Ok(Box::new(FakeMic(mic_fake.clone())) as Box<dyn Send>)
+        });
+        let mut fwd = DeviceForward::with(start, start_mic, ANSWER_TIMEOUT, Box::new(|_| {}));
+        fwd.switch(microphone(true)).unwrap();
+        fwd.on_message(response(Kind::MICROPHONE, true, ""));
+        let off = fwd
+            .switch(Switch {
+                device: Some("mic-2".into()),
+                ..microphone(true)
+            })
+            .expect("the host is told");
+        let off = off.device_forward_request();
+        assert_eq!(
+            (off.kind.enum_value(), off.on),
+            (Ok(Kind::MICROPHONE), false)
+        );
+        assert!(!fake.mic_running());
+        assert!(fwd.state().contains(r#""reason":"microphone-failed""#));
     }
 
     #[test]

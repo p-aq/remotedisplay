@@ -315,8 +315,9 @@ pub struct Forwards {
     /// response advertised it.
     told: HashMap<Kind, &'static str>,
     last_key_request: Option<Instant>,
-    /// A key frame request the rate limit held back. The decode thread skips to the next
-    /// key frame without asking again, so it stays owed until sent or a key frame comes.
+    /// A key frame is owed until one shows. The decode thread skips to the next key frame
+    /// without asking again, and the controller ignores a request within its own 500 ms
+    /// limit, so the request is repeated every `KEY_FRAME_INTERVAL` until then.
     key_owed: bool,
     frames: u64,
     dropped: u64,
@@ -565,7 +566,6 @@ impl Forwards {
             return None;
         }
         self.last_key_request = Some(now);
-        self.key_owed = false;
         Some(key_frame_request())
     }
 
@@ -597,11 +597,11 @@ impl Forwards {
     }
 
     fn stop_camera(&mut self, why: &str) {
-        // The feed is dropped last: that waits for its decode thread, and the camera
-        // should be free for other controllers before it.
-        let feed = self.camera.take();
-        self.release(Kind::CAMERA);
-        if feed.is_some() {
+        // The feed is dropped at the end of this condition, before the camera is freed:
+        // dropping it waits for its decode thread to close the sink (at most the unit in
+        // progress), and that close would also stop the stream of a feed another
+        // controller opened in the meantime.
+        if self.camera.take().is_some() {
             log::info!(
                 "Camera forward from connection {} stopped ({}): {} frames, {} dropped",
                 self.conn_id,
@@ -610,6 +610,7 @@ impl Forwards {
                 self.dropped
             );
         }
+        self.release(Kind::CAMERA);
         self.frames = 0;
         self.dropped = 0;
     }
@@ -980,7 +981,13 @@ mod tests {
             .expect("the request that was held back");
         assert!(late.camera_control().key_frame_request);
         std::thread::sleep(KEY_FRAME_INTERVAL + Duration::from_millis(20));
-        assert!(conn.on_message(frame(false, 5)).is_none(), "asked once");
+        assert!(
+            conn.on_message(frame(false, 5)).is_some(),
+            "no key frame came, so it asks again"
+        );
+        assert!(conn.on_message(frame(true, 6)).is_none());
+        std::thread::sleep(KEY_FRAME_INTERVAL + Duration::from_millis(20));
+        assert!(conn.on_message(frame(false, 7)).is_none(), "settled");
     }
 
     #[test]
