@@ -23,9 +23,9 @@
          one differs, and each install asks for an admin. Bump it only when the driver
          changes. -->
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>1.1</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>CFPlugInFactories</key>
     <dict>
         <!-- Our own factory UUID, so this never collides with an installed BlackHole. -->
