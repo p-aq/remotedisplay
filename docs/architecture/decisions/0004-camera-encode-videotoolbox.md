@@ -46,9 +46,14 @@ with the same flags. Tested with a USB camera in `docs/tests/camera-capture/`: 7
   delivers. A frame of any other size is dropped and counted, so the encoder never
   scales.
 - **Format:** the camera's own format closest in area to the request, up to the
-  host's 1920×1080, preferring one that reaches the frame rate. The frame duration
-  is one the format lists, because USB cameras often offer only fixed rates and any
-  other value throws.
+  host's 1920×1080, then the one whose frame rate fits the request best. The frame
+  duration is one the format lists, because USB cameras often offer only fixed rates
+  and any other value throws. **Since 2026-11-17** (review of PR #27), within a
+  format a frame rate range that contains the requested rate wins, then the nearest
+  rate below it, and a faster rate only when nothing at or below it is offered; a
+  rate above the host's 60 fps is never chosen. Before, every range that reached the
+  rate scored the same and the first listed won, so a camera listing 60 fps before
+  30 fps ran at 60 for a 30 fps request, at the bitrate meant for 30.
 - **The one-frame slot (decision 0006)** holds at most one frame inside the encoder.
   A frame that arrives while the encoder is busy is dropped before encoding. The
   sender's backlog rule gets `set_skipping()`, and frames it has to drop after

@@ -35,6 +35,8 @@ static bool WithinLimits(int width, int height) {
     int longSide = width > height ? width : height, shortSide = width > height ? height : width;
     return shortSide >= 16 && longSide <= 1920 && shortSide <= 1080;
 }
+// It also rejects streams above 60 fps (MAX_FPS in src/server/device_forward.rs).
+static const int kMaxFps = 60;
 // The camera extension's device (docs/tests/camera-extension/harness/CameraExtension):
 // never offered for forwarding, or a host that is also a controller would loop.
 static NSString* const kOurManufacturer = @"Remote Display";
@@ -57,6 +59,11 @@ typedef struct {
     char deviceID[256];
     char deviceName[256];
 } MacCameraCaptureInfo;
+
+// One of a format's frame rate ranges, in frames per second.
+typedef struct {
+    double min, max;
+} MacCameraRateRange;
 
 typedef struct {
     uint64_t captured;    // frames the camera delivered
@@ -151,44 +158,64 @@ static AVCaptureDevice* FindCamera(const char* uniqueID) {
     return cameras.firstObject;
 }
 
-// The format closest in size to the request, within the host's limits, preferring one
-// that reaches the requested frame rate. `duration` gets a frame duration the format
-// supports (USB cameras often list fixed rates, and any other value throws), `rate` the
-// frame rate it gives.
+// Which of a format's frame rate ranges serves a request for fps best, or -1 when none gives
+// a rate the host takes. A range gives fps when it contains it, else its nearer end. Any
+// rate at or below fps beats any above it, since the encoder's bitrate is set for fps; then
+// the rate nearer fps wins, then the range with the lower maximum (a fixed rate over a
+// span), then the first listed. `rate` gets the rate it gives, `cost` how far that misses
+// fps, any rate above fps costing more than any below. Exported for the engine's tests.
+extern "C" int MacCameraPickRate(const MacCameraRateRange* ranges, int count, int fps, double* rate,
+                                 double* cost) {
+    int best = -1;
+    double bestCost = 0, bestMax = 0;
+    for (int i = 0; i < count; i++) {
+        double given = MAX(ranges[i].min, MIN((double)fps, ranges[i].max));
+        // c->fps rounds the rate; nothing that rounds above kMaxFps.
+        if (given <= 0 || given >= kMaxFps + 0.5) continue;
+        double miss = given > fps ? kMaxFps + (given - fps) : fps - given;
+        if (best < 0 || miss < bestCost || (miss == bestCost && ranges[i].max < bestMax)) {
+            best = i;
+            bestCost = miss;
+            bestMax = ranges[i].max;
+            *rate = given;
+        }
+    }
+    *cost = bestCost;
+    return best;
+}
+
+// The format closest in size to the request, within the host's limits, then the one whose
+// frame rate serves the request best (MacCameraPickRate). `duration` gets a frame duration
+// the format supports (USB cameras often list fixed rates, and any other value throws),
+// `rate` the frame rate it gives.
 static AVCaptureDeviceFormat* PickFormat(AVCaptureDevice* d, int width, int height, int fps, CMTime* duration,
                                          double* rate) {
     AVCaptureDeviceFormat* best = nil;
     long bestArea = LONG_MAX;
-    double bestShort = 1e9;
+    double bestCost = 0;
+    std::vector<MacCameraRateRange> spans;
     for (AVCaptureDeviceFormat* f in d.formats) {
         CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(f.formatDescription);
         if (!WithinLimits(dims.width, dims.height)) continue;
-        // The range that comes closest to fps without going over it.
-        AVFrameRateRange* range = nil;
-        double reach = 0;
-        for (AVFrameRateRange* r in f.videoSupportedFrameRateRanges) {
-            double v = MIN((double)fps, r.maxFrameRate);
-            if (!range || v > reach) {
-                range = r;
-                reach = v;
-            }
-        }
-        if (!range || reach <= 0) continue;
+        NSArray<AVFrameRateRange*>* ranges = f.videoSupportedFrameRateRanges;
+        spans.clear();
+        for (AVFrameRateRange* r in ranges) spans.push_back({r.minFrameRate, r.maxFrameRate});
+        double given = 0, cost = 0;
+        int i = MacCameraPickRate(spans.data(), (int)spans.size(), fps, &given, &cost);
+        if (i < 0) continue;
         long area = labs((long)dims.width * dims.height - (long)width * height);
-        double shortfall = fps - reach;
-        if (area < bestArea || (area == bestArea && shortfall < bestShort)) {
+        if (area < bestArea || (area == bestArea && cost < bestCost)) {
             best = f;
             bestArea = area;
-            bestShort = shortfall;
-            if (range.maxFrameRate <= fps) {
+            bestCost = cost;
+            *rate = given;
+            AVFrameRateRange* range = ranges[i];
+            if (given >= range.maxFrameRate) {
                 *duration = range.minFrameDuration;
-                *rate = range.maxFrameRate;
-            } else if (fps >= range.minFrameRate) {
-                *duration = CMTimeMake(1, fps);
-                *rate = fps;
-            } else {
+            } else if (given <= range.minFrameRate) {
                 *duration = range.maxFrameDuration;
-                *rate = range.minFrameRate;
+            } else {
+                *duration = CMTimeMake(1, fps);
             }
         }
     }
