@@ -30,9 +30,36 @@ pub(super) fn source(voice_call: bool, audio_input: &str, screen_capture_kit: bo
     }
 }
 
+/// Whether a controller can hear this host's sound, for its Devices menu
+/// (`rd_host_sound` in the login response, decision 0028): "ready", or "unavailable"
+/// when the sound would come from nowhere. ScreenCaptureKit hears nothing without Screen
+/// Recording, which the engine also needs for the screen.
+pub(crate) fn status(
+    audio_input: &str,
+    screen_capture_kit: bool,
+    screen_recording: bool,
+) -> &'static str {
+    match source(false, audio_input, screen_capture_kit) {
+        Source::ScreenCaptureKit if !screen_recording => "unavailable",
+        Source::Unavailable => "unavailable",
+        _ => "ready",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_menu_hears_whether_the_sound_can_come() {
+        assert_eq!(status("", true, true), "ready");
+        // Screen Recording off: ScreenCaptureKit hears nothing.
+        assert_eq!(status("", true, false), "unavailable");
+        // No ScreenCaptureKit: nothing, never the microphone.
+        assert_eq!(status("", false, true), "unavailable");
+        // The owner's own input needs neither.
+        assert_eq!(status("BlackHole 2ch", false, false), "ready");
+    }
 
     #[test]
     fn system_audio_by_default() {
@@ -71,14 +98,16 @@ mod tests {
 #[cfg(all(test, feature = "screencapturekit"))]
 mod capture {
     use crate::server::{connection::ConnInner, service::Service};
-    use hbb_common::{
-        message_proto::{message, misc},
-        tokio::sync::mpsc,
-    };
+    use base::message_proto::{message, misc};
+    use hbb_common::tokio::sync::mpsc;
     use magnum_opus::{Channels, Decoder};
     use std::{
         f64::consts::PI,
         process::Command,
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Arc,
+        },
         time::{Duration, Instant},
     };
 
@@ -90,16 +119,23 @@ mod capture {
         pcm: Vec<f32>,
     }
 
-    /// Subscribes the way a controller's connection does, plays a 2 s tone through the
-    /// default output after 1 s, and decodes what the controller would receive to mono.
-    fn listen() -> Heard {
+    /// Plays a 2 s tone through the default output.
+    fn afplay() {
         let tone = std::env::temp_dir().join("rd-sound-probe-tone.wav");
         write_tone(&tone, 2.0).unwrap();
+        Command::new("afplay").arg(&tone).status().ok();
+        std::fs::remove_file(&tone).ok();
+    }
+
+    /// Subscribes the way a controller's connection does, runs `play` on a thread of its
+    /// own after 1 s, and decodes what the controller would receive to mono.
+    fn listen(play: impl FnOnce() + Send + 'static) -> Heard {
         let svc = super::super::new();
         let (tx, mut rx) = mpsc::unbounded_channel();
         svc.on_subscribe(ConnInner::new(1, Some(tx), None));
 
         let start = Instant::now();
+        let mut play = Some(play);
         let mut player = None;
         let mut decoder = None;
         let mut heard = Heard {
@@ -108,8 +144,10 @@ mod capture {
             pcm: Vec::new(),
         };
         while start.elapsed() < Duration::from_secs(4) {
-            if player.is_none() && start.elapsed() > Duration::from_secs(1) {
-                player = Some(Command::new("afplay").arg(&tone).spawn().unwrap());
+            if start.elapsed() > Duration::from_secs(1) {
+                if let Some(play) = play.take() {
+                    player = Some(std::thread::spawn(play));
+                }
             }
             while let Ok((_, msg)) = rx.try_recv() {
                 match &msg.union {
@@ -142,11 +180,10 @@ mod capture {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        if let Some(mut player) = player {
-            player.wait().ok();
+        if let Some(player) = player {
+            player.join().ok();
         }
         svc.join();
-        std::fs::remove_file(&tone).ok();
         heard
     }
 
@@ -199,7 +236,7 @@ mod capture {
     #[test]
     #[ignore]
     fn controller_hears_system_sound() {
-        let heard = listen();
+        let heard = listen(afplay);
         let tone = heard
             .format
             .map_or(0, |(rate, _)| tone_windows(&heard.pcm, rate));
@@ -214,8 +251,45 @@ mod capture {
     #[test]
     #[ignore]
     fn nothing_without_screen_recording() {
-        let heard = listen();
+        let heard = listen(afplay);
         eprintln!("format {:?}, {} frames", heard.format, heard.frames);
         assert_eq!(heard.frames, 0, "audio was sent without ScreenCaptureKit");
+    }
+
+    /// A controller's microphone, played into Remote Display Microphone from this process
+    /// as `remotedisplayd` plays it (decision 0021), must not come back in the host's
+    /// sound, or the controller hears itself. Needs the driver (docs/tests/virtual-mic/)
+    /// as well as Screen Recording.
+    #[test]
+    #[ignore]
+    fn controller_never_hears_its_own_microphone() {
+        use crate::server::device_forward::mic;
+        let played = Arc::new(AtomicU64::new(0));
+        let p = played.clone();
+        let heard = listen(move || {
+            let mut feed = mic::open().expect("Remote Display Microphone isn't installed");
+            mic::send_tone(&mut feed, 2.0, |_| true);
+            std::thread::sleep(Duration::from_millis(200));
+            p.store(feed.played(), Ordering::Relaxed);
+        });
+        // The driver's format: 48 kHz stereo.
+        let played = played.load(Ordering::Relaxed) as f64 / 96000.0;
+        let tone = heard
+            .format
+            .map_or(0, |(rate, _)| tone_windows(&heard.pcm, rate));
+        let peak = heard.pcm.iter().fold(0f32, |m, s| m.max(s.abs()));
+        eprintln!(
+            "played {:.2} s into Remote Display Microphone; format {:?}, {} frames, peak {:.3}, {} of 100 tone windows (20 ms)",
+            played, heard.format, heard.frames, peak, tone
+        );
+        assert!(
+            played > 1.5,
+            "the tone didn't play into Remote Display Microphone"
+        );
+        assert!(
+            heard.frames > 0,
+            "nothing captured: is Screen Recording allowed?"
+        );
+        assert!(tone < 5, "the controller would hear its own microphone");
     }
 }
