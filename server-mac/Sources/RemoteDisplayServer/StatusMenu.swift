@@ -20,6 +20,9 @@ struct StatusMenu: View {
         if let sender = c.cameraSender {
             Label("Camera from \(sender)", systemImage: "video.fill")
         }
+        if let sender = c.microphoneSender {
+            Label("Microphone from \(sender)", systemImage: "mic.fill")
+        }
         Divider()
         Button("Open Remote Display Server…") { AppDelegate.shared?.showMainWindow() }
             .keyboardShortcut("o")

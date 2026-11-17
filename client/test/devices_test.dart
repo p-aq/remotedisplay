@@ -110,6 +110,16 @@ void main() {
       expect(echoHint(micOn: false, soundOn: true), isNull);
     });
 
+    test("the host's sound", () {
+      expect(soundReason(audioAllowed: true, hostSound: 'ready'), isNull);
+      // A 1.0.x host, or one that doesn't say.
+      expect(soundReason(audioAllowed: true), isNull);
+      expect(soundReason(audioAllowed: true, hostSound: 'unavailable'),
+          "This Mac can't share its sound until Screen Recording is on there");
+      expect(soundReason(audioAllowed: false, hostSound: 'ready'),
+          "This computer doesn't share its sound");
+    });
+
     test("the controller's own access", () {
       expect(permissionReason('allowed', 'camera'), isNull);
       expect(permissionReason('not-determined', 'camera'), isNull);

@@ -13,10 +13,36 @@ UPSTREAM_URL=https://github.com/rustdesk/rustdesk.git
 HBB_URL=https://github.com/rustdesk/hbb_common.git
 CPAL_URL=https://github.com/rustdesk-org/cpal.git
 
-# Fetch the upstream tag if we do not have it (remote `upstream`, shallow fetch).
+# Files upstream moved that our diff changes: "old new" paths under engine/rustdesk/,
+# one pair per line. Our diff is made against the old tag, where the file is still at
+# "old"; follow_moves points it at "new" when the new snapshot has moved it there.
+# 1.5.0 moved message.proto out of hbb_common into its new `base` crate.
+UPSTREAM_MOVES="libs/hbb_common/protos/message.proto libs/base/protos/message.proto"
+
+# Fetch the upstream tag if we do not have it (by URL, shallow), as hbb_common and cpal
+# are fetched: in a fork's clone the remote named `upstream` is the fork's own upstream,
+# not RustDesk.
 ensure_upstream_tag() { # <tag>
-    git remote get-url upstream >/dev/null 2>&1 || git remote add upstream "$UPSTREAM_URL"
-    git rev-parse -q --verify "refs/tags/$1" >/dev/null || git fetch --depth 1 upstream tag "$1"
+    git rev-parse -q --verify "refs/tags/$1" >/dev/null ||
+        git fetch -q --depth 1 "$UPSTREAM_URL" "refs/tags/$1:refs/tags/$1"
+}
+
+# Points <patch>'s files at where upstream moved them, for each UPSTREAM_MOVES pair
+# whose "new" is in <tree> (the new pristine snapshot, a tree of the whole repository)
+# and whose "old" isn't. The patch keeps the old file's blob, so `git apply --3way` can
+# still merge it.
+follow_moves() { # <patch> <tree>
+    local old new
+    while read -r old new; do
+        [ -n "$old" ] || continue
+        git cat-file -e "$2:engine/rustdesk/$new" 2>/dev/null || continue
+        git cat-file -e "$2:engine/rustdesk/$old" 2>/dev/null && continue
+        OLD="$old" NEW="$new" perl -pi -e '
+            s{^diff --git a/\Q$ENV{OLD}\E b/\Q$ENV{OLD}\E$}{diff --git a/$ENV{NEW} b/$ENV{NEW}};
+            s{^--- a/\Q$ENV{OLD}\E$}{--- a/$ENV{NEW}};
+            s{^\+\+\+ b/\Q$ENV{OLD}\E$}{+++ b/$ENV{NEW}};' "$1"
+        echo "our $old follows upstream to $new"
+    done <<< "$UPSTREAM_MOVES"
 }
 
 # hbb_common commit referenced by the tag's gitlink.
