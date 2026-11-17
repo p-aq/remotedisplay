@@ -4,8 +4,8 @@
 // controller's `disable_audio` is off. Nobody has to accept anything, so any connected
 // controller can play sound through the host, and turning the host's sound off on the
 // controller also silences its microphone. The host accepts controller audio only during
-// a voice call it accepted; Phase 2 adds an accepted microphone forward. `disable_audio`
-// plays no part: it is about the host's sound going to the controller.
+// a voice call it accepted or an accepted microphone forward (decision 0021).
+// `disable_audio` plays no part: it is about the host's sound going to the controller.
 
 use hbb_common::log;
 
@@ -16,16 +16,19 @@ pub(super) struct AudioGate {
 }
 
 impl AudioGate {
-    /// Whether to accept a controller's AudioFormat or AudioFrame now. Drops are logged
-    /// once per stretch, not once per frame.
-    pub(super) fn accepts(&mut self, voice_calling: bool) -> bool {
-        if voice_calling {
+    /// Whether to accept a controller's AudioFormat or AudioFrame now: `accepted` is
+    /// whether a voice call or a microphone forward is. Drops are logged once per
+    /// stretch, not once per frame.
+    pub(super) fn accepts(&mut self, accepted: bool) -> bool {
+        if accepted {
             self.warned = false;
             return true;
         }
         if !self.warned {
             self.warned = true;
-            log::warn!("Dropping the controller's audio: no voice call is active");
+            log::warn!(
+                "Dropping the controller's audio: no voice call or microphone forward is active"
+            );
         }
         false
     }
