@@ -30,6 +30,9 @@ for a in "$@"; do case "$a" in --skip-android) SKIP_ANDROID=1;; --skip-ios) SKIP
 
 # Signing identity (personal team only) and notarization. ~/.config/remotedisplay/signing.env
 # may set RD_NOTARY_PROFILE; it is optional. Notarization is attempted only with a Developer ID.
+# It may also set RD_SERVER_PROFILE and RD_CAMERA_PROFILE, the provisioning profiles for the
+# server app and Remote Display Camera; without both the server ships without the camera
+# extension (decision 0019).
 [ -f "$HOME/.config/remotedisplay/signing.env" ] && . "$HOME/.config/remotedisplay/signing.env"
 "$ROOT/server-mac/unlock-signing-keychain.sh"   # locked after a reboot → codesign would prompt
 NOTARY_PROFILE="${RD_NOTARY_PROFILE:-remotedisplay-notary}"
@@ -86,10 +89,13 @@ export VCPKG_ROOT="${VCPKG_ROOT:-$HOME/vcpkg}"   # scrap/build.rs needs libyuv f
 #    `strip -x` afterwards: rustc's own strip leaves the LINKEDIT string pool 4-byte
 #    aligned and Xcode 27's linker refuses to link the app against it ("ld: mis-aligned
 #    LINKEDIT string pool"); Xcode's strip keeps it 8-byte aligned (same final size).
+#    `screencapturekit` on the server binary only: host sound is the Mac's system audio,
+#    never its microphone (decision 0008; host_sound.rs). The client library keeps
+#    capturing the controller's mic. The feature's cidre crate needs full Xcode.
 ( cd "$ROOT/engine/rustdesk" \
   && CARGO_PROFILE_RELEASE_STRIP=false cargo build --release --features flutter,hwcodec --lib \
   && strip -x target/release/liblibrustdesk.dylib \
-  && cargo build --release --features hwcodec --bin rustdesk )
+  && cargo build --release --features hwcodec,screencapturekit --bin rustdesk )
 
 # 1) Android
 if [ $SKIP_ANDROID = 0 ]; then
@@ -112,7 +118,8 @@ fi
 #    signing keychain, so no keychain prompt)
 if [ $SKIP_SERVER = 0 ]; then
   ENGINE_BIN="${ENGINE_BIN:-$ROOT/engine/rustdesk/target/release/rustdesk}"
-  ( cd "$ROOT/server-mac" && make sign ENGINE_BIN="$ENGINE_BIN" ${SIGN_ID:+SIGN_ID="$SIGN_ID"} )
+  ( cd "$ROOT/server-mac" && make sign ENGINE_BIN="$ENGINE_BIN" ${SIGN_ID:+SIGN_ID="$SIGN_ID"} \
+      ${RD_SERVER_PROFILE:+APP_PROFILE="$RD_SERVER_PROFILE"} ${RD_CAMERA_PROFILE:+EXT_PROFILE="$RD_CAMERA_PROFILE"} )
   notarize_app "$ROOT/server-mac/.build/Remote Display Server.app"
   make_dmg "$ROOT/server-mac/.build/Remote Display Server.app" "$OUT/RemoteDisplay-Server-$VER-macos.dmg" "Remote Display Server"
 fi

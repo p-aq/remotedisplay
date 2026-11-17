@@ -25,3 +25,18 @@ and logged once.
   the spec.
 - Tests: mic still works with the host's sound off; unrequested audio is dropped.
 - A hook in `connection.rs`, listed in `engine/SYNC.md`.
+
+## Implementation (2026-10-26)
+
+- `src/server/connection/audio_gate.rs`, called from the `AudioFormat` and `AudioFrame`
+  handlers in `connection.rs` (`HOOKS.md` E2). The condition is the connection's
+  `voice_calling`; Phase 2 adds the accepted `MICROPHONE` forward next to it.
+- A controller sends its mic only after the host accepts its voice call
+  (`VoiceCallResponse`), and the host sets `voice_calling` before reading the next
+  message, so no legitimate audio is dropped.
+- A Remote Display host never accepts voice calls: its headless CM (`core_main.rs`) has
+  no one to accept them. So until Phase 2 it drops all controller audio. That is the hole closed, not a regression: nothing on the
+  host asked for that audio.
+- Drops are logged once per stretch of dropped audio, not per frame.
+- Tested with unit tests. The end-to-end tests in the Consequences above need the mic
+  forward and come with Phase 2.
