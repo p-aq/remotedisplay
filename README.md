@@ -74,7 +74,7 @@ notarized by Apple, so macOS opens them without Gatekeeper warnings.
   them (physical ones and any virtual display added with SimpleDisplay) and ignores the
   reconfiguration noise a hardware mirror produces, so a mirrored display no longer
   restarts the video every second.
-- `engine/rustdesk/` — a vendored fork of RustDesk 1.4.9 with the changes listed in
+- `engine/rustdesk/` — a vendored fork of RustDesk 1.5.1 with the changes listed in
   [`HOOKS.md`](HOOKS.md) and [`tools/patches/`](tools/patches/): serverless LAN
   discovery with the Tailscale address advertised, and stability work around macOS
   display reconfiguration (mirrored displays, Retina capture with several clients).
