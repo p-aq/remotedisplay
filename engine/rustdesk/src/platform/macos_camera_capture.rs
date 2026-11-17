@@ -247,9 +247,9 @@ impl Capture {
     /// `on_frame(annex_b, key, pts_us)` runs on a VideoToolbox thread for each access
     /// unit until the `Capture` is dropped; the first one is a key frame. `on_lost(why)`
     /// runs at most once, on an AVFoundation thread, if the camera goes away first:
-    /// unplugged, or its session stopped on an error. No frames follow it; the
-    /// `Capture` is still dropped as usual. Don't drop the `Capture` from inside
-    /// either callback.
+    /// unplugged, its session stopped on an error, or another app changed its format.
+    /// No frames follow it; the `Capture` is still dropped as usual. Don't drop the
+    /// `Capture` from inside either callback.
     pub fn start(
         config: &Config,
         on_frame: impl FnMut(&[u8], bool, i64) + Send + 'static,
