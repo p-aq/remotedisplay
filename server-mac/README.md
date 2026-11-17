@@ -12,17 +12,31 @@ Two layers (August 2026), the whole UI in English:
 background: status line (`Ready · 192.168.1.117:21118` / `Running · N permission(s)
 missing` / `Stopped`), addresses, active sessions, **Open Remote Display Server…** (⌘O),
 *Service Active* and *Open at Login* toggles, *Quit* (⌘Q). The icon carries an alert
-badge if setup is incomplete.
+badge if setup is incomplete, and a camera or mic badge plus a *Camera from …* or
+*Microphone from …* line while a controller sends its camera or microphone
+(`remotedisplay-forwarding.json`).
 
 **Main window** (`MainWindowView`, grouped `Form` styled like Settings, 560×700) —
 all the configuration and status:
 - Status + service switch.
 - **Setup** (what's done and what's missing, with a button on each pending item): Service running,
-  Screen Recording, Accessibility, Permanent password. "N to do / All set" counter.
+  Screen Recording, Accessibility, Permanent password. "N to do / All set" counter. Camera and
+  Microphone rows follow, optional and not counted. Camera shows where Remote Display Camera
+  stands, from macOS: *Install…*, an admin's approval in System Settings (*Open Settings…*),
+  *Installed*; or *Not available in this build* when the build has no provisioning profiles
+  (decision 0019). Microphone shows Remote Display Microphone, the virtual mic's driver, which
+  every build bundles: *Install…* copies it to `/Library/Audio/Plug-Ins/HAL` and restarts
+  coreaudiod after one admin prompt, *Update…* when another version is installed, then
+  *Installed* (decision 0027).
 - **Connect from another device**: LAN and Tailscale `ip:port` with copy.
 - **Active sessions**: connected peers (lsof on the engine, port 21118) + *Disconnect all*
   (restarts the engine).
-- **Settings**: Open at Login, password (Set…/Change…), access mode.
+- **Settings**: Open at Login, password (Set…/Change…), access mode, *Let controllers share their
+  camera and microphone* (off by default; `remotedisplayd --set-device-forward on|off` over IPC,
+  state read back from `remotedisplay-perms.json`'s `device_forward`). Forwarding itself comes with
+  the camera & audio forwarding spec's Phases 1 and 2. *Remove Camera and Microphone* shows while
+  Remote Display Camera is installed or waiting for approval, or Remote Display Microphone is
+  installed, and removes whichever is there; the microphone with an admin prompt.
 - **About**: engine version, open logs, reveal configuration.
 
 Opens by itself on startup if setup or password is missing; also on double-click on the app
@@ -71,9 +85,19 @@ engine isn't running (it died, or never started), relaunches it every ≥10 s; t
 A single bundle, two executables:
 
 ```
-Remote Display Server.app/Contents/MacOS/
-├── RemoteDisplayServer   ← SwiftUI UI (MenuBarExtra)
-└── remotedisplayd        ← Rust engine (cargo, no flutter) = the `rustdesk` binary
+Remote Display Server.app/Contents/
+├── MacOS/
+│   ├── RemoteDisplayServer   ← SwiftUI UI (MenuBarExtra)
+│   └── remotedisplayd        ← Rust engine (cargo, no flutter) = the `rustdesk` binary
+└── Library/
+    ├── SystemExtensions/
+    │   └── app.remotedisplay.server.camera.systemextension
+    │                         ← Remote Display Camera (CameraExtension/), only in builds
+    │                           signed with its provisioning profiles
+    └── Audio/Plug-Ins/HAL/
+        └── RemoteDisplayMicrophone.driver
+                              ← Remote Display Microphone (AudioDriver/), copied to
+                                /Library/Audio/Plug-Ins/HAL by Setup's Install…
 ```
 
 The engine runs via a LaunchAgent (`~/Library/LaunchAgents/app.remotedisplay.server.plist`,
@@ -103,6 +127,24 @@ as the UI, they share TCC permission attribution.
 `make sign` signs with the personal-team identity chosen by `sign-identity.sh` (see
 *Signing* below), so TCC permissions survive rebuilds; without one it signs ad-hoc and the
 permissions have to be granted again after every rebuild.
+
+To bundle Remote Display Camera, give the two provisioning profiles that match that
+identity's certificate, one for the app (`app.remotedisplay.server`, with the System
+Extension capability and the app group) and one for the extension
+(`app.remotedisplay.server.camera`, with the app group):
+
+```sh
+make sign ENGINE_BIN=… APP_PROFILE=server.provisionprofile EXT_PROFILE=camera.provisionprofile
+```
+
+Without both, or without an identity, the build leaves the extension out and says so.
+
+Remote Display Microphone needs no profile, so every build bundles it. `make driver` builds
+it on its own: BlackHole's unmodified source in `AudioDriver/BlackHole/` (v0.7.2, GPL-3.0),
+compiled universal with the Makefile's constants, the ones the Phase 0 harness measured
+(decisions 0013, 0027). Its version is its own, in `AudioDriver/Info.plist`: bump
+`CFBundleVersion` only when the driver changes, since Setup offers *Update…*, and an admin
+prompt, whenever the installed one differs.
 
 ## Installing
 
@@ -186,6 +228,17 @@ the certificate *kind*, and TCC stores the requirement when a permission is gran
 the explicit one a development build and a notarized Developer ID build satisfy the same
 Screen Recording and Accessibility grants. Releases up to 1.0.3 carried the default
 requirement, so the first Developer ID build asks for both permissions once more.
+
+Each binary has its own entitlements (decision 0010): `remotedisplayd` always gets
+`Entitlements.plist`. In a build with the camera, the extension is signed first, on its own,
+with `CameraExtension/Extension.entitlements` (sandbox, app group), and the app gets
+`App.entitlements`: `Entitlements.plist` plus the restricted system-extension install
+entitlement and the app group. Nothing is signed with `--deep`. Without the profiles the app
+keeps `Entitlements.plist`, as before. Only `remotedisplayd` from the same team may feed the
+camera; the extension checks every sink client (decision 0019). The microphone's driver is
+signed on its own too, with its identifier `app.remotedisplay.server.mic` and no
+entitlements, before `remotedisplayd`: coreaudiod loads it, and codesign doesn't count
+`Library/Audio` as nested code, so `--deep` wouldn't sign it.
 
 Release builds (`release/release-mac.sh`) are notarized with Apple and stapled; the
 Developer ID identity lives in a dedicated keychain on the build Mac, see
