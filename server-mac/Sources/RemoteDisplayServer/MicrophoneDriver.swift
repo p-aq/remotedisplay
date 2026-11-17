@@ -8,6 +8,8 @@ import Foundation
 /// administrator privileges` through osascript, with the paths as its arguments.
 final class MicrophoneDriver {
     static let bundleName = "RemoteDisplayMicrophone.driver"
+    /// The driver's signing identifier (server-mac/Makefile, DRIVER_ID).
+    static let signingIdentifier = "app.remotedisplay.server.mic"
     static let installedPath = "/Library/Audio/Plug-Ins/HAL/" + bundleName
     static let bundledPath = Bundle.main.bundlePath + "/Contents/Library/Audio/Plug-Ins/HAL/" + bundleName
 
@@ -49,7 +51,11 @@ final class MicrophoneDriver {
 
     func install() {
         guard Self.state(bundled: Self.bundledPath, installed: Self.installedPath) != .notBundled else { return }
-        run(Self.installScript, [Self.bundledPath, Self.installedPath], doing: "installed")
+        let requirement = DriverInstallCommand.requirement(identifier: Self.signingIdentifier,
+                                                           team: DriverInstallCommand.ownTeam)
+        let command = DriverInstallCommand.install(source: Self.bundledPath, destination: Self.installedPath,
+                                                   staging: "/Library/Audio/Plug-Ins", requirement: requirement)
+        run(Self.installScript, [command], doing: "installed")
     }
 
     func remove() {
@@ -78,13 +84,11 @@ final class MicrophoneDriver {
         }
     }
 
-    /// Replaces any installed copy, then restarts coreaudiod the way BlackHole's own
-    /// installer does: `launchctl kickstart` is refused while SIP is on (decision 0013).
-    /// `cp -X` leaves extended attributes such as quarantine behind.
+    /// Runs DriverInstallCommand's command as root: it checks the bundled driver, replaces
+    /// any installed copy, then restarts coreaudiod the way BlackHole's own installer does.
     static let installScript = """
-    on run {source, destination}
-      set sh to "rm -rf " & quoted form of destination & " && cp -RX " & quoted form of source & " " & quoted form of destination & " && (killall coreaudiod || true)"
-      do shell script sh with prompt "Remote Display Server wants to install Remote Display Microphone. This Mac's sound stops for a moment." with administrator privileges
+    on run {command}
+      do shell script command with prompt "Remote Display Server wants to install Remote Display Microphone. This Mac's sound stops for a moment." with administrator privileges
     end run
     """
 

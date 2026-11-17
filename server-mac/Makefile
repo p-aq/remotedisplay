@@ -51,10 +51,13 @@ VERSION       := $(shell /usr/libexec/PlistBuddy -c 'Print CFBundleVersion' $(IN
 SHORT_VERSION := $(shell /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' $(INFO_PLIST))
 # Remote Display Microphone, the virtual mic (spec, Packaging; decisions 0013, 0027): a
 # HAL plug-in built from BlackHole's unmodified source with these constants, the ones
-# the Phase 0 harness measured (docs/tests/virtual-mic/harness). An input-only device
-# apps read, and its hidden output-only twin that remotedisplayd plays into; BlackHole
-# mirrors one into the other. It needs no provisioning profile, so every build bundles
-# it, and Setup's Microphone row copies it to /Library/Audio/Plug-Ins/HAL.
+# the Phase 0 harness measured (docs/tests/virtual-mic/harness) except that it can be the
+# default input (decision 0031). An input-only device apps read, and its hidden
+# output-only twin that remotedisplayd plays into; BlackHole mirrors one into the other.
+# A hidden device can't be a default device, and one with no output can't be the
+# default output, so only Sound > Input lists it. It needs no provisioning profile, so
+# every build bundles it, and Setup's Microphone row copies it to
+# /Library/Audio/Plug-Ins/HAL.
 DRIVER_NAME   := RemoteDisplayMicrophone
 DRIVER_ID     := $(CODE_ID).mic
 DRIVER_DIR     = $(OUT_DIR)/driver
@@ -71,7 +74,7 @@ DRIVER_DEFINES := \
   -DkDevice2_Name='"Remote Display Microphone Feeder"' \
   -DkDevice2_IsHidden=true -DkDevice2_HasInput=false -DkDevice2_HasOutput=true \
   -DkNumber_Of_Channels=2 -DkSampleRates=48000 \
-  -DkCanBeDefaultDevice=false -DkCanBeDefaultSystemDevice=false
+  -DkCanBeDefaultDevice=true -DkCanBeDefaultSystemDevice=false
 
 # $(call fill,template,output): substitute the team and version placeholders.
 fill = sed -e 's/@TEAM_ID@/$(TEAM_ID)/g' -e 's/@VERSION@/$(VERSION)/g' \

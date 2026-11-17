@@ -51,4 +51,5 @@
     default output in real time. Result: 284,032 samples played, 0 underruns, 0
     dropped.
 
-  Not yet in a session with a second Mac.
+  On RustDesk 1.5.1 the speaker path is decision 0030's. A live session with a second
+  Mac played the host's sound cleanly ([live session](../../tests/live-session/README.md)).

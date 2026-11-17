@@ -4,11 +4,12 @@ Checks that a Mac host sends its system sound, captured by ScreenCaptureKit, and
 its microphone (issue #4, [spec](../../specs/camera-audio-forwarding.md) Host side ›
 Speakers, [decision 0008](../../architecture/decisions/0008-mic-path.md)).
 
-**Status:** the engine side passes the gate on this Mac. The frames a controller would
-receive carry a tone played on the host, and with Screen Recording refused nothing is
-sent ([results](#what-was-tested-and-the-result)). Still to do: listening from a real
-controller, the *Play the Mac's sound here* switch, and a call running on the host
-([not yet tested](#not-yet-tested)).
+**Status:** the engine side passes the gate on this Mac, on RustDesk 1.4.9 and again on
+1.5.1. The frames a controller would receive carry a tone played on the host, and with
+Screen Recording refused nothing is sent ([results](#what-was-tested-and-the-result)). In
+a live session (2026-10-30) a controller heard the host's sound cleanly and the switch
+worked ([live session](../live-session/README.md)). Still to do: Tailscale, and a call
+running on the host ([not yet tested](#not-yet-tested)).
 
 **Found in Phase 2 (2026-10-29):** the host's sound carried a controller's forwarded
 microphone back to it. `remotedisplayd` plays the microphone, and cpal's ScreenCaptureKit
@@ -72,6 +73,23 @@ engine now builds what passed. It wasn't run again on the device.
   binary, and turning rd-sound-probe off and on didn't help: `make revoke`, one refused
   run, then turning it on again did.
 
+### RustDesk 1.5.1 (2026-10-30)
+
+The gate run again on the engine updated to RustDesk 1.5.1
+([decision 0030](../../architecture/decisions/0030-engine-rustdesk-1-5-1.md)), on the same
+Mac. A person denied the first prompt and turned rd-sound-probe on. The tests were run
+one by one rather than through `gate.sh`, so the agent's shell could wait for the grant.
+
+| # | Test | Result |
+|---|---|---|
+| 2 | Screen Recording refused (`make nothing`) | **PASS**: format none, 0 frames in 4 s |
+| 3 | Screen Recording allowed (`make hears`) | **PASS**: 48 kHz stereo, 376 frames, peak 0.343, **100/100**. The run before the grant failed with 0 frames, as expected |
+| 4 | Output muted | The tone still arrives: 382 frames, peak 0.360, 100/100 |
+| 5 | Nothing left behind (`make clean`) | **PASS** |
+
+`make own-mic` wasn't run: the driver went onto the second Mac instead, where a live
+session checked the same thing by ear ([live session](../live-session/README.md), test 7).
+
 ## Runtime findings
 
 - **Capture happens before the volume control and mute.** The peak was 0.338 at 44%
@@ -100,19 +118,15 @@ engine now builds what passed. It wasn't run again on the device.
 
 ## Not yet tested
 
-- Listening on a real controller. It decodes the same frames, but needs a second
-  machine with the client. The controller now plays them through the spec's jitter
-  buffer ([decision 0029](../../architecture/decisions/0029-speaker-path-jitter-buffer.md)):
-  check for gaps on Tailscale and a busy network, and read the "Audio playback ended" log
-  line for underruns.
-- The *Play the Mac's sound here* switch and its "unavailable" status in a live session.
-  The switch is in the Devices menu ([decision 0018](../../architecture/decisions/0018-devices-menu-state-and-ffi.md)),
-  and the host's `rd_host_sound` login key, from `host_sound::status`, makes it say
-  unavailable without Screen Recording ([decision 0028](../../architecture/decisions/0028-host-sound-status.md)).
-  Both sides are unit-tested; seeing it needs a second Mac.
+- Listening on Tailscale and a busy network. On a LAN the host's sound played cleanly
+  ([live session](../live-session/README.md)). The controller trims about 61 ms when more
+  than 100 ms is waiting, which happened at session starts and when the sound started
+  again after silence: listen for a clipped first word.
+- The switch's "unavailable" note. The host sends it without Screen Recording (seen in
+  the live session's log), but then the client waits for a picture behind a dialog and
+  the Devices menu can't be opened ([decision 0028](../../architecture/decisions/0028-host-sound-status.md)).
 - A call running on the host (echo, ducking), the spec's open question.
-- `make own-mic` and `make hears` with the vendored cpal itself, rather than the scratch
-  copy of the same source.
+- `make own-mic` with the vendored cpal itself. A live session found no echo by ear.
 - The release build itself (`release/release-mac.sh` on the release Mac, Xcode 27).
 
 ## Re-running
