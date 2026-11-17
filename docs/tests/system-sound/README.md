@@ -4,16 +4,19 @@ Checks that a Mac host sends its system sound, captured by ScreenCaptureKit, and
 its microphone (issue #4, [spec](../../specs/camera-audio-forwarding.md) Host side ›
 Speakers, [decision 0008](../../architecture/decisions/0008-mic-path.md)).
 
-**Status:** the engine side passes the gate on this Mac. The frames a controller would
-receive carry a tone played on the host, and with Screen Recording refused nothing is
-sent ([results](#what-was-tested-and-the-result)). Still to do: listening from a real
-controller, the *Play the Mac's sound here* switch, and a call running on the host
-([not yet tested](#not-yet-tested)).
+**Status:** the engine side passes the gate on this Mac, on RustDesk 1.4.9 and again on
+1.5.1. The frames a controller would receive carry a tone played on the host, and with
+Screen Recording refused nothing is sent ([results](#what-was-tested-and-the-result)). In
+a live session (2026-10-30) a controller heard the host's sound cleanly and the switch
+worked ([live session](../live-session/README.md)). Still to do: Tailscale, and a call
+running on the host ([not yet tested](#not-yet-tested)).
 
-**Found in Phase 2 (2026-10-29):** the host's sound carries a controller's forwarded
+**Found in Phase 2 (2026-10-29):** the host's sound carried a controller's forwarded
 microphone back to it. `remotedisplayd` plays the microphone, and cpal's ScreenCaptureKit
-capture includes the process's own audio. Turning on `excludesCurrentProcessAudio`
-fixes it and keeps the host's sound ([results](#own-microphone-phase-2)).
+capture included the process's own audio. Turning on `excludesCurrentProcessAudio`
+fixes it and keeps the host's sound ([results](#own-microphone-phase-2)). The engine
+now carries that change in a vendored cpal
+([decision 0022](../../architecture/decisions/0022-vendored-cpal-excludes-own-audio.md)).
 
 ## What's here
 
@@ -60,12 +63,32 @@ host sound:
 | cpal as the engine has it (`excludesCurrentProcessAudio` false) | **FAIL**: 100 of 100 tone windows came back, peak 0.311 for 0.3 sent | — |
 | cpal with `excludesCurrentProcessAudio` true (a scratch copy, this test only) | **PASS**: 380 frames of silence, peak 0.000, 0 tone windows | **PASS**: 100 of 100, peak 0.344; `afplay` is another process |
 
+The vendored `libs/cpal` (decision 0022) is the same commit with the same line, so the
+engine now builds what passed. It wasn't run again on the device.
+
 - **ScreenCaptureKit captures by process, not by device.** The tone went to the driver's
   hidden feeder, not the speakers, and still came back. So a controller with *Play the
   Mac's sound here* on would hear its own voice about 50 ms late.
 - **Rebuilding the bundle cancels the grant.** The ad-hoc signature changes with the
   binary, and turning rd-sound-probe off and on didn't help: `make revoke`, one refused
   run, then turning it on again did.
+
+### RustDesk 1.5.1 (2026-10-30)
+
+The gate run again on the engine updated to RustDesk 1.5.1
+([decision 0030](../../architecture/decisions/0030-engine-rustdesk-1-5-1.md)), on the same
+Mac. A person denied the first prompt and turned rd-sound-probe on. The tests were run
+one by one rather than through `gate.sh`, so the agent's shell could wait for the grant.
+
+| # | Test | Result |
+|---|---|---|
+| 2 | Screen Recording refused (`make nothing`) | **PASS**: format none, 0 frames in 4 s |
+| 3 | Screen Recording allowed (`make hears`) | **PASS**: 48 kHz stereo, 376 frames, peak 0.343, **100/100**. The run before the grant failed with 0 frames, as expected |
+| 4 | Output muted | The tone still arrives: 382 frames, peak 0.360, 100/100 |
+| 5 | Nothing left behind (`make clean`) | **PASS** |
+
+`make own-mic` wasn't run: the driver went onto the second Mac instead, where a live
+session checked the same thing by ear ([live session](../live-session/README.md), test 7).
 
 ## Runtime findings
 
@@ -95,14 +118,15 @@ host sound:
 
 ## Not yet tested
 
-- Listening on a real controller. It decodes the same frames, but needs a second
-  machine with the client.
-- The *Play the Mac's sound here* switch and its "unavailable" status: they need the
-  Devices menu and `DeviceStatus` (Phase 1, [decision 0012](../../architecture/decisions/0012-devices-menu-and-device-status.md)).
-  Until then the engine's existing Mute toggle (Input › Session) controls host sound.
+- Listening on Tailscale and a busy network. On a LAN the host's sound played cleanly
+  ([live session](../live-session/README.md)). The controller trims about 61 ms when more
+  than 100 ms is waiting, which happened at session starts and when the sound started
+  again after silence: listen for a clipped first word.
+- The switch's "unavailable" note. The host sends it without Screen Recording (seen in
+  the live session's log), but then the client waits for a picture behind a dialog and
+  the Devices menu can't be opened ([decision 0028](../../architecture/decisions/0028-host-sound-status.md)).
 - A call running on the host (echo, ducking), the spec's open question.
-- `make own-mic` passes only once the engine's cpal excludes `remotedisplayd`'s own
-  audio; until then it fails as above.
+- `make own-mic` with the vendored cpal itself. A live session found no echo by ear.
 - The release build itself (`release/release-mac.sh` on the release Mac, Xcode 27).
 
 ## Re-running

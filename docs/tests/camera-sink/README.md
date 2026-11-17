@@ -58,6 +58,8 @@ installed.
 - Feeding a real sink: it needs the camera extension signed with a provisioning profile
   (paid Apple Developer Program) and installed, then a check in Photo Booth or Zoom.
   The CoreMediaIO code is the Phase 0 harness's, which also couldn't be run unsigned.
+  The frames it feeds carry VideoToolbox's colour tags, which the extension now keeps
+  when it sends them to apps ([camera-extension](../camera-extension/README.md#runtime-findings)).
 - Whether opening the sink needs the Camera permission (the spec's open question).
   The server app's `Info.plist` now has `NSCameraUsageDescription` in case it does,
   as the spec asks.

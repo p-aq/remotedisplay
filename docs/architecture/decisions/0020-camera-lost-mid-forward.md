@@ -53,8 +53,9 @@
   from the menu, which lists the cameras each time it opens. Moving to another camera
   unasked could put a picture into the host's call that the user didn't choose.
 - **The menu** shows "The camera was disconnected or stopped working".
-- **Only these two notifications end a forward.** Anything else that stops frames
-  leaves it on. The host then shows the placeholder after 500 ms until frames come back.
+- **Only these two notifications end a forward,** and, since 2026-11-16, a frame whose
+  format no longer fits the encoder because another app changed the camera's format
+  (PR #56). Anything else that stops frames leaves it on. The host then shows the placeholder after 500 ms until frames come back.
 
 ## Consequences
 

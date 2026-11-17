@@ -84,8 +84,6 @@ const double _kPositionEpsilon = 1e-6;
 bool get isMainDesktopWindow =>
     desktopType == DesktopType.main || desktopType == DesktopType.cm;
 
-String get screenInfo => screenInfo_;
-
 /// Check if the app is running with single view mode.
 bool isSingleViewApp() {
   return desktopType == DesktopType.cm;
@@ -1530,13 +1528,6 @@ class AndroidPermissionManager {
   static Timer? _timer;
   static var _current = "";
 
-  static bool isWaitingFile() {
-    if (_completer != null) {
-      return !_completer!.isCompleted && _current == kManageExternalStorage;
-    }
-    return false;
-  }
-
   static Future<bool> check(String type) {
     if (isDesktop || isWeb) {
       return Future.value(true);
@@ -1651,7 +1642,8 @@ String bool2option(String option, bool b) {
   String res;
   if (option.startsWith('enable-') &&
       option != kOptionEnableUdpPunch &&
-      option != kOptionEnableIpv6Punch) {
+      option != kOptionEnableIpv6Punch &&
+      option != kOptionEnableWebrtc) {
     res = b ? defaultOptionYes : 'N';
   } else if (option.startsWith('allow-') ||
       option == kOptionStopService ||
@@ -2645,13 +2637,6 @@ connect(BuildContext context, String id,
     }
   } else {
     if (isFileTransfer) {
-      if (isAndroid) {
-        if (!await AndroidPermissionManager.check(kManageExternalStorage)) {
-          if (!await AndroidPermissionManager.request(kManageExternalStorage)) {
-            return;
-          }
-        }
-      }
       if (isWeb) {
         Navigator.push(
           context,
@@ -3130,6 +3115,15 @@ void onCopyFingerprint(String value) {
     showToast('$value\n${translate("Copied")}');
   } else {
     showToast(translate("no fingerprints"));
+  }
+}
+
+void onCopyId(String value) {
+  if (value.isNotEmpty) {
+    Clipboard.setData(ClipboardData(text: value));
+    showToast('$value\n${translate("Copied")}');
+  } else {
+    showToast(translate("Invalid ID"));
   }
 }
 
@@ -4013,6 +4007,11 @@ bool whitelistNotEmpty() {
   return v != '' && v != ',';
 }
 
+bool idWhitelistNotEmpty() {
+  final v = bind.mainGetOptionSync(key: kOptionIdWhitelist);
+  return v != '' && v != ',';
+}
+
 // `setMovable()` is only supported on macOS.
 //
 // On macOS, the window can be dragged by the tab bar by default.
@@ -4043,7 +4042,8 @@ Widget netWorkErrorWidget() {
     mainAxisAlignment: MainAxisAlignment.center,
     crossAxisAlignment: CrossAxisAlignment.center,
     children: [
-      Text(translate("network_error_tip")),
+      if (!gFFI.userModel.networkErrorFromServer.value)
+        Text(translate("network_error_tip")),
       ElevatedButton(
               onPressed: gFFI.userModel.refreshCurrentUser,
               child: Text(translate("Retry")))

@@ -89,5 +89,6 @@
   - With a scratch copy of cpal that sets it to true, `make own-mic` passed (silence, 0
     tone windows), and `make hears` still passed (100 of 100: other processes' sound
     still goes out).
-  - The engine's cpal is a git dependency outside the snapshot, so carrying that change
-    needs its own decision. The microphone forward isn't usable until it lands.
+  - The engine's cpal was a git dependency outside the snapshot.
+    [Decision 0022](0022-vendored-cpal-excludes-own-audio.md) vendors it and makes the
+    change.
