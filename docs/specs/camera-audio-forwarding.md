@@ -118,7 +118,7 @@ Highlighted boxes are new in this spec. Not drawn: the Remote Display Server app
 | Devices menu | client/lib/session/session_toolbar.dart | New menu |
 | macOS camera capture and encode | src/platform/macos_camera_capture.mm | New file |
 | Camera sender | src/client/device_forward.rs, src/client/io_loop.rs | New file, hook |
-| Messages | libs/hbb_common/protos/message.proto | New fields 200–204 |
+| Messages | libs/hbb_common/protos/message.proto (libs/base/protos/message.proto since RustDesk 1.5, [decision 0030](../architecture/decisions/0030-engine-rustdesk-1-5-1.md)) | New fields 200–204 |
 | Request handling, mic routing | src/server/connection.rs, src/server/device_forward.rs | Changed, new file |
 | Decode and sink feeder | src/platform/macos_camera_sink.mm | New file |
 | Camera extension | server-mac/CameraExtension/ | New Xcode target |
@@ -225,6 +225,8 @@ As built ([decision 0023](../architecture/decisions/0023-controller-microphone-c
 
 Echo. Without headphones, the far end's voice goes host → controller speakers → controller mic → host virtual mic → back into the call. The host app's echo canceller can't remove it: the speaker is on another machine and 100–300 ms away. Capture the controller mic with Apple's voice processing (AVAudioEngine's input node with voice processing on), which cancels echo against the controller's own speaker output. If Phase 2 shows that isn't enough, v1 asks for headphones, with a hint in the Devices menu when both Microphone and Play the Mac's sound here are on.
 
+As built ([decision 0026](../architecture/decisions/0026-echo-headphones-not-voice-processing.md)): no voice processing. Measured on a Mac mini with a Bluetooth headset, a USB microphone and the built-in speakers, it didn't start in any of four ways of picking its devices, the system's defaults included, and turning it on blocked for minutes each time. It would also follow the system's defaults, not the menu's pick. So v1 asks for headphones, with the hint. If that isn't enough, a software echo canceller with the host's sound as its reference is the way.
+
 Sending (new). A new src/client/device_forward.rs owns the camera thread: capture, encode, wrap in CameraFrame, hand to the session's sender. Its rules:
 
 - Send a key frame at start, every 2 seconds, and whenever CameraControl.key_frame_request arrives.
@@ -244,7 +246,7 @@ Adding FFI calls means regenerating the flutter_rust_bridge bindings (the Dart s
 
 As built ([decision 0018](../architecture/decisions/0018-devices-menu-state-and-ffi.md)): the forward's state, including the host's latest status, reaches the menu as an rd_device_forward session event on every change, the way the voice call reports its state, so there is no getter. The calls are session_set_device_forward, main_list_cameras, main_get_capture_permission and main_request_capture_permission. The camera list is read each time the menu opens; the hot-plug event comes with the microphone list in Phase 2.
 
-As built for the microphone ([decision 0024](../architecture/decisions/0024-devices-menu-microphone-row.md)): main_list_microphones lists the controller's inputs by name, without Remote Display Microphone. Like the camera list it's read each time the menu opens, so there's no plug-in event. While the microphone is on and Play the Mac's sound here is on, the row shows the headphones hint. It stays until voice processing has been measured. The row is disabled during a voice call, which would send the microphone a second time.
+As built for the microphone ([decision 0024](../architecture/decisions/0024-devices-menu-microphone-row.md)): main_list_microphones lists the controller's inputs by name, without Remote Display Microphone. Like the camera list it's read each time the menu opens, so there's no plug-in event. While the microphone is on and Play the Mac's sound here is on, the row shows the headphones hint, which is v1's answer to echo (decision 0026). The row is disabled during a voice call, which would send the microphone a second time.
 
 Testing without a camera. A --camera-test-pattern option sends a moving test card with a running clock, so the VM test bench can run the whole path without hardware.
 
@@ -272,11 +274,17 @@ Microphone: Option A, chosen after Phase 0 tested both ([results](../tests/virtu
 - Either way, AudioHandler::start_audio in src/client.rs always opens default_output_device() and needs a target-device parameter.
 - The mic path also needs its own buffering. AudioHandler sizes its ring buffer for 3 seconds (AUDIO_BUFFER_MS), shrinks it only every 12 seconds or so and never below 600 ms, and sleeps inside the Core Audio output callback. That is too much latency for a call and can glitch. The virtual-mic and speaker paths use a separate jitter buffer: 40–100 ms target, drop the oldest audio on overflow, silence on underrun, no sleeping in the callback.
 
+As built for the speaker path ([decision 0029](../architecture/decisions/0029-speaker-path-jitter-buffer.md)): AudioHandler plays received audio, such as a host's sound, through the same jitter buffer as the virtual mic, now in src/client/jitter.rs. Upstream's 3-second ring and its sleeping callback are gone. Linux's PulseAudio path is unchanged.
+
 As built ([decision 0021](../architecture/decisions/0021-microphone-forward-on-the-host.md)): the host side doesn't use AudioHandler. The feeder is hidden, so cpal can't open it, and with a separate buffer only the decoding was left to reuse. src/platform/macos_mic_sink.mm is the harness's Option A. An accepted forward decodes the controller's Opus on its own thread into a lock-free jitter buffer (start at 40 ms, drop the oldest back to 40 ms above 100 ms, silence when dry) that the feeder's render callback reads. rd_mic_sink is ready when the feeder exists. While a forward is accepted, that controller's audio goes to the virtual mic even during a voice call.
+
+As built ([decision 0031](../architecture/decisions/0031-virtual-mic-can-be-the-default-input.md)): Remote Display Microphone can be the Mac's default input, so it's listed under Sound › Input. "Can't become a default device" also hid it there. It still never appears under Sound › Output: it has no output streams, and its feeder is hidden.
 
 Speakers: turn on the existing ScreenCaptureKit path. RustDesk captures system sound through ScreenCaptureKit behind the screencapturekit cargo feature. release/release-mac.sh builds the host without it (--features hwcodec), so src/server/audio_service.rs falls back to the default input device, usually the Mac's microphone. Enabling the feature gives controllers the host's real sound, but isn't enough on its own: with the feature on, get_device() still falls back to get_audio_input(""), which ends at the host's default input device, whenever ScreenCaptureKit is unavailable or an audio-input option is set. On a Mac host, system-sound capture must never fall back to an input device; when ScreenCaptureKit audio is unavailable, the feature reports itself unavailable. This is a code change in Phase 3, not just a build flag. release/release-mac.sh builds both the client library and the server binary, so the change applies only to the server's loopback and leaves the client's mic capture alone. Core Audio taps are the fallback.
 
 As built ([decision 0022](../architecture/decisions/0022-vendored-cpal-excludes-own-audio.md)): the capture leaves out remotedisplayd's own audio. ScreenCaptureKit captures by process, so without that the microphone remotedisplayd plays into Remote Display Microphone went back to the controller. cpal is vendored into the engine to carry the change.
+
+As built ([decision 0028](../architecture/decisions/0028-host-sound-status.md)): "reports itself unavailable" is a login key, rd_host_sound, "ready" or "unavailable". ScreenCaptureKit counts as ready only with Screen Recording, and an owner's named input counts as ready. Play the Mac's sound here is shown off and disabled when it says unavailable, with "This Mac can't share its sound until Screen Recording is on there". There's no DeviceStatus for sound, since granting Screen Recording restarts the engine.
 
 Accepting requests. src/server/connection.rs handles the new messages:
 
@@ -328,7 +336,9 @@ The camera extension is what changes how Remote Display Server is built and sign
 - Removal. A Remove camera and microphone button deactivates the extension (OSSystemExtensionRequest.deactivationRequest) and deletes the driver.
 - Forks. Anyone building their own copy needs their own Apple Developer team and profiles. Apple's camera extension guide links to development-mode steps for testing builds that aren't notarized.
 
-As built ([decision 0019](../architecture/decisions/0019-camera-extension-in-the-server-app.md)): server-mac/Makefile builds the extension with swiftc rather than xcodebuild, as the Phase 0 harness did, and bundles it only when SIGN_ID, APP_PROFILE and EXT_PROFILE are all given; release-mac.sh passes the profiles from RD_SERVER_PROFILE and RD_CAMERA_PROFILE. The extension accepts a sink client only when it is remotedisplayd signed by the extension's own team. The Remove camera and microphone button is in Settings, shown while the extension is installed or waiting for approval.
+As built ([decision 0019](../architecture/decisions/0019-camera-extension-in-the-server-app.md)): server-mac/Makefile builds the extension with swiftc rather than xcodebuild, as the Phase 0 harness did, and bundles it only when SIGN_ID, APP_PROFILE and EXT_PROFILE are all given; release-mac.sh passes the profiles from RD_SERVER_PROFILE and RD_CAMERA_PROFILE. The extension accepts a sink client only when it is remotedisplayd signed by the extension's own team. The Remove camera and microphone button is in Settings, shown while the extension is installed or waiting for approval. When the installed extension is another version than the app's, the app asks macOS to replace it, once per launch ([decision 0032](../architecture/decisions/0032-app-update-replaces-the-camera-extension.md)).
+
+As built for the microphone ([decision 0027](../architecture/decisions/0027-microphone-driver-in-the-server-app.md)): the driver ships inside the app, at Contents/Library/Audio/Plug-Ins/HAL, built by server-mac/Makefile from BlackHole's source, which is vendored unmodified in server-mac/AudioDriver/. Every build bundles it and signs it on its own. Setup's Microphone row installs it with one admin prompt, the way upstream RustDesk runs admin steps: an AppleScript through osascript copies it to /Library/Audio/Plug-Ins/HAL and restarts coreaudiod. The row offers Update… when another version is installed. Remove camera and microphone deletes it the same way, and shows while either device is there.
 
 ## Testing plan
 
@@ -384,6 +394,7 @@ There are no dates yet; they depend on who picks up each phase.
 - Does a process that only feeds a sink stream need the Camera permission? (Phase 0)
 - ~~Microphone: a driver (Option A) or Core Audio taps (Option B)?~~ Answered by Phase 0: Option A ([decision 0013](../architecture/decisions/0013-virtual-mic-input-only-driver.md)). Still to confirm in Zoom and Teams.
 - ~~Can the driver hide its output side, so it never appears under Sound › Output?~~ Answered by Phase 0: yes. The visible device has no output channels and can't become a default device; its output-only twin is hidden.
+- ~~Should Remote Display Microphone be the Mac's default input when the owner picks it?~~ Answered: yes ([decision 0031](../architecture/decisions/0031-virtual-mic-can-be-the-default-input.md)). The live session found it missing from Sound › Input, since "can't become a default device" hid it there too.
 - Camera formats: 720p only, or 720p and 1080p from the start?
 - Should the host delay mic audio to match video, or is unsynced good enough for calls?
 - One forwarded camera per host, or one per connected controller?

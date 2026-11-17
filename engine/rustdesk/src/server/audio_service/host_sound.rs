@@ -30,9 +30,36 @@ pub(super) fn source(voice_call: bool, audio_input: &str, screen_capture_kit: bo
     }
 }
 
+/// Whether a controller can hear this host's sound, for its Devices menu
+/// (`rd_host_sound` in the login response, decision 0028): "ready", or "unavailable"
+/// when the sound would come from nowhere. ScreenCaptureKit hears nothing without Screen
+/// Recording, which the engine also needs for the screen.
+pub(crate) fn status(
+    audio_input: &str,
+    screen_capture_kit: bool,
+    screen_recording: bool,
+) -> &'static str {
+    match source(false, audio_input, screen_capture_kit) {
+        Source::ScreenCaptureKit if !screen_recording => "unavailable",
+        Source::Unavailable => "unavailable",
+        _ => "ready",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_menu_hears_whether_the_sound_can_come() {
+        assert_eq!(status("", true, true), "ready");
+        // Screen Recording off: ScreenCaptureKit hears nothing.
+        assert_eq!(status("", true, false), "unavailable");
+        // No ScreenCaptureKit: nothing, never the microphone.
+        assert_eq!(status("", false, true), "unavailable");
+        // The owner's own input needs neither.
+        assert_eq!(status("BlackHole 2ch", false, false), "ready");
+    }
 
     #[test]
     fn system_audio_by_default() {
@@ -71,10 +98,8 @@ mod tests {
 #[cfg(all(test, feature = "screencapturekit"))]
 mod capture {
     use crate::server::{connection::ConnInner, service::Service};
-    use hbb_common::{
-        message_proto::{message, misc},
-        tokio::sync::mpsc,
-    };
+    use base::message_proto::{message, misc};
+    use hbb_common::tokio::sync::mpsc;
     use magnum_opus::{Channels, Decoder};
     use std::{
         f64::consts::PI,
