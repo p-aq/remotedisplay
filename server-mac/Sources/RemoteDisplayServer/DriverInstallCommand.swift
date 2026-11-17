@@ -34,15 +34,23 @@ enum DriverInstallCommand {
     }
 
     /// `staging` is a folder on `destination`'s volume that only root can write, outside
-    /// the folder coreaudiod loads from. `restartAudio` is off in tests.
+    /// the folder coreaudiod loads from. `restartAudio` is off in tests, and so is `owner`,
+    /// as they don't run as root.
     static func install(source: String, destination: String, staging: String, requirement: String,
-                        restartAudio: Bool = true) -> String {
+                        restartAudio: Bool = true, owner: String? = "root:wheel") -> String {
         var lines = [
             "set -e",
+            "umask 022",
             "T=$(mktemp -d \(quoted(staging + "/.rd-mic.XXXXXX")))",
             "trap 'rm -rf \"$T\"' EXIT",
             "cp -RX \(quoted(source)) \"$T/driver\"",
             "if find \"$T\" -type l | grep -q .; then echo \"The driver inside this app contains links, so it wasn't installed.\" >&2; exit 1; fi",
+        ]
+        // The copy's modes would come from the bundle's and from the umask the app was
+        // started with, and the user sets both: neither may make root's driver writable.
+        if let owner { lines.append("chown -R \(quoted(owner)) \"$T/driver\"") }
+        lines += [
+            "chmod -R u=rwX,go=rX \"$T/driver\"",
             "codesign --verify --strict -R \(quoted(requirement)) \"$T/driver\" || { echo \"The driver inside this app isn't the one it was built with, so it wasn't installed.\" >&2; exit 1; }",
             "rm -rf \(quoted(destination))",
             "mv \"$T/driver\" \(quoted(destination))",

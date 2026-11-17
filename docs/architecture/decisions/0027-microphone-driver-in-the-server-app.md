@@ -63,12 +63,16 @@
   - copies the bundled driver to a new folder in `/Library/Audio/Plug-Ins` that only it
     can write;
   - refuses a copy that contains symbolic links;
+  - since 2026-11-16, works under `umask 022` and makes the copy `root:wheel`, writable by
+    root alone, whatever umask the app was started with and whatever modes the bundle has;
   - verifies the copy with `codesign --verify --strict` against the driver's identifier
     and, in a build signed by a team, the app's own team;
   - only then removes the installed driver and moves the copy in.
 
   A copy or a check that fails leaves the installed driver as it was. An ad-hoc build has
-  no team to pin, so there the check shows only that the driver is whole.
+  no team to pin, so there the check shows only that the driver is whole. Since
+  2026-11-16 the app reads its team at launch, while the file on disk is still the code
+  that's running, not when Install is first clicked.
 - ***Remove Camera and Microphone*** removes whichever is there: it deactivates the camera
   extension and deletes the driver, with an admin prompt, then restarts coreaudiod.
 - **The badge.** The menu-bar icon gains a mic badge, and the menu a *Microphone from …*
