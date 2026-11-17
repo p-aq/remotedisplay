@@ -11,6 +11,7 @@
 #   make ask        macOS's camera prompt for the probe; waits up to 5 minutes for the answer
 #   make sends      720p H.264 from the camera, then decoded by the host's decoder
 #   make forwards   the controller's sender (src/client/device_forward.rs) with the camera
+#   make unplug     the sender with the camera, which a person unplugs within a minute
 #   make pattern    the test card (--camera-test-pattern), decoded; needs no camera or access
 #   make revoke     forget the probe's camera access
 #   make clean      revoke, unregister and delete build/ and the captured frames
@@ -30,7 +31,7 @@ LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/Launc
 # Same language mode as the engine's build.rs (no ARC).
 CXX       := xcrun clang++ -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -mmacosx-version-min=14.0
 
-.PHONY: all list nothing ask sends forwards pattern run revoke clean
+.PHONY: all list nothing ask sends forwards unplug pattern run revoke clean
 
 # cargo prints where it put the test binary; the bundle wraps that binary.
 all:
@@ -63,6 +64,11 @@ sends:
 
 forwards:
 	@$(MAKE) --no-print-directory run TESTS=client::device_forward::capture TEST=forwards_the_camera
+
+# Unplug the camera (or take the iPhone out of Continuity Camera) once its light is on.
+unplug:
+	@$(MAKE) --no-print-directory run TESTS=client::device_forward::capture \
+	  TEST=tells_the_host_when_the_camera_is_unplugged WAIT=75
 
 # The test card needs no camera access, so the test binary runs as it is, not as the app.
 pattern:

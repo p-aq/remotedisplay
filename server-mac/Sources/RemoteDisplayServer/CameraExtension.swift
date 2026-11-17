@@ -4,8 +4,10 @@ import SystemExtensions
 /// Installs and removes Remote Display Camera, the camera extension that builds signed
 /// with its provisioning profiles bundle (spec, Packaging; decision 0019). macOS
 /// activates it only for the app that embeds it, and only from /Applications; an admin
-/// then allows it in System Settings. First written as the Phase 0 harness's container
-/// app (docs/tests/camera-extension/harness/ContainerApp/).
+/// then allows it in System Settings. macOS also replaces an installed extension only
+/// when the app asks, so a state check that finds another version than the bundled one
+/// asks once per launch (spec, Packaging › Updates). First written as the Phase 0
+/// harness's container app (docs/tests/camera-extension/harness/ContainerApp/).
 final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
     static let identifier = "app.remotedisplay.server.camera"
 
@@ -24,21 +26,68 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
         case working
     }
 
-    static let bundled = FileManager.default.fileExists(atPath: Bundle.main.bundlePath
-        + "/Contents/Library/SystemExtensions/\(identifier).systemextension")
+    /// CFBundleShortVersionString and CFBundleVersion. macOS replaces an installed
+    /// extension only with one whose pair differs.
+    struct Version: Equatable {
+        var short: String
+        var build: String
+    }
 
-    /// Each new state on the main queue, with a message when an install or removal fails.
+    /// One version of the extension that macOS holds, as a state check lists it.
+    struct Held: Equatable {
+        var version: Version
+        var enabled = false
+        var awaitingApproval = false
+        var uninstalling = false
+    }
+
+    private static let bundlePath = Bundle.main.bundlePath
+        + "/Contents/Library/SystemExtensions/\(identifier).systemextension"
+    static let bundled = FileManager.default.fileExists(atPath: bundlePath)
+    /// The bundled extension's version; the Makefile gives it the app's.
+    static let bundledVersion: Version? = {
+        guard let info = Bundle(path: bundlePath)?.infoDictionary,
+              let short = info["CFBundleShortVersionString"] as? String,
+              let build = info["CFBundleVersion"] as? String else { return nil }
+        return Version(short: short, build: build)
+    }()
+
+    /// What a state check's answer means: the state to show, and whether the extension in
+    /// use is another version than `bundled`, older or newer, so macOS should replace it.
+    static func evaluate(_ held: [Held], bundled: Version?) -> (state: State, outdated: Bool) {
+        if let active = held.first(where: { $0.enabled && !$0.uninstalling }) {
+            return (.installed, bundled != nil && active.version != bundled)
+        }
+        if held.contains(where: { $0.awaitingApproval }) { return (.awaitingApproval, false) }
+        if held.contains(where: { $0.uninstalling }) { return (.removing, false) }
+        return (.notInstalled, false)
+    }
+
+    /// Each new state on the main queue, with a message when an install, update or removal
+    /// fails.
     var onChange: (State, String?) -> Void = { _, _ in }
-    /// The install or removal under way; state checks wait for it.
+    /// The install, update or removal under way; state checks wait for it.
     private var pending: OSSystemExtensionRequest?
     private var pendingRemoval = false
     /// A state check is with macOS; the next waits for its answer.
     private var checking = false
+    /// The state last reported, and the one before the request under way, which a failed
+    /// request goes back to until macOS says more.
+    private var last: State?
+    private var beforeRequest: State = .notInstalled
+    /// This launch already asked macOS to replace another version. Once only: if macOS
+    /// refuses, the installed one stays and the row says why.
+    private var updateTried = false
+
+    private func report(_ state: State, _ error: String? = nil) {
+        last = state
+        onChange(state, error)
+    }
 
     /// Asks macOS for the extension's state. Cheap: the app calls it on every refresh.
     func refresh() {
-        guard Self.bundled else { return onChange(.notBundled, nil) }
-        guard Bundle.main.bundlePath.hasPrefix("/Applications/") else { return onChange(.notInApplications, nil) }
+        guard Self.bundled else { return report(.notBundled) }
+        guard Bundle.main.bundlePath.hasPrefix("/Applications/") else { return report(.notInApplications) }
         guard pending == nil, !checking else { return }
         let request = OSSystemExtensionRequest.propertiesRequest(forExtensionWithIdentifier: Self.identifier,
                                                                  queue: .main)
@@ -60,7 +109,8 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
         pending = request
         pendingRemoval = removal
         request.delegate = self
-        onChange(.working, nil)
+        beforeRequest = last ?? .notInstalled
+        report(.working)
         OSSystemExtensionManager.shared.submitRequest(request)
     }
 
@@ -70,14 +120,18 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
         checking = false
         guard pending == nil else { return }
         // One entry per version macOS holds for this app.
-        if properties.contains(where: { $0.isEnabled && !$0.isUninstalling }) {
-            onChange(.installed, nil)
-        } else if properties.contains(where: { $0.isAwaitingUserApproval }) {
-            onChange(.awaitingApproval, nil)
-        } else if properties.contains(where: { $0.isUninstalling }) {
-            onChange(.removing, nil)
+        let held = properties.map {
+            Held(version: Version(short: $0.bundleShortVersion, build: $0.bundleVersion), enabled: $0.isEnabled,
+                 awaitingApproval: $0.isAwaitingUserApproval, uninstalling: $0.isUninstalling)
+        }
+        let (state, outdated) = Self.evaluate(held, bundled: Self.bundledVersion)
+        if outdated && !updateTried {
+            updateTried = true
+            last = state  // what a refused update goes back to
+            NSLog("[remotedisplay] camera extension: another version is installed; asking macOS to replace it")
+            submit(.activationRequest(forExtensionWithIdentifier: Self.identifier, queue: .main), removal: false)
         } else {
-            onChange(.notInstalled, nil)
+            report(state)
         }
     }
 
@@ -92,14 +146,14 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
     func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
         guard request === pending else { return }
         pending = nil
-        onChange(.awaitingApproval, nil)
+        report(.awaitingApproval)
     }
 
     func request(_ request: OSSystemExtensionRequest, didFinishWithResult result: OSSystemExtensionRequest.Result) {
         guard request === pending else { checking = false; return }
         pending = nil
         if result == .willCompleteAfterReboot && pendingRemoval {
-            onChange(.removing, nil)
+            report(.removing)
         } else {
             refresh()
         }
@@ -110,7 +164,8 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
         pending = nil
         let e = error as NSError
         NSLog("[remotedisplay] camera extension request failed: %@ (%@ %ld)", e.localizedDescription, e.domain, e.code)
-        onChange(.notInstalled, e.localizedDescription)
+        // Back to what it was, with the reason; the state check then says what macOS has.
+        report(beforeRequest, e.localizedDescription)
         refresh()
     }
 }
