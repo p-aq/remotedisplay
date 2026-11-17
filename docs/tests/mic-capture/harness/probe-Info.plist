@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- rd-mic-capture-probe.app: the engine's test binary as its own app, so microphone
+     access is asked for and granted to it alone. No Dock icon. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>app.remotedisplay.spike.mic-capture-probe</string>
+    <key>CFBundleName</key>
+    <string>rd-mic-capture-probe</string>
+    <key>CFBundleExecutable</key>
+    <string>rd-mic-capture-probe</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Remote Display's microphone test records a few seconds from your microphone and keeps nothing.</string>
+</dict>
+</plist>
