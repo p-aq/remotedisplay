@@ -52,3 +52,19 @@ and editing the TOML doesn't reach a running engine.
   argument; the engine and the app build. Not tested here: the switch against a live
   `--server`. Running one would put this Mac on the LAN; the path is upstream's
   `ipc::set_option`, the same one the client app uses for every option.
+
+## Forwarding status (2026-10-27)
+
+- **The file:** the `--server` writes `~/Library/Application Support/remotedisplay-forwarding.json`
+  on the same 2 s loop as the perms file, atomically in the same way. It holds
+  `{"camera": "<controller>"}` while a controller sends its camera, and `{}` otherwise.
+  It is a file of its own because the app reads the perms file as booleans only.
+- **The name** is the controller's login name, cut to 64 characters, held next to the
+  one-sender-per-device record in `device_forward.rs`.
+- **The app** reads the file only while the service runs, so a file left by a stopped
+  engine names no one. It badges the menu-bar icon with a camera and adds *Camera from
+  …* to the menu. Both follow the existing guard: nothing changes while the menu is open.
+- **Setup** gains Camera and Microphone rows, as the spec asks. They are optional and
+  not counted as to-do. Each says *Not available in this build* until the camera
+  extension and the virtual mic are bundled; the Camera row checks for the extension
+  inside the app.
