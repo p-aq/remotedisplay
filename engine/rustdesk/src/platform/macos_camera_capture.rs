@@ -2,16 +2,34 @@
 //! (docs/specs/camera-audio-forwarding.md, decisions 0004, 0005, 0006 and 0016).
 //!
 //! [`Capture`] opens a camera and hands out H.264 Annex B access units, one per call,
-//! with SPS and PPS in front of every key frame: what `CameraFrame` carries. The work
-//! is in `macos_camera_capture.mm`; this file wraps it. The sender
+//! with SPS and PPS in front of every key frame: what `CameraFrame` carries, and says
+//! if the camera goes away while it runs (decision 0020). The work is in
+//! `macos_camera_capture.mm`; this file wraps it. The sender
 //! (`src/client/device_forward.rs`) decides when to start, skip and stop.
+//!
+//! With `--camera-test-pattern` ([`use_test_pattern`]) a generated test card is offered
+//! as one more camera, so the whole path runs without a camera (spec, Controller side ›
+//! Testing without a camera).
 
 use hbb_common::{bail, ResultType};
 use std::{
     ffi::{c_void, CStr, CString},
     os::raw::{c_char, c_int},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
 };
+
+/// The test card's camera ID; `kTestPatternID` in the .mm.
+pub const TEST_PATTERN_ID: &str = "remotedisplay-test-pattern";
+const TEST_PATTERN_NAME: &str = "Test pattern";
+static TEST_PATTERN: AtomicBool = AtomicBool::new(false);
+
+/// Offers the test card as a camera for the rest of this process (`--camera-test-pattern`).
+pub fn use_test_pattern() {
+    TEST_PATTERN.store(true, Ordering::Relaxed);
+}
 
 /// A camera that can be forwarded. Remote Display Camera itself is never listed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +115,7 @@ struct RawInfo {
 type Encoded = extern "C" fn(ctx: *mut c_void, data: *const u8, len: usize, key: bool, pts_us: i64);
 type AccessDone = extern "C" fn(ctx: *mut c_void, granted: bool);
 type Each = extern "C" fn(ctx: *mut c_void, id: *const c_char, name: *const c_char);
+type Lost = extern "C" fn(ctx: *mut c_void, why: *const c_char);
 
 extern "C" {
     fn MacCameraAuthorizationStatus() -> c_int;
@@ -109,6 +128,7 @@ extern "C" {
         fps: c_int,
         bitrate_kbps: c_int,
         callback: Encoded,
+        lost: Lost,
         ctx: *mut c_void,
         info: *mut RawInfo,
         error: *mut c_int,
@@ -147,7 +167,8 @@ pub fn request_access(done: impl FnOnce(bool) + Send + 'static) {
 }
 
 /// The Mac's cameras (built-in, USB, Continuity Camera, other apps' virtual cameras),
-/// without Remote Display Camera. Needs no camera access.
+/// without Remote Display Camera, after the test card when it's on. Needs no camera
+/// access.
 pub fn list() -> Vec<Camera> {
     extern "C" fn each(ctx: *mut c_void, id: *const c_char, name: *const c_char) {
         let cameras = unsafe { &mut *(ctx as *mut Vec<Camera>) };
@@ -164,11 +185,21 @@ pub fn list() -> Vec<Camera> {
         });
     }
     let mut cameras = Vec::new();
+    if TEST_PATTERN.load(Ordering::Relaxed) {
+        cameras.push(Camera {
+            id: TEST_PATTERN_ID.to_owned(),
+            name: TEST_PATTERN_NAME.to_owned(),
+        });
+    }
     unsafe { MacCameraList(each, &mut cameras as *mut Vec<Camera> as *mut c_void) };
     cameras
 }
 
-type Sink = Mutex<Box<dyn FnMut(&[u8], bool, i64) + Send>>;
+/// What the .mm calls back, through its `ctx`.
+struct Sink {
+    on_frame: Mutex<Box<dyn FnMut(&[u8], bool, i64) + Send>>,
+    on_lost: Mutex<Option<Box<dyn FnOnce(&str) + Send>>>,
+}
 
 extern "C" fn encoded(ctx: *mut c_void, data: *const u8, len: usize, key: bool, pts_us: i64) {
     if data.is_null() {
@@ -176,8 +207,27 @@ extern "C" fn encoded(ctx: *mut c_void, data: *const u8, len: usize, key: bool, 
     }
     let sink = unsafe { &*(ctx as *const Sink) };
     let data = unsafe { std::slice::from_raw_parts(data, len) };
-    if let Ok(mut on_frame) = sink.lock() {
+    if let Ok(mut on_frame) = sink.on_frame.lock() {
         on_frame(data, key, pts_us);
+    }
+}
+
+extern "C" fn lost(ctx: *mut c_void, why: *const c_char) {
+    let sink = unsafe { &*(ctx as *const Sink) };
+    let why = if why.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(why) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let on_lost = sink
+        .on_lost
+        .lock()
+        .ok()
+        .and_then(|mut on_lost| on_lost.take());
+    if let Some(on_lost) = on_lost {
+        on_lost(&why);
     }
 }
 
@@ -195,18 +245,29 @@ unsafe impl Sync for Capture {}
 impl Capture {
     /// Opens the camera as close as it offers to the requested size and frame rate.
     /// `on_frame(annex_b, key, pts_us)` runs on a VideoToolbox thread for each access
-    /// unit until the `Capture` is dropped; the first one is a key frame. Don't drop
-    /// the `Capture` from inside `on_frame`.
+    /// unit until the `Capture` is dropped; the first one is a key frame. `on_lost(why)`
+    /// runs at most once, on an AVFoundation thread, if the camera goes away first:
+    /// unplugged, its session stopped on an error, or another app changed its format.
+    /// No frames follow it; the `Capture` is still dropped as usual. Don't drop the
+    /// `Capture` from inside either callback.
     pub fn start(
         config: &Config,
         on_frame: impl FnMut(&[u8], bool, i64) + Send + 'static,
+        on_lost: impl FnOnce(&str) + Send + 'static,
     ) -> ResultType<Capture> {
+        if config.device_id.as_deref() == Some(TEST_PATTERN_ID)
+            && !TEST_PATTERN.load(Ordering::Relaxed)
+        {
+            bail!("the test pattern needs --camera-test-pattern");
+        }
         let device_id = match &config.device_id {
             Some(id) => Some(CString::new(id.as_str())?),
             None => None,
         };
-        let on_frame: Box<dyn FnMut(&[u8], bool, i64) + Send> = Box::new(on_frame);
-        let sink: *mut Sink = Box::into_raw(Box::new(Mutex::new(on_frame)));
+        let sink: *mut Sink = Box::into_raw(Box::new(Sink {
+            on_frame: Mutex::new(Box::new(on_frame)),
+            on_lost: Mutex::new(Some(Box::new(on_lost))),
+        }));
         let mut raw_info: RawInfo = unsafe { std::mem::zeroed() };
         let mut error: c_int = 0;
         let raw = unsafe {
@@ -219,6 +280,7 @@ impl Capture {
                 config.fps,
                 config.bitrate_kbps,
                 encoded,
+                lost,
                 sink as *mut c_void,
                 &mut raw_info,
                 &mut error,
@@ -279,7 +341,7 @@ impl Capture {
 
 impl Drop for Capture {
     fn drop(&mut self) {
-        // No callback runs after Stop returns, so the sink can go.
+        // No callback runs after Stop returns, and none is under way, so the sink can go.
         unsafe {
             MacCameraCaptureStop(self.raw);
             drop(Box::from_raw(self.sink));
@@ -319,7 +381,8 @@ mod tests {
 }
 
 /// The camera tests: they need a camera and macOS's camera prompt, so they're ignored
-/// by default. docs/tests/camera-capture/ runs them from their own app bundle.
+/// by default. docs/tests/camera-capture/ runs them from their own app bundle. The test
+/// card's test needs neither and runs with the others.
 #[cfg(test)]
 mod capture {
     use super::*;
@@ -363,6 +426,72 @@ mod capture {
         println!("stream: {}", dir.join("stream.bin").display());
     }
 
+    /// `RD_CAMERA_DUMP=1` also writes what it sent for the harness's decoder (`make pattern`).
+    #[test]
+    fn sends_the_test_pattern_as_h264() {
+        use crate::platform::macos_camera_sink::{Feed, Outcome};
+        let config = Config {
+            device_id: Some(TEST_PATTERN_ID.to_owned()),
+            ..Default::default()
+        };
+        // Only this test turns the card on, so it's still off here.
+        let refused = Capture::start(&config, |_, _, _| {}, |_| {})
+            .err()
+            .expect("the card started without --camera-test-pattern");
+        assert_eq!(
+            refused.to_string(),
+            "the test pattern needs --camera-test-pattern"
+        );
+        use_test_pattern();
+        assert_eq!(list().first().map(|c| c.id.as_str()), Some(TEST_PATTERN_ID));
+
+        let (tx, rx) = mpsc::channel();
+        let capture = Capture::start(
+            &config,
+            move |data, key, pts_us| {
+                let _ = tx.send(Unit {
+                    data: data.to_vec(),
+                    key,
+                    pts_us,
+                });
+            },
+            |why| panic!("the test card went away: {}", why),
+        )
+        .unwrap();
+        let info = capture.info().clone();
+        assert_eq!((info.width, info.height, info.fps), (1280, 720, 30));
+        assert_eq!(
+            (info.device_id.as_str(), info.device_name.as_str()),
+            (TEST_PATTERN_ID, TEST_PATTERN_NAME)
+        );
+        let started = collect(&rx, Duration::from_secs(2));
+        capture.request_key_frame();
+        let asked = collect(&rx, Duration::from_millis(500));
+        let stats = capture.stats();
+        drop(capture);
+        let _while_stopping = rx.try_iter().count();
+        let after_stop = collect(&rx, Duration::from_millis(300));
+
+        let all: Vec<&Unit> = started.iter().chain(&asked).collect();
+        if std::env::var_os("RD_CAMERA_DUMP").is_some() {
+            dump(&all);
+        }
+        println!("{} units in 2 s, {:?}, {:?}", started.len(), info, stats);
+        // 30 fps for 2 s, with room for a busy machine.
+        assert!(started.len() >= 40, "{} units in 2 s", started.len());
+        assert!(started[0].key);
+        assert_eq!(nal_types(&started[0].data), [7, 8, 5]);
+        assert!(asked.iter().any(|u| u.key), "no key frame on request");
+        assert!(all.windows(2).all(|w| w[0].pts_us < w[1].pts_us));
+        assert_eq!(stats.failed, 0);
+        assert!(after_stop.is_empty(), "units after stopping");
+        // The host's decoder takes every unit.
+        let mut feed = Feed::decode_only();
+        for unit in &all {
+            assert_eq!(feed.push(&unit.data, unit.pts_us), Outcome::Decoded);
+        }
+    }
+
     #[test]
     #[ignore]
     fn lists_cameras_but_not_ours() {
@@ -385,9 +514,13 @@ mod capture {
             "the probe already has camera access; run make revoke first"
         );
         let (tx, rx) = mpsc::channel();
-        let result = Capture::start(&Config::default(), move |_, _, _| {
-            let _ = tx.send(());
-        });
+        let result = Capture::start(
+            &Config::default(),
+            move |_, _, _| {
+                let _ = tx.send(());
+            },
+            |_| {},
+        );
         let error = result.err().expect("started without camera access");
         println!("refused: {}", error);
         assert_eq!(error.to_string(), "camera access not allowed");
@@ -416,13 +549,17 @@ mod capture {
             "allow camera access first (make ask)"
         );
         let (tx, rx) = mpsc::channel();
-        let capture = Capture::start(&Config::default(), move |data, key, pts_us| {
-            let _ = tx.send(Unit {
-                data: data.to_vec(),
-                key,
-                pts_us,
-            });
-        })
+        let capture = Capture::start(
+            &Config::default(),
+            move |data, key, pts_us| {
+                let _ = tx.send(Unit {
+                    data: data.to_vec(),
+                    key,
+                    pts_us,
+                });
+            },
+            |why| println!("camera lost: {}", why),
+        )
         .unwrap();
         let info = capture.info().clone();
         println!("{:?}", info);

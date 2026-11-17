@@ -53,5 +53,19 @@ The capture side, with its one-frame slot and skipping, is in
   - A host's key-frame requests are honoured at most once per 500 ms. The spec puts
     that limit on the host; here it is enforced on the controller too.
   - The host's bitrate is kept within 100–2000 kbit/s.
+
+**Note (2026-11-15, review of PR #28):** the 150 ms rule alone never engaged on a slow
+link: three queued frames are only 100 ms at 30 fps, so the queue overflowed first and
+frames were dropped after encoding, each drop forcing a key frame. Skipping now also
+turns on when the queue behind a sent frame is one short of full, and once on it stays on
+until the queue is empty. Separately, a camera change whose new camera fails to start
+now tells the host `on: false`, so it doesn't keep the old forward and the sender slot.
+
+A model of the queue (constant send time, no TCP) shows the new rule ends drops after
+encoding when key frames are about the size of a P frame. When a key frame is 5 to 10
+times a P frame, sending it takes longer than the three-slot queue covers, so it
+overflows whatever the rule. A 500 ms limit on forced key frames was tried in the model
+and left out, because it roughly halved the frames sent in that range. This case is to be
+measured in the live session over a constrained link before the queue is changed.
 - **Not yet:** the microphone (Phase 2) is refused with a log line. The Devices menu
   and its FFI call send `Data::DeviceForward`; nothing does yet.
