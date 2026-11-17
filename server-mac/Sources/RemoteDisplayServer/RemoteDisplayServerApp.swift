@@ -13,14 +13,14 @@ struct RemoteDisplayServerApp: App {
                 .environment(appDelegate.controller)
         } label: {
             let c = appDelegate.controller
-            HStack(spacing: 2) {
-                Image(systemName: c.isReady
-                      ? "display"
-                      : "display.trianglebadge.exclamationmark")
-                // The camera badge while a controller is sending (spec, What the user sees).
-                if c.cameraSender != nil {
-                    Image(systemName: "video.fill")
-                }
+            let symbol = c.isReady ? "display" : "display.trianglebadge.exclamationmark"
+            // A camera or mic badge while a controller is sending (spec, What the user sees).
+            let badges = (c.cameraSender == nil ? [] : ["video.fill"])
+                + (c.microphoneSender == nil ? [] : ["mic.fill"])
+            if badges.isEmpty {
+                Image(systemName: symbol)
+            } else {
+                Image(nsImage: MenuBarIcon.badged(symbol, badges))
             }
         }
         .menuBarExtraStyle(.menu)

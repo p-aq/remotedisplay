@@ -12,8 +12,9 @@ Two layers (August 2026), the whole UI in English:
 background: status line (`Ready · 192.168.1.117:21118` / `Running · N permission(s)
 missing` / `Stopped`), addresses, active sessions, **Open Remote Display Server…** (⌘O),
 *Service Active* and *Open at Login* toggles, *Quit* (⌘Q). The icon carries an alert
-badge if setup is incomplete, and a camera badge plus a *Camera from …* line while a
-controller sends its camera (`remotedisplay-forwarding.json`).
+badge if setup is incomplete, and a camera or mic badge plus a *Camera from …* or
+*Microphone from …* line while a controller sends its camera or microphone
+(`remotedisplay-forwarding.json`).
 
 **Main window** (`MainWindowView`, grouped `Form` styled like Settings, 560×700) —
 all the configuration and status:
@@ -23,7 +24,10 @@ all the configuration and status:
   Microphone rows follow, optional and not counted. Camera shows where Remote Display Camera
   stands, from macOS: *Install…*, an admin's approval in System Settings (*Open Settings…*),
   *Installed*; or *Not available in this build* when the build has no provisioning profiles
-  (decision 0019). Microphone is *Not available in this build* until the virtual mic (Phase 2).
+  (decision 0019). Microphone shows Remote Display Microphone, the virtual mic's driver, which
+  every build bundles: *Install…* copies it to `/Library/Audio/Plug-Ins/HAL` and restarts
+  coreaudiod after one admin prompt, *Update…* when another version is installed, then
+  *Installed* (decision 0027).
 - **Connect from another device**: LAN and Tailscale `ip:port` with copy.
 - **Active sessions**: connected peers (lsof on the engine, port 21118) + *Disconnect all*
   (restarts the engine).
@@ -31,7 +35,8 @@ all the configuration and status:
   camera and microphone* (off by default; `remotedisplayd --set-device-forward on|off` over IPC,
   state read back from `remotedisplay-perms.json`'s `device_forward`). Forwarding itself comes with
   the camera & audio forwarding spec's Phases 1 and 2. *Remove Camera and Microphone* shows while
-  Remote Display Camera is installed or waiting for approval.
+  Remote Display Camera is installed or waiting for approval, or Remote Display Microphone is
+  installed, and removes whichever is there; the microphone with an admin prompt.
 - **About**: engine version, open logs, reveal configuration.
 
 Opens by itself on startup if setup or password is missing; also on double-click on the app
@@ -84,10 +89,15 @@ Remote Display Server.app/Contents/
 ├── MacOS/
 │   ├── RemoteDisplayServer   ← SwiftUI UI (MenuBarExtra)
 │   └── remotedisplayd        ← Rust engine (cargo, no flutter) = the `rustdesk` binary
-└── Library/SystemExtensions/
-    └── app.remotedisplay.server.camera.systemextension
-                              ← Remote Display Camera (CameraExtension/), only in builds
-                                signed with its provisioning profiles
+└── Library/
+    ├── SystemExtensions/
+    │   └── app.remotedisplay.server.camera.systemextension
+    │                         ← Remote Display Camera (CameraExtension/), only in builds
+    │                           signed with its provisioning profiles
+    └── Audio/Plug-Ins/HAL/
+        └── RemoteDisplayMicrophone.driver
+                              ← Remote Display Microphone (AudioDriver/), copied to
+                                /Library/Audio/Plug-Ins/HAL by Setup's Install…
 ```
 
 The engine runs via a LaunchAgent (`~/Library/LaunchAgents/app.remotedisplay.server.plist`,
@@ -128,6 +138,13 @@ make sign ENGINE_BIN=… APP_PROFILE=server.provisionprofile EXT_PROFILE=camera.
 ```
 
 Without both, or without an identity, the build leaves the extension out and says so.
+
+Remote Display Microphone needs no profile, so every build bundles it. `make driver` builds
+it on its own: BlackHole's unmodified source in `AudioDriver/BlackHole/` (v0.7.2, GPL-3.0),
+compiled universal with the Makefile's constants, the ones the Phase 0 harness measured
+(decisions 0013, 0027). Its version is its own, in `AudioDriver/Info.plist`: bump
+`CFBundleVersion` only when the driver changes, since Setup offers *Update…*, and an admin
+prompt, whenever the installed one differs.
 
 ## Installing
 
@@ -218,7 +235,10 @@ with `CameraExtension/Extension.entitlements` (sandbox, app group), and the app 
 `App.entitlements`: `Entitlements.plist` plus the restricted system-extension install
 entitlement and the app group. Nothing is signed with `--deep`. Without the profiles the app
 keeps `Entitlements.plist`, as before. Only `remotedisplayd` from the same team may feed the
-camera; the extension checks every sink client (decision 0019).
+camera; the extension checks every sink client (decision 0019). The microphone's driver is
+signed on its own too, with its identifier `app.remotedisplay.server.mic` and no
+entitlements, before `remotedisplayd`: coreaudiod loads it, and codesign doesn't count
+`Library/Audio` as nested code, so `--deep` wouldn't sign it.
 
 Release builds (`release/release-mac.sh`) are notarized with Apple and stapled; the
 Developer ID identity lives in a dedicated keychain on the build Mac, see
