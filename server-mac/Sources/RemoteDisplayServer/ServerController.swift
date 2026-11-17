@@ -152,6 +152,8 @@ final class ServerController {
     // MARK: - Lifecycle
 
     func start() {
+        // Read at launch, while the file on disk is still the one running: root's driver check pins this team.
+        NSLog("[remotedisplay] own team: %@", DriverInstallCommand.ownTeam ?? "none (ad hoc)")
         engineProblem = Self.checkEngine(at: enginePath)
         if let problem = engineProblem { NSLog("[remotedisplay] engine problem: %@", problem) }
         engineVersion = readEngineVersion()
@@ -159,8 +161,13 @@ final class ServerController {
             // macOS answers whenever it likes, possibly while the menu is open (menuOpenSince).
             self?.whenMenuClosed {
                 guard let self else { return }
+                if let error {
+                    self.cameraError = error
+                } else if self.cameraState != state, state != .working {
+                    // macOS moved on from the failure, as when an admin allows it later.
+                    self.cameraError = nil
+                }
                 if self.cameraState != state { self.cameraState = state }
-                if let error { self.cameraError = error }
             }
         }
         microphoneDriver.onChange = { [weak self] state, error in

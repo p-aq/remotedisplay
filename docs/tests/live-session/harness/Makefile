@@ -3,20 +3,26 @@
 # takes to reach Remote Display Microphone (spec, Testing plan › Mic latency).
 #
 #   make            build/rd-clap.app
-#   make clap-test  rd-clap's onset detection on generated claps; needs no microphone
-#   make inputs     the inputs rd-clap can use as its reference
+#   make clap-test  rd-clap's onset detection and pairing on generated claps; needs no
+#                   microphone
+#   make inputs     the inputs rd-clap can use as its reference, and how each connects
 #   make latency    on the host, while a controller forwards its microphone: clap next to
-#                   the controller's microphone and the reference, about once a second
+#                   the controller's microphone and the reference, every two seconds or so
 #   make clean      forget rd-clap's microphone access, unregister it and delete build/
 #
-# REF= names the reference input as `make inputs` lists it (the default input otherwise,
-# unless that's Remote Display Microphone). DURATION= is how long it records, in seconds
-# (15).
+# REF= names the reference input as `make inputs` lists it; without it rd-clap takes the
+# first built-in or wired input, never a Bluetooth or virtual one. DURATION= is how long
+# it records, in seconds (15).
 
 ARCH       ?= arm64
 REF        ?=
 DURATION   ?= 15
-BUILD      := $(CURDIR)/build
+# This folder, wherever make is run from, so clean never deletes another folder's build/.
+HERE       := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+ifneq ($(words $(HERE))$(wildcard $(HERE)/clap.m),1$(HERE)/clap.m)
+$(error Can't find this Makefile's folder; a path with spaces isn't supported. Got: $(HERE))
+endif
+BUILD      := $(HERE)/build
 BUNDLE_ID  := app.remotedisplay.spike.clap
 APP        := $(BUILD)/rd-clap.app
 BIN        := $(APP)/Contents/MacOS/rd-clap
@@ -26,32 +32,32 @@ LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/Launc
 .PHONY: all clap-test inputs latency clean
 
 all:
-	@mkdir -p $(APP)/Contents/MacOS
-	xcrun clang -fobjc-arc -O2 -Wall -Wextra -arch $(ARCH) -mmacosx-version-min=14.0 clap.m -o $(BIN) \
+	@mkdir -p "$(APP)/Contents/MacOS"
+	xcrun clang -fobjc-arc -O2 -Wall -Wextra -arch $(ARCH) -mmacosx-version-min=14.0 "$(HERE)/clap.m" -o "$(BIN)" \
 	  -framework AVFoundation -framework AudioToolbox -framework CoreAudio -framework Foundation
-	cp clap-Info.plist $(APP)/Contents/Info.plist
-	codesign --sign - --identifier $(BUNDLE_ID) --force $(APP)
+	cp "$(HERE)/clap-Info.plist" "$(APP)/Contents/Info.plist"
+	codesign --sign - --identifier $(BUNDLE_ID) --force "$(APP)"
 	@echo "Built $(APP)"
 
 clap-test: all
-	$(BIN) --self-test
+	"$(BIN)" --self-test
 
 inputs: all
-	$(BIN) --list
+	"$(BIN)" --list
 
 # `open --stdout` fails with -10810 for a file on an external drive, so the log goes to
 # the system temp folder.
 latency: all
-	@mkdir -p $(LOGS) && rm -f $(LOGS)/clap.log
-	@echo "Clap next to the controller's microphone and the reference, about once a second, for $(DURATION) s."
-	open -W -n --stdout $(LOGS)/clap.log --stderr $(LOGS)/clap.log $(APP) \
+	@mkdir -p "$(LOGS)" && rm -f "$(LOGS)/clap.log"
+	@echo "Clap next to the controller's microphone and the reference, every two seconds or so, for $(DURATION) s."
+	open -W -n --stdout "$(LOGS)/clap.log" --stderr "$(LOGS)/clap.log" "$(APP)" \
 	  --args $(if $(strip $(REF)),--ref "$(REF)") --seconds $(DURATION)
-	@cat $(LOGS)/clap.log
-	@grep -q '^PASS' $(LOGS)/clap.log
+	@cat "$(LOGS)/clap.log"
+	@grep -q '^PASS' "$(LOGS)/clap.log"
 
 # tccutil finds a bundle through Launch Services, so register it first.
 clean:
-	-$(LSREGISTER) -f $(APP)
+	-$(LSREGISTER) -f "$(APP)"
 	-tccutil reset Microphone $(BUNDLE_ID)
-	-$(LSREGISTER) -u $(APP)
-	rm -rf $(BUILD) $(LOGS)
+	-$(LSREGISTER) -u "$(APP)"
+	rm -rf "$(BUILD)" "$(LOGS)"

@@ -9,8 +9,9 @@
 # Each profile must be a macOS profile of TEAM_ID for its App ID, unexpired, with the
 # entitlements the build claims and the certificate server-mac/sign-identity.sh picks for
 # TEAM_ID. A development profile must also list every Mac that will host: give each one's
-# Provisioning UDID (System Information › Hardware), or none when this Mac hosts.
-# SIGN_ID= checks that identity instead of sign-identity.sh's pick, as the Makefile would.
+# Provisioning UDID (System Information › Hardware), or none when only this Mac hosts.
+# SIGN_ID= checks that identity, by name or SHA-1 hash, instead of sign-identity.sh's pick,
+# as the Makefile would.
 # Exit 0 when nothing fails.
 set -u
 if [ $# -lt 3 ]; then
@@ -33,7 +34,8 @@ get() { /usr/libexec/PlistBuddy -c "Print :$1" "$TMP/p.plist" 2>/dev/null; }
 SIGN_ID="${SIGN_ID:-$(bash "$REPO/server-mac/sign-identity.sh" "$TEAM")}"
 if [ -n "$SIGN_ID" ]; then
   echo "Signing identity for team $TEAM: $SIGN_ID"
-  HASHES=$(security find-identity -v -p codesigning | awk -v n="\"$SIGN_ID\"" 'index($0, n) {print $2}')
+  HASHES=$(security find-identity -v -p codesigning \
+    | awk -v id="$SIGN_ID" 'index($0, "\"" id "\"") || toupper($2) == toupper(id) {print toupper($2)}')
 else
   echo "FAIL no signing identity of team $TEAM in the keychain (server-mac/sign-identity.sh)"
   fails=1

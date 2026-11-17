@@ -17,15 +17,31 @@ the session never got as far as showing the sound switch ([findings](#runtime-fi
 
 | Piece | What it is |
 |---|---|
-| `harness/host.sh` | Run on the host. `before` stops if Remote Display is already there, Remote Display Camera included. It saves a list of the places the test writes to and of the Mac's system extensions, moves the app to /Applications and clears AirDrop's quarantine. `after` stops while Remote Display Camera is still installed, since only the app can remove it. Otherwise it quits the app, removes its LaunchAgent, config, logs and the driver (with `sudo` if Settings didn't), resets the app's permissions, and compares the list with `before`'s. If the camera finishes uninstalling at a restart, it says so: run it again after the restart |
+| `harness/host.sh` | Run on the host. `before` stops if Remote Display is already there, Remote Display Camera included. It saves a list of the places the test writes to and of the Mac's system extensions, moves the app to /Applications, clears AirDrop's quarantine and leaves `installed.txt` beside itself. `after` removes only with that file there, so a `before.txt` left from an earlier session can't make it delete an install the test didn't add. It stops while Remote Display Camera is still installed, since only the app can remove it, and when it can't read the system extensions. Otherwise it quits the app, removes its LaunchAgent, config, logs and the driver (with `sudo` if Settings didn't), resets the app's permissions, and compares the list with `before`'s. If the camera finishes uninstalling at a restart, it says so: run it again after the restart. It deletes `installed.txt` once nothing of the test is left |
 | `harness/controller.sh` | The same for the client, on a controller that didn't build it: `before` moves it to /Applications, `after` removes its config, logs and permissions |
 | `harness/profiles.sh` | On the build Mac, before a build with the camera: checks both provisioning profiles against what `server-mac/Makefile` signs. It checks each profile's team, App ID, platform and expiry, the install entitlement, the app group, the host Macs and the signing identity's certificate, then prints the `make` command. macOS itself only refuses a wrong profile on the host, at launch or activation |
-| `harness/clap.m`, `harness/Makefile` | `rd-clap`, run on the host: records a reference microphone and Remote Display Microphone at once, and gives each clap's delay between the two from Core Audio's host-time stamps. `make latency` runs it as `rd-clap.app`, so microphone access goes to it alone. `make clap-test` checks the onset detection on generated claps, and `make clean` resets its access and deletes it |
+| `harness/clap.m`, `harness/Makefile` | `rd-clap`, run on the host: records a reference microphone and Remote Display Microphone at once, and gives each clap's delay between the two ([what the figure includes](#what-rd-claps-figure-includes)). `make latency` runs it as `rd-clap.app`, so microphone access goes to it alone. `make clap-test` checks the onset detection and the pairing on generated claps, and `make clean` resets its access and deletes it |
 
 To run a session, put the server app (`server-mac/.build/Remote Display Server.app`) and
 `host.sh` in one folder and AirDrop it to the host. For a controller other than the build
 Mac, do the same with the client (`client/build/macos/Build/Products/Release/RemoteDisplay.app`)
 and `controller.sh`.
+
+### What rd-clap's figure includes
+
+- **From:** the clap reaching the reference microphone. Core Audio stamps a sample when
+  the device acquired it, so `rd-clap` adds the input latency the reference reports (its
+  device latency plus its stream's). If Core Audio's stamps already allow for it, the
+  figure reads high by that much, which is the safe side of the limit.
+- **To:** the clap's first sample in Remote Display Microphone, by the device's own stamp.
+  An app reading the device gets that sample one of its own buffers later, about 10 ms at
+  512 frames, which the figure leaves out.
+- **The reference:** the first built-in or wired input, unless `REF=` names another. A
+  Bluetooth or virtual input stamps its samples late. If Remote Display Microphone hears
+  most claps before the reference does, `rd-clap` says so and gives no figure.
+- **Pairing:** a clap counts when Remote Display Microphone hears it before the reference
+  hears the next one. A sound only one of them hears stays unpaired. Clap every two
+  seconds or so.
 
 ## What was tested and the result
 
@@ -91,8 +107,8 @@ Run 2026-10-30. A person at both Macs did the steps and typed the admin password
 
 ## Next session: the camera and the calls
 
-Planned for the weekend of 2026-10-31. The camera needs a build signed by a paid Apple
-Developer Program team. macOS installs a camera extension only from an app whose
+Set up on 2026-11-14 ([results](#set-up-on-2026-11-14)); the tests are still to run. The
+camera needs a build signed by a paid Apple Developer Program team. macOS installs a camera extension only from an app whose
 provisioning profile allows it, and an ad-hoc build leaves the extension out
 ([decision 0019](../../architecture/decisions/0019-camera-extension-in-the-server-app.md)).
 Without one, the microphone and sound tests (11 to 18) still run on an ad-hoc build.
@@ -117,22 +133,53 @@ On the build Mac, after joining the program:
    Don't register an app group. The portal only takes `group.` IDs, and a Mac profile
    whose App ID has App Groups on covers `<TEAM_ID>.*`, which includes the build's
    `<TEAM_ID>.app.remotedisplay.server` ([Apple DTS](https://developer.apple.com/forums/thread/721701)).
-3. **Devices.** Add both Macs under macOS, each by its Provisioning UDID (System
-   Information › Hardware), so either can host.
+3. **Devices.** Add each Mac that will host under macOS, by its Provisioning UDID (System
+   Information › Hardware). A Mac added later means generating the profiles again.
 4. **Profiles.** Add a *macOS App Development* profile for each App ID, with the Apple
-   Development certificate and both Macs, and download them.
+   Development certificate and those Macs, and download them. Keep them out of the
+   repository: they name the team and the Macs.
 5. **Check, then build.** On the build Mac:
 
    ```sh
-   bash docs/tests/live-session/harness/profiles.sh TEAM_ID server.provisionprofile camera.provisionprofile [OTHER_HOST_UDID]
+   bash docs/tests/live-session/harness/profiles.sh TEAM_ID server.provisionprofile camera.provisionprofile [HOST_UDID...]
    ```
 
-   It prints the `make` command once every check passes.
+   It checks the profiles for each host given, or for this Mac when none is, and prints
+   the `make` command once every check passes.
 
 A development build needs no notarization. A Developer ID system extension loads only
 once notarized (spec, Packaging), so Developer ID waits for the release build. If macOS
 refuses to activate the extension, `log stream --predicate 'process == "sysextd"'` on
 the host says why.
+
+#### Set up on 2026-11-14
+
+On the Mac mini (macOS 15.7.7, Xcode 26.3), with an individual team. Only the Mac mini is
+registered, since it hosts.
+
+- **`profiles.sh`:** all 16 checks pass on the two profiles.
+- **The build:** `make sign` with the team, the identity and both profiles bundles Remote
+  Display Camera. The extension, `remotedisplayd` and the app carry the Apple Development
+  signature, each of the app and the extension embeds its profile, the app claims the
+  install entitlement, and `codesign --verify --deep --strict` passes.
+- **Not yet:** installing it. Activation, and every test below, needs a person at the Mac.
+
+Two things stood in the way:
+
+- **`codesign` couldn't use the new certificate:** "unable to build chain to self-signed
+  root", then `errSecInternalComponent`. Apple Development certificates are issued by the
+  Worldwide Developer Relations G3 intermediate, and this Mac's keychains held only the
+  ones that expired in 2016 and 2023. Xcode hadn't installed G3. `security verify-cert`
+  passed all the same, because it fetches a missing intermediate and `codesign` doesn't.
+  Adding `AppleWWDRCAG3.cer` from apple.com/certificateauthority to the login keychain
+  fixed it, after checking that it chains to Apple Root CA and that its key ID is the
+  certificate's issuer.
+- **`make sign` needs Xcode's toolchain:** with the Command Line Tools selected, the
+  universal `swift build` stops at "xcbuild … does not exist". Run it with
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
+
+The portal also turns on In-App Purchase for every new App ID. It's harmless here, and the
+profiles don't carry it.
 
 ### Layout
 
@@ -173,7 +220,7 @@ the extension. A phone that joins the Zoom meetings is the far end.
 | 11 | Default input | `make default-check` in `docs/tests/virtual-mic/harness/`, then look at Sound › Input and Output ([decision 0031](../../architecture/decisions/0031-virtual-mic-can-be-the-default-input.md)) | PASS; Input lists Remote Display Microphone and Output doesn't | Pending |
 | 12 | Dictation | Remote Display Microphone as the input under Sound › Input, then dictate into TextEdit. Turn Dictation on in Keyboard if it's off, and off again after | The words come out right: with 13, the Phase 2 gate | Pending |
 | 13 | Zoom's test meeting | zoom.us/test on the host, with Remote Display Camera and Remote Display Microphone | The preview shows the picture, and the microphone test plays the speech back clearly | Pending |
-| 14 | Microphone latency | `make latency` on the host, the LifeCam next to the MacBook Pro | The median is under 150 ms | Pending |
+| 14 | Microphone latency | `make latency` on the host, the LifeCam next to the MacBook Pro; clap every two seconds. `rd-clap` takes the LifeCam as the Mac mini's only wired input and says which it took | The median is under 150 ms | Pending |
 | 15 | No host sound | *Play the Mac's sound here* off, microphone on | The microphone still reaches the host | Pending |
 | 16 | A call with the host's sound | A Zoom meeting on the host with the phone, *Play the Mac's sound here* on | The phone and the controller hear each other; echo and ducking recorded (spec, Open questions) | Pending |
 | 17 | No headphones | As 16, with the controller on its own speakers and microphone | The phone hears no echo, or the Devices menu shows the headphones hint | Pending |
@@ -182,7 +229,7 @@ the extension. A phone that joins the Zoom meetings is the far end.
 | 20 | Restart | Restart the host with both devices installed | After login the camera and the microphone work without reinstalling | Pending |
 | 21 | Upgrade | Install a newer build over this one with Photo Booth open | What Photo Booth shows, recorded; no stale device once it relaunches | Pending |
 | 22 | Remove | Settings › *Remove Camera and Microphone* | The extension leaves `systemextensionsctl list`, or says it finishes at a restart; Remote Display Microphone goes | Pending |
-| 23 | Nothing left behind | `host.sh after`, again after a restart if it asks; `controller.sh after` | Only the volume line differs | Pending |
+| 23 | Nothing left behind | `make clean` in `harness/`, for `rd-clap`'s microphone access; `host.sh after`, again after a restart if it asks; `controller.sh after` | Only the volume line differs | Pending |
 
 ### Still not covered
 
