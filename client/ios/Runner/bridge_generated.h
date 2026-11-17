@@ -7,63 +7,56 @@ typedef struct _Dart_Handle* Dart_Handle;
 
 #define AUDIO_BUFFER_MS 3000
 
+#define TOKEN_BYTES 32
+
+#define MAX_RECORDS 128
+
+#define DEFAULT_DAYS 90
+
+#define NEVER_EXPIRE 0
+
+#define DAY_MILLIS (((24 * 60) * 60) * 1000)
+
 #define CLIPBOARD_INTERVAL 333
 
-#define ERR_SUCCESS 0
+/**
+ * On the wire and fixed forever: what the controller may have in flight on a
+ * channel before `opened` brings the peer's window.
+ */
+#define INITIAL_WINDOW (64 * 1024)
 
-#define ERR_RUSTDESK_HANDLE_BASE 10000
+/**
+ * Also on the wire and fixed forever: the window a `data` frame costs at
+ * minimum, whatever its length. It bounds the per-frame bookkeeping a peer
+ * can make us hold — 1-byte frames would otherwise cost it one byte and us
+ * a queue entry.
+ */
+#define MIN_FRAME_CHARGE 64
 
-#define ERR_PLUGIN_LOAD 10001
+#define CHANNEL_WINDOW (256 * 1024)
 
-#define ERR_PLUGIN_MSG_INIT 10101
+#define MAX_FRAME (64 * 1024)
 
-#define ERR_PLUGIN_MSG_INIT_INVALID 10102
+/**
+ * Cap on one framed packet once the tunnel is up: a `MAX_FRAME` data frame,
+ * its protobuf envelope and the 16-byte MAC fit with room to spare. The codec
+ * otherwise takes a header declaring up to 1 GiB, and the channel window is
+ * only checked once the whole packet has arrived.
+ */
+#define MAX_PACKET (2 * MAX_FRAME)
 
-#define ERR_PLUGIN_MSG_GET_LOCAL_PEER_ID 10103
+#define UPDATE_THRESHOLD (CHANNEL_WINDOW / 2)
 
-#define ERR_PLUGIN_SIGNATURE_NOT_VERIFIED 10104
+#define MAX_CHANNELS 256
 
-#define ERR_PLUGIN_SIGNATURE_VERIFICATION_FAILED 10105
+#define DATA_QUEUE_FRAMES 128
 
-#define ERR_CALL_UNIMPLEMENTED 10201
-
-#define ERR_CALL_INVALID_METHOD 10202
-
-#define ERR_CALL_NOT_SUPPORTED_METHOD 10203
-
-#define ERR_CALL_INVALID_PEER 10204
-
-#define ERR_CALL_INVALID_ARGS 10301
-
-#define ERR_PEER_ID_MISMATCH 10302
-
-#define ERR_CALL_CONFIG_VALUE 10303
-
-#define ERR_NOT_HANDLED 10401
-
-#define ERR_CALLBACK_HANDLE_BASE 20000
-
-#define ERR_CALLBACK_PLUGIN_ID 20001
-
-#define ERR_CALLBACK_INVALID_ARGS 20002
-
-#define ERR_CALLBACK_INVALID_MSG 20003
-
-#define ERR_CALLBACK_TARGET 20004
-
-#define ERR_CALLBACK_TARGET_TYPE 20005
-
-#define ERR_CALLBACK_PEER_NOT_FOUND 20006
-
-#define ERR_CALLBACK_FAILED 21001
-
-#define ERR_PLUGIN_HANDLE_BASE 30000
-
-#define EER_CALL_FAILED 30021
-
-#define ERR_PEER_ON_FAILED 40012
-
-#define ERR_PEER_OFF_FAILED 40012
+/**
+ * Never keep more than our own advertised window in flight, whatever the peer
+ * offers. The controlled side's sink is unbounded, so credit is the only bound
+ * on how much target data it buffers, and the peer chooses that number.
+ */
+#define MAX_SEND_CREDIT CHANNEL_WINDOW
 
 #define INVALID_PRIVACY_MODE_CONN_ID 0
 
@@ -151,6 +144,10 @@ void wire_session_start_with_displays(int64_t port_,
                                       struct wire_uint_8_list *session_id,
                                       struct wire_uint_8_list *id,
                                       struct wire_int_32_list *displays);
+
+void wire_session_get_cursor_shape(int64_t port_,
+                                   struct wire_uint_8_list *session_id,
+                                   struct wire_uint_8_list *id);
 
 void wire_session_get_remember(int64_t port_, struct wire_uint_8_list *session_id);
 
@@ -507,8 +504,6 @@ WireSyncReturn wire_main_get_option_sync(struct wire_uint_8_list *key);
 
 void wire_main_get_error(int64_t port_);
 
-WireSyncReturn wire_main_show_option(struct wire_uint_8_list *_key);
-
 void wire_main_set_option(int64_t port_,
                           struct wire_uint_8_list *key,
                           struct wire_uint_8_list *value);
@@ -840,6 +835,8 @@ void wire_cm_login_res(int64_t port_, int32_t conn_id, bool res);
 
 void wire_cm_close_connection(int64_t port_, int32_t conn_id);
 
+void wire_cm_close_connection_window(int64_t port_, int32_t conn_id);
+
 void wire_cm_remove_disconnected_connection(int64_t port_, int32_t conn_id);
 
 void wire_cm_check_click_time(int64_t port_, int32_t conn_id);
@@ -884,6 +881,10 @@ void wire_option_synced(int64_t port_);
 WireSyncReturn wire_main_is_installed(void);
 
 WireSyncReturn wire_main_init_input_source(void);
+
+WireSyncReturn wire_main_reload_keyboard_shortcuts(void);
+
+WireSyncReturn wire_main_get_default_keyboard_shortcuts(void);
 
 WireSyncReturn wire_main_is_installed_lower_version(void);
 
@@ -967,45 +968,6 @@ WireSyncReturn wire_is_preset_password_mobile_only(void);
 
 void wire_send_url_scheme(int64_t port_, struct wire_uint_8_list *_url);
 
-void wire_plugin_event(int64_t port_,
-                       struct wire_uint_8_list *_id,
-                       struct wire_uint_8_list *_peer,
-                       struct wire_uint_8_list *_event);
-
-void wire_plugin_register_event_stream(int64_t port_, struct wire_uint_8_list *_id);
-
-WireSyncReturn wire_plugin_get_session_option(struct wire_uint_8_list *_id,
-                                              struct wire_uint_8_list *_peer,
-                                              struct wire_uint_8_list *_key);
-
-void wire_plugin_set_session_option(int64_t port_,
-                                    struct wire_uint_8_list *_id,
-                                    struct wire_uint_8_list *_peer,
-                                    struct wire_uint_8_list *_key,
-                                    struct wire_uint_8_list *_value);
-
-WireSyncReturn wire_plugin_get_shared_option(struct wire_uint_8_list *_id,
-                                             struct wire_uint_8_list *_key);
-
-void wire_plugin_set_shared_option(int64_t port_,
-                                   struct wire_uint_8_list *_id,
-                                   struct wire_uint_8_list *_key,
-                                   struct wire_uint_8_list *_value);
-
-void wire_plugin_reload(int64_t port_, struct wire_uint_8_list *_id);
-
-WireSyncReturn wire_plugin_enable(struct wire_uint_8_list *_id, bool _v);
-
-WireSyncReturn wire_plugin_is_enabled(struct wire_uint_8_list *_id);
-
-WireSyncReturn wire_plugin_feature_is_enabled(void);
-
-void wire_plugin_sync_ui(int64_t port_, struct wire_uint_8_list *_sync_to);
-
-void wire_plugin_list_reload(int64_t port_);
-
-void wire_plugin_install(int64_t port_, struct wire_uint_8_list *_id, bool _b);
-
 WireSyncReturn wire_is_support_multi_ui_session(struct wire_uint_8_list *version);
 
 WireSyncReturn wire_is_selinux_enforcing(void);
@@ -1035,6 +997,8 @@ void wire_main_check_hwcodec(int64_t port_);
 void wire_main_get_trusted_devices(int64_t port_);
 
 void wire_main_remove_trusted_devices(int64_t port_, struct wire_uint_8_list *json);
+
+void wire_main_renew_trusted_devices(int64_t port_, struct wire_uint_8_list *json);
 
 void wire_main_clear_trusted_devices(int64_t port_);
 
@@ -1081,12 +1045,16 @@ void free_WireSyncReturn(WireSyncReturn ptr);
 /**
  * FFI for rustdesk core's main entry.
  * Return true if the app should continue running with UI(possibly Flutter), false if the app should exit.
+ * On macOS, command-only paths exit here because the Swift caller ignores
+ * the return value; update failures must therefore use a non-zero exit status.
  */
 bool rustdesk_core_main(void);
 
 void handle_applicationShouldOpenUntitledFile(void);
 
 char **rustdesk_core_main_args(int *args_len);
+
+int rustdesk_is_disable_installation(void);
 
 void free_c_args(char **ptr, int len);
 
@@ -1119,6 +1087,7 @@ static int64_t dummy_method_to_enforce_bundling(void) {
     dummy_var ^= ((int64_t) (void*) wire_session_add_sync);
     dummy_var ^= ((int64_t) (void*) wire_session_start);
     dummy_var ^= ((int64_t) (void*) wire_session_start_with_displays);
+    dummy_var ^= ((int64_t) (void*) wire_session_get_cursor_shape);
     dummy_var ^= ((int64_t) (void*) wire_session_get_remember);
     dummy_var ^= ((int64_t) (void*) wire_session_get_toggle_option);
     dummy_var ^= ((int64_t) (void*) wire_session_get_toggle_option_sync);
@@ -1212,7 +1181,6 @@ static int64_t dummy_method_to_enforce_bundling(void) {
     dummy_var ^= ((int64_t) (void*) wire_main_get_option);
     dummy_var ^= ((int64_t) (void*) wire_main_get_option_sync);
     dummy_var ^= ((int64_t) (void*) wire_main_get_error);
-    dummy_var ^= ((int64_t) (void*) wire_main_show_option);
     dummy_var ^= ((int64_t) (void*) wire_main_set_option);
     dummy_var ^= ((int64_t) (void*) wire_main_get_options);
     dummy_var ^= ((int64_t) (void*) wire_main_get_options_sync);
@@ -1345,6 +1313,7 @@ static int64_t dummy_method_to_enforce_bundling(void) {
     dummy_var ^= ((int64_t) (void*) wire_cm_send_chat);
     dummy_var ^= ((int64_t) (void*) wire_cm_login_res);
     dummy_var ^= ((int64_t) (void*) wire_cm_close_connection);
+    dummy_var ^= ((int64_t) (void*) wire_cm_close_connection_window);
     dummy_var ^= ((int64_t) (void*) wire_cm_remove_disconnected_connection);
     dummy_var ^= ((int64_t) (void*) wire_cm_check_click_time);
     dummy_var ^= ((int64_t) (void*) wire_cm_get_click_time);
@@ -1364,6 +1333,8 @@ static int64_t dummy_method_to_enforce_bundling(void) {
     dummy_var ^= ((int64_t) (void*) wire_option_synced);
     dummy_var ^= ((int64_t) (void*) wire_main_is_installed);
     dummy_var ^= ((int64_t) (void*) wire_main_init_input_source);
+    dummy_var ^= ((int64_t) (void*) wire_main_reload_keyboard_shortcuts);
+    dummy_var ^= ((int64_t) (void*) wire_main_get_default_keyboard_shortcuts);
     dummy_var ^= ((int64_t) (void*) wire_main_is_installed_lower_version);
     dummy_var ^= ((int64_t) (void*) wire_main_is_installed_daemon);
     dummy_var ^= ((int64_t) (void*) wire_main_is_process_trusted);
@@ -1404,19 +1375,6 @@ static int64_t dummy_method_to_enforce_bundling(void) {
     dummy_var ^= ((int64_t) (void*) wire_is_preset_password);
     dummy_var ^= ((int64_t) (void*) wire_is_preset_password_mobile_only);
     dummy_var ^= ((int64_t) (void*) wire_send_url_scheme);
-    dummy_var ^= ((int64_t) (void*) wire_plugin_event);
-    dummy_var ^= ((int64_t) (void*) wire_plugin_register_event_stream);
-    dummy_var ^= ((int64_t) (void*) wire_plugin_get_session_option);
-    dummy_var ^= ((int64_t) (void*) wire_plugin_set_session_option);
-    dummy_var ^= ((int64_t) (void*) wire_plugin_get_shared_option);
-    dummy_var ^= ((int64_t) (void*) wire_plugin_set_shared_option);
-    dummy_var ^= ((int64_t) (void*) wire_plugin_reload);
-    dummy_var ^= ((int64_t) (void*) wire_plugin_enable);
-    dummy_var ^= ((int64_t) (void*) wire_plugin_is_enabled);
-    dummy_var ^= ((int64_t) (void*) wire_plugin_feature_is_enabled);
-    dummy_var ^= ((int64_t) (void*) wire_plugin_sync_ui);
-    dummy_var ^= ((int64_t) (void*) wire_plugin_list_reload);
-    dummy_var ^= ((int64_t) (void*) wire_plugin_install);
     dummy_var ^= ((int64_t) (void*) wire_is_support_multi_ui_session);
     dummy_var ^= ((int64_t) (void*) wire_is_selinux_enforcing);
     dummy_var ^= ((int64_t) (void*) wire_main_default_privacy_mode_impl);
@@ -1432,6 +1390,7 @@ static int64_t dummy_method_to_enforce_bundling(void) {
     dummy_var ^= ((int64_t) (void*) wire_main_check_hwcodec);
     dummy_var ^= ((int64_t) (void*) wire_main_get_trusted_devices);
     dummy_var ^= ((int64_t) (void*) wire_main_remove_trusted_devices);
+    dummy_var ^= ((int64_t) (void*) wire_main_renew_trusted_devices);
     dummy_var ^= ((int64_t) (void*) wire_main_clear_trusted_devices);
     dummy_var ^= ((int64_t) (void*) wire_main_max_encrypt_len);
     dummy_var ^= ((int64_t) (void*) wire_session_request_new_display_init_msgs);

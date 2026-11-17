@@ -185,3 +185,15 @@ CaptureDevice? _pick(
 /// microphone and the call would hear itself.
 String? echoHint({required bool micOn, required bool soundOn}) =>
     micOn && soundOn ? 'Use headphones, or the call hears its own echo' : null;
+
+/// Why the host's sound can't play here, or null when it can (decision 0028).
+/// [audioAllowed] is the host's audio permission for this session; [hostSound]
+/// its `rd_host_sound` from the login response, which a host without it doesn't
+/// send.
+String? soundReason({required bool audioAllowed, Object? hostSound}) {
+  if (!audioAllowed) return "This computer doesn't share its sound";
+  if (hostSound == 'unavailable') {
+    return "This Mac can't share its sound until Screen Recording is on there";
+  }
+  return null;
+}
