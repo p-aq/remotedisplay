@@ -43,7 +43,7 @@ DRIVER_DEFINES   := \
   -DkNumber_Of_Channels=2 -DkSampleRates=48000 \
   -DkCanBeDefaultDevice=false -DkCanBeDefaultSystemDevice=false
 
-.PHONY: all feeder probe driver install-driver uninstall-driver list engine default-check clean
+.PHONY: all feeder probe driver install-driver uninstall-driver list engine default-check install-test clean
 
 all: feeder probe driver
 
@@ -120,3 +120,12 @@ default-check:
 
 clean:
 	rm -rf $(BUILD)
+
+# The command Remote Display Server runs as root to install the driver
+# (server-mac/Sources/RemoteDisplayServer/DriverInstallCommand.swift), without root, on
+# scratch folders.
+install-test:
+	@mkdir -p $(BUILD)
+	swiftc -O -parse-as-library -o $(BUILD)/rd-mic-install-test install_test.swift \
+	  ../../../../server-mac/Sources/RemoteDisplayServer/DriverInstallCommand.swift
+	$(BUILD)/rd-mic-install-test
