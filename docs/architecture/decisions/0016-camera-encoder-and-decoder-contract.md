@@ -13,8 +13,13 @@
   `h264.rtvc`, Apple's real-time conferencing encoder. It doesn't report
   `UsingHardwareAcceleratedVideoEncoder`, and a software variant, `h264.rtvc.sw`, exists.
 - Against the standard hardware encoder (`ave.avc`) on the same input, `h264.rtvc` gave
-  60 dB median luma PSNR against 50 dB at 2 Mbit/s, with a 5.1 ms median encode latency
-  against 5.6 ms. Both forced key frames on demand and followed a live bitrate change.
+  60 dB median luma PSNR against 50 dB, with a 5.1 ms median encode latency against
+  5.6 ms. Both forced key frames on demand and followed a live bitrate change.
+- **Correction (2026-11-16, review of PR #20).** Both runs targeted 2 Mbit/s, but on the
+  test card neither came near it, and they spent different amounts: a re-run measured
+  about 438 kbit/s for `h264.rtvc` and 268 to 287 kbit/s for `ave.avc`. So the PSNR gap
+  mostly reflects bits spent, not a better encoder. The latency gap is within run-to-run
+  noise: re-runs put `ave.avc` anywhere from 2.6 to 6.1 ms.
 - The host decodes bytes that arrive from the network. The FreeRDP CVE in the spec
   came from one unchecked field.
 
@@ -47,7 +52,10 @@ check when the code moves into the engine.
 
 ## Consequences
 
-- Better pictures at the same bitrate, without giving up latency.
+- The choice rests on what the harness showed: low-latency rate control, key frames on
+  demand, one frame out per frame in, and live bitrate changes. Better pictures per bit
+  or lower latency than `ave.avc` weren't shown (see the correction above). Comparing the
+  two at equal actual bitrate, on real camera content, is for the live session.
 - The decoder never crashes on bad input, and every failure maps to one host action:
   ask for a key frame.
 - Raising the size limit for 1080p+ cameras (Phase 5) is one constant, plus this record.

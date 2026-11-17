@@ -56,12 +56,17 @@ git commit -qm "engine: snapshot upstream $NEW + hbb_common ${NEW_HBB:0:7} + cpa
 git checkout -q -- engine/rustdesk
 
 echo "→ 3/4 re-applying our diff with 3-way (in the index)…"
+follow_moves "$OURS" HEAD | sed 's/^/   /'
 APPLYLOG=$(mktemp -t rustdesk-apply.XXXXXX)
 # --cached: applies against the index — immune to CRLF/locks of the working tree.
 git apply --binary --cached --3way --directory=engine/rustdesk "$OURS" 2>"$APPLYLOG" || true
 CONFLICTS=$(git ls-files -u | awk '{print $4}' | sort -u)
 
 if [ -n "$CONFLICTS" ]; then
+    # What applied cleanly is only in the index so far: put it in the working tree too,
+    # so the build sees it while the conflicts are resolved.
+    git diff --name-only | sort -u | comm -23 - <(echo "$CONFLICTS") \
+        | while read -r f; do git checkout -q -- "$f"; done
     echo "   ⚠ CONFLICTS (upstream touched the same lines we did):"
     echo "$CONFLICTS" | sed 's/^/     /'
     echo "   Materialize the markers with: git checkout -m -- <file>"
