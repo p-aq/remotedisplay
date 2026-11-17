@@ -191,6 +191,8 @@ struct DecodeThread {
     need_key: Arc<std::sync::atomic::AtomicBool>,
     /// A unit was dropped; the next one queued says so.
     gap: bool,
+    /// Set when the feed is dropped, so units still queued aren't shown after the stop.
+    stopped: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl DecodeThread {
@@ -200,11 +202,16 @@ impl DecodeThread {
         let (tx, rx) = std::sync::mpsc::sync_channel::<Unit>(DECODE_QUEUE);
         let need_key = Arc::new(AtomicBool::new(false));
         let need = need_key.clone();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let stop = stopped.clone();
         let thread = std::thread::Builder::new()
             .name("camera-decode".to_owned())
             .spawn(move || {
                 let mut waiting_for_key = false;
                 while let Ok(unit) = rx.recv() {
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
                     if unit.after_gap {
                         waiting_for_key = true;
                     }
@@ -225,6 +232,7 @@ impl DecodeThread {
             thread: Some(thread),
             need_key,
             gap: false,
+            stopped,
         })
     }
 }
@@ -252,7 +260,10 @@ impl Feed for DecodeThread {
 
 impl Drop for DecodeThread {
     fn drop(&mut self) {
-        // Closing the queue ends the thread after the unit it's on.
+        // The thread ends after the unit it's on. The wait keeps a new feed from opening
+        // the sink while this one is still closing it.
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::Release);
         self.tx = None;
         if let Some(thread) = self.thread.take() {
             thread.join().ok();
@@ -304,8 +315,9 @@ pub struct Forwards {
     /// response advertised it.
     told: HashMap<Kind, &'static str>,
     last_key_request: Option<Instant>,
-    /// A key frame request the rate limit held back. The decode thread skips to the next
-    /// key frame without asking again, so it stays owed until sent or a key frame comes.
+    /// A key frame is owed until one shows. The decode thread skips to the next key frame
+    /// without asking again, and the controller ignores a request within its own 500 ms
+    /// limit, so the request is repeated every `KEY_FRAME_INTERVAL` until then.
     key_owed: bool,
     frames: u64,
     dropped: u64,
@@ -432,6 +444,9 @@ impl Forwards {
                 request.height,
                 request.fps
             );
+            // The controller stopped its old camera to send this one, and takes the
+            // refusal as the end of its forward.
+            self.stop_camera("its new camera was refused");
             return Some(response(kind, false, BAD_FORMAT));
         }
         {
@@ -519,6 +534,12 @@ impl Forwards {
     }
 
     fn on_frame(&mut self, frame: CameraFrame) -> Option<Message> {
+        // The owner's switch: nothing more reaches the camera once it's off. The tick
+        // then ends the forward and tells the controller.
+        if self.camera.is_some() && !(self.sinks.allowed)() {
+            self.dropped += 1;
+            return None;
+        }
         let Some(feed) = self.camera.as_mut().map(|f| f.get_mut().unwrap()) else {
             // Not ours to show: no accepted camera forward on this connection.
             self.dropped += 1;
@@ -545,7 +566,6 @@ impl Forwards {
             return None;
         }
         self.last_key_request = Some(now);
-        self.key_owed = false;
         Some(key_frame_request())
     }
 
@@ -577,6 +597,10 @@ impl Forwards {
     }
 
     fn stop_camera(&mut self, why: &str) {
+        // The feed is dropped at the end of this condition, before the camera is freed:
+        // dropping it waits for its decode thread to close the sink (at most the unit in
+        // progress), and that close would also stop the stream of a feed another
+        // controller opened in the meantime.
         if self.camera.take().is_some() {
             log::info!(
                 "Camera forward from connection {} stopped ({}): {} frames, {} dropped",
@@ -957,7 +981,13 @@ mod tests {
             .expect("the request that was held back");
         assert!(late.camera_control().key_frame_request);
         std::thread::sleep(KEY_FRAME_INTERVAL + Duration::from_millis(20));
-        assert!(conn.on_message(frame(false, 5)).is_none(), "asked once");
+        assert!(
+            conn.on_message(frame(false, 5)).is_some(),
+            "no key frame came, so it asks again"
+        );
+        assert!(conn.on_message(frame(true, 6)).is_none());
+        std::thread::sleep(KEY_FRAME_INTERVAL + Duration::from_millis(20));
+        assert!(conn.on_message(frame(false, 7)).is_none(), "settled");
     }
 
     #[test]
@@ -973,6 +1003,32 @@ mod tests {
         assert!(conn.on_message(frame(true, 3)).is_none());
         std::thread::sleep(KEY_FRAME_INTERVAL + Duration::from_millis(20));
         assert!(conn.on_message(frame(false, 4)).is_none(), "nothing owed");
+    }
+
+    #[test]
+    fn a_refused_new_camera_ends_the_forward_it_replaced() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut conn = connection(1, &h, &senders);
+        let mut other = connection(2, &h, &senders);
+        conn.on_message(camera_on());
+        let reply = conn.on_message(ask(Kind::CAMERA, true, 3840, 2160, 30));
+        assert_eq!(answer(reply), (false, BAD_FORMAT.into()));
+        assert_eq!(h.open_feeds.load(Ordering::SeqCst), 0, "the old feed closed");
+        let reply = other.on_message(camera_on());
+        assert_eq!(answer(reply), (true, String::new()), "the camera is free");
+    }
+
+    #[test]
+    fn no_frame_reaches_the_camera_once_the_owner_switches_off() {
+        let senders = Senders::default();
+        let h = host(true, READY);
+        let mut conn = connection(1, &h, &senders);
+        conn.on_message(camera_on());
+        assert!(conn.on_message(frame(true, 1)).is_none());
+        h.allowed.store(false, Ordering::SeqCst);
+        assert!(conn.on_message(frame(false, 2)).is_none());
+        assert_eq!(*h.fed.lock().unwrap(), [(true, 1)]);
     }
 
     #[test]
@@ -1263,8 +1319,12 @@ mod tests {
     #[test]
     fn a_failed_decode_asks_for_a_key_frame_and_waits_for_it() {
         let shows = Arc::new(AtomicBool::new(false));
-        let (mut thread, seen) = decode_thread(shows.clone(), Default::default());
+        let hold: Arc<Mutex<()>> = Default::default();
+        let (mut thread, seen) = decode_thread(shows.clone(), hold.clone());
+        // Held, so the first unit can't have failed before `feed` returns.
+        let held = hold.lock().unwrap();
         assert!(thread.feed(&[], false, 1));
+        drop(held);
         settle(&seen, 1);
         assert!(
             !thread.feed(&[], false, 2),
@@ -1281,11 +1341,29 @@ mod tests {
     fn dropping_the_feed_ends_the_decode_thread() {
         let (mut thread, seen) = decode_thread(Arc::new(AtomicBool::new(true)), Default::default());
         thread.feed(&[], true, 1);
+        settle(&seen, 1);
         drop(thread);
         assert_eq!(
             *seen.lock().unwrap(),
             [1],
             "finished the unit it had, then stopped"
         );
+    }
+
+    #[test]
+    fn units_still_queued_are_not_decoded_after_the_feed_is_dropped() {
+        let hold: Arc<Mutex<()>> = Default::default();
+        let (mut thread, seen) = decode_thread(Arc::new(AtomicBool::new(true)), hold.clone());
+        let held = hold.lock().unwrap();
+        thread.feed(&[], true, 1);
+        std::thread::sleep(Duration::from_millis(50));
+        thread.feed(&[], false, 2);
+        thread.feed(&[], false, 3);
+        // Dropping waits for the thread, which waits for `held`.
+        let dropper = std::thread::spawn(move || drop(thread));
+        std::thread::sleep(Duration::from_millis(50));
+        drop(held);
+        dropper.join().unwrap();
+        assert_eq!(*seen.lock().unwrap(), [1], "2 and 3 were still queued");
     }
 }
