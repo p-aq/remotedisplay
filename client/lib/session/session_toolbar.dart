@@ -10,6 +10,7 @@ import 'package:flutter_hbb/common.dart'
         isAndroid,
         isDesktop,
         isIOS,
+        isMacOS,
         openMonitorInNewTabOrWindow,
         openMonitorInTheSameTab,
         translate,
@@ -19,12 +20,15 @@ import 'package:flutter_hbb/common/widgets/toolbar.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/mobile/pages/remote_page.dart'
     show MobileRemotePageController;
+import 'package:flutter_hbb/models/chat_model.dart' show VoiceCallStatus;
 import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_hbb/models/platform_model.dart' show bind;
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app_version.dart';
+import 'devices.dart';
 import 'external_screen.dart';
 import 'trackpad_screen.dart';
 import 'win_events.dart';
@@ -34,13 +38,15 @@ import 'win_events.dart';
 /// reusing the engine's plumbing (toolbarImageQuality/Codec/Cursor/...)
 /// without its UI. Same pill on desktop and mobile, organized by intent:
 ///
-///   ‹ · peer · [minimize] · full screen · fit · Input · Screen · ✕
+///   ‹ · peer · [minimize] · full screen · fit · Input · Screen · Devices · ✕
 ///
 /// - **Input**: how I interact — touch/cursor mode and view-only (mobile),
 ///   virtual keyboard and key help bar (independent of each other, mobile),
-///   cursor/key options and session options (audio, clipboard, lock).
+///   cursor/key options and session options (clipboard, lock).
 /// - **Screen**: what I see — monitor, view, quality,
 ///   codec and image (true color, monitor quality, multi-monitor).
+/// - **Devices**: what I lend the host — this Mac's camera (and later its
+///   microphone) — and whether its sound plays here (decisions 0012 and 0018).
 /// Local option: hide the trackpad/mouse pointer over the remote canvas
 /// (mobile). Default: hidden.
 const kOptHideLocalPointer = 'remotedisplay-hide-local-pointer';
@@ -103,6 +109,9 @@ class _SessionToolbarState extends State<SessionToolbar> {
   // persisted by the engine in kOptionTouchMode and read when opening a session.
   static const _optKeyHelpBar = 'remotedisplay-key-help-bar';
   static const _optMobileFullscreen = 'remotedisplay-mobile-fullscreen';
+  // The camera picked in Devices last time (its unique ID).
+  static const _optCamera = 'remotedisplay-camera';
+  static const _optMicrophone = 'remotedisplay-microphone';
 
   @override
   void initState() {
@@ -257,6 +266,7 @@ class _SessionToolbarState extends State<SessionToolbar> {
               Icons.fit_screen_rounded, 'Fit to screen', (_) => _fitScreen()),
           _iconBtn(Icons.keyboard_alt_outlined, 'Input', _showInputMenu),
           _iconBtn(Icons.desktop_windows_outlined, 'Display', _showDisplayMenu),
+          _devicesButton(),
           _divider(),
           _iconBtn(Icons.close_rounded, 'Disconnect', (_) => _disconnect(),
               color: _danger),
@@ -503,6 +513,9 @@ class _SessionToolbarState extends State<SessionToolbar> {
 
   bool _isViewOnly(TToggleMenu t) => _label(t) == translate('View Mode');
 
+  /// The engine's Mute toggle: Devices has it as "Play the Mac's sound here".
+  bool _isMute(TToggleMenu t) => _label(t) == translate('Mute');
+
   /// **Input** menu: touch/cursor mode, keyboard and key help bar (mobile),
   /// cursor/key options and session options.
   Future<void> _showInputMenu(BuildContext anchor) async {
@@ -516,7 +529,10 @@ class _SessionToolbarState extends State<SessionToolbar> {
     final seen = {...cursor.map(_label), ...keys.map(_label)};
     final session = all
         .where((t) =>
-            !_isImageToggle(t) && !_isViewOnly(t) && !seen.contains(_label(t)))
+            !_isImageToggle(t) &&
+            !_isViewOnly(t) &&
+            !_isMute(t) &&
+            !seen.contains(_label(t)))
         .toList();
     final viewOnly = all.where(_isViewOnly).toList();
     final privacy =
@@ -735,6 +751,232 @@ class _SessionToolbarState extends State<SessionToolbar> {
     await _showItemsMenu(anchor, items);
   }
 
+  /// Devices button, filled while this Mac's camera or microphone goes to the
+  /// host.
+  Widget _devicesButton() => Obx(() {
+        final forwards = _ffi.ffiModel.deviceForward.value;
+        final camera = ForwardState.parse(forwards, 'camera');
+        final mic = ForwardState.parse(forwards, 'microphone');
+        final cameraOn = camera.on || camera.asking;
+        final micOn = mic.on || mic.asking;
+        final sending = cameraOn || micOn;
+        return _iconBtn(
+            sending ? Icons.perm_camera_mic : Icons.perm_camera_mic_outlined,
+            cameraOn && micOn
+                ? 'Devices · camera and microphone on'
+                : cameraOn
+                    ? 'Devices · camera on'
+                    : micOn
+                        ? 'Devices · microphone on'
+                        : 'Devices',
+            _showDevicesMenu,
+            color: sending ? Colors.white : _fg);
+      });
+
+  /// A device switch with a note under its label: why it can't be used, why it
+  /// stopped, or which camera is on. Shown dimmed and disabled without [onTap].
+  PopupMenuEntry<void> _deviceRow(bool value, String label,
+          {String? note, String? detail, VoidCallback? onTap}) =>
+      PopupMenuItem<void>(
+        height: note == null ? 40 : 52,
+        enabled: onTap != null,
+        onTap: onTap,
+        child: Opacity(
+          opacity: onTap == null ? 0.6 : 1,
+          child: _menuRow(
+              value,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(label),
+                  if (note != null)
+                    Text(note,
+                        style: const TextStyle(color: _fgDim, fontSize: 11)),
+                ],
+              ),
+              detail: detail,
+              onIcon: Icons.check_box_rounded,
+              offIcon: Icons.check_box_outline_blank_rounded),
+        ),
+      );
+
+  /// **Devices** menu (decisions 0012, 0018 and 0023): this Mac's camera and
+  /// microphone for the host, and the host's sound played here. Always shown:
+  /// the sound switch works with every host.
+  Future<void> _showDevicesMenu(BuildContext anchor) async {
+    final ffi = _ffi;
+    final sessionId = ffi.sessionId;
+    final pi = ffi.ffiModel.pi;
+    final hostIsMac = pi.platform == kPeerPlatformMacOS;
+    final forwards = ffi.ffiModel.deviceForward.value;
+    final camera = ForwardState.parse(forwards, 'camera');
+    final mic = ForwardState.parse(forwards, 'microphone');
+    final cameras =
+        isMacOS ? Camera.parseList(bind.mainListCameras()) : <Camera>[];
+    final picked =
+        pickCamera(cameras, camera, bind.mainGetLocalOption(key: _optCamera));
+    final permission =
+        isMacOS ? bind.mainGetCapturePermission(kind: 'camera') : 'unsupported';
+    final hostWhy = hostReason(
+        hostStatus(camera, pi.platformAdditions, 'camera'), 'camera',
+        hostIsMac: hostIsMac);
+    final permissionWhy = picked != null && !needsCameraAccess(picked.id)
+        ? null
+        : permissionReason(permission, 'camera');
+    if (!mounted) return;
+
+    final items = <PopupMenuEntry<void>>[_header('CAMERA')];
+    final sending = camera.on || camera.asking;
+    if (sending) {
+      items.add(_deviceRow(true, 'Camera',
+          note: cameras.length > 1 ? null : picked?.name,
+          detail: camera.asking ? 'Starting…' : 'On',
+          onTap: () => _setCamera(false, '')));
+    } else if (hostWhy != null) {
+      items.add(_deviceRow(false, 'Camera', note: hostWhy));
+    } else if (permissionWhy != null) {
+      items.add(_deviceRow(false, 'Camera',
+          note: permissionWhy,
+          onTap: permission == 'denied' ? _openCameraSettings : null));
+    } else if (picked == null) {
+      items.add(_deviceRow(false, 'Camera', note: 'No camera found'));
+    } else {
+      items.add(_deviceRow(false, 'Camera',
+          note: stopReason(camera.reason, 'camera', hostIsMac: hostIsMac) ??
+              (cameras.length > 1 ? null : picked.name),
+          onTap: () => _setCamera(true, picked.id)));
+    }
+    // Also without camera access, so the test card can still be picked.
+    if (cameras.length > 1 && (sending || hostWhy == null)) {
+      for (final c in cameras) {
+        items.add(_radio(c.id == picked?.id, Text(c.name), () {
+          bind.mainSetLocalOption(key: _optCamera, value: c.id);
+          if (sending && c.id != camera.device) _setCamera(true, c.id);
+        }, onIcon: Icons.videocam_rounded, offIcon: Icons.videocam_outlined));
+      }
+    }
+
+    // The engine's Mute toggle, the other way round (Input no longer shows it).
+    // The host may not allow its sound, or may not be able to capture it.
+    final soundWhy = soundReason(
+        audioAllowed: ffi.ffiModel.permissions['audio'] != false,
+        hostSound: pi.platformAdditions['rd_host_sound']);
+    // The session toggle the engine's Mute uses (toolbarDisplayToggle).
+    const mute = 'disable-audio';
+    final muted =
+        bind.sessionGetToggleOptionSync(sessionId: sessionId, arg: mute);
+
+    items.add(_sep());
+    items.add(_header('MICROPHONE'));
+    final mics = isMacOS
+        ? Microphone.parseList(bind.mainListMicrophones())
+        : <Microphone>[];
+    final pickedMic =
+        pickMicrophone(mics, mic, bind.mainGetLocalOption(key: _optMicrophone));
+    final micPermission = isMacOS
+        ? bind.mainGetCapturePermission(kind: 'microphone')
+        : 'unsupported';
+    final micHostWhy = hostReason(
+        hostStatus(mic, pi.platformAdditions, 'microphone'), 'microphone',
+        hostIsMac: hostIsMac);
+    final micPermissionWhy = permissionReason(micPermission, 'microphone');
+    // A voice call sends this Mac's microphone too; the host would get both.
+    final inCall =
+        ffi.chatModel.voiceCallStatus.value != VoiceCallStatus.notStarted;
+    final micSending = mic.on || mic.asking;
+    if (micSending) {
+      items.add(_deviceRow(true, 'Microphone',
+          note: echoHint(micOn: true, soundOn: soundWhy == null && !muted) ??
+              (mics.length > 1 ? null : pickedMic?.name),
+          detail: mic.asking ? 'Starting…' : 'On',
+          onTap: () => _setMicrophone(false, '')));
+    } else if (micHostWhy != null) {
+      items.add(_deviceRow(false, 'Microphone', note: micHostWhy));
+    } else if (inCall) {
+      items.add(_deviceRow(false, 'Microphone',
+          note: 'End the voice call to send your microphone'));
+    } else if (micPermissionWhy != null) {
+      items.add(_deviceRow(false, 'Microphone',
+          note: micPermissionWhy,
+          onTap: micPermission == 'denied' ? _openMicrophoneSettings : null));
+    } else if (pickedMic == null) {
+      items.add(_deviceRow(false, 'Microphone', note: 'No microphone found'));
+    } else {
+      items.add(_deviceRow(false, 'Microphone',
+          note: stopReason(mic.reason, 'microphone', hostIsMac: hostIsMac) ??
+              (mics.length > 1 ? null : pickedMic.name),
+          onTap: () => _setMicrophone(true, pickedMic.id)));
+    }
+    if (mics.length > 1 && (micSending || micHostWhy == null)) {
+      for (final m in mics) {
+        items.add(_radio(m.id == pickedMic?.id, Text(m.name), () {
+          bind.mainSetLocalOption(key: _optMicrophone, value: m.id);
+          if (micSending && m.id != mic.device) _setMicrophone(true, m.id);
+        }, onIcon: Icons.mic_rounded, offIcon: Icons.mic_none_rounded));
+      }
+    }
+
+    items.add(_sep());
+    items.add(_header('SOUND'));
+    items.add(_deviceRow(
+        soundWhy == null && !muted,
+        hostIsMac
+            ? "Play the Mac's sound here"
+            : "Play the computer's sound here",
+        note: soundWhy,
+        onTap: soundWhy == null
+            ? () => bind.sessionToggleOption(sessionId: sessionId, value: mute)
+            : null));
+    await _showItemsMenu(anchor, items);
+  }
+
+  /// Turns this Mac's camera on (as [device]) or off for the host. The first
+  /// time, macOS asks for camera access and the camera goes on only if allowed;
+  /// the test card needs none.
+  Future<void> _setCamera(bool on, String device) async {
+    final sessionId = _ffi.sessionId;
+    if (on && needsCameraAccess(device)) {
+      final permission = bind.mainGetCapturePermission(kind: 'camera');
+      if (permission == 'not-determined') {
+        if (!await bind.mainRequestCapturePermission(kind: 'camera')) return;
+      } else if (permission != 'allowed') {
+        return;
+      }
+    }
+    if (on) bind.mainSetLocalOption(key: _optCamera, value: device);
+    await bind.sessionSetDeviceForward(
+        sessionId: sessionId, kind: 'camera', on: on, device: device);
+  }
+
+  /// System Settings › Privacy & Security › Camera.
+  void _openCameraSettings() => launchUrl(Uri.parse(
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_Camera'));
+
+  /// Turns this Mac's microphone on (as [device], an input's name) or off for
+  /// the host. The first time, macOS asks for microphone access and the
+  /// microphone goes on only if allowed.
+  Future<void> _setMicrophone(bool on, String device) async {
+    final sessionId = _ffi.sessionId;
+    if (on) {
+      final permission = bind.mainGetCapturePermission(kind: 'microphone');
+      if (permission == 'not-determined') {
+        if (!await bind.mainRequestCapturePermission(kind: 'microphone')) {
+          return;
+        }
+      } else if (permission != 'allowed') {
+        return;
+      }
+      bind.mainSetLocalOption(key: _optMicrophone, value: device);
+    }
+    await bind.sessionSetDeviceForward(
+        sessionId: sessionId, kind: 'microphone', on: on, device: device);
+  }
+
+  /// System Settings › Privacy & Security › Microphone.
+  void _openMicrophoneSettings() => launchUrl(Uri.parse(
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'));
+
   /// The engine lists "True color (4:4:4)" only while the codec in use is VP9
   /// or AV1: hardware H264/H265 is 4:2:0 only, and since the Mac encodes H265
   /// in hardware by default the toggle had vanished from the menu. Keep it
@@ -753,9 +995,7 @@ class _SessionToolbarState extends State<SessionToolbar> {
         onChanged: (v) async {
           if (v != true) return;
           await bind.sessionPeerOption(
-              sessionId: sessionId,
-              name: kOptionCodecPreference,
-              value: 'vp9');
+              sessionId: sessionId, name: kOptionCodecPreference, value: 'vp9');
           if (!bind.sessionGetToggleOptionSync(
               sessionId: sessionId, arg: 'i444')) {
             await bind.sessionToggleOption(sessionId: sessionId, value: 'i444');

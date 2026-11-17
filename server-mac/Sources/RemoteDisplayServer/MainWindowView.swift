@@ -91,9 +91,8 @@ struct MainWindowView: View {
                      detail: c.passwordSet ? "Set — clients use it to connect" : "Clients cannot connect without it",
                      cta: c.passwordSet ? "Change…" : "Set…") { openPasswordSheet() }
             // Optional, so not counted as to-do: what a controller's camera and microphone need here.
-            optionalRow(title: "Camera",
-                        detail: c.cameraExtensionBundled ? "Included in this build" : "Not available in this build")
-            optionalRow(title: "Microphone", detail: "Not available in this build")
+            cameraRow
+            microphoneRow
         } header: {
             HStack {
                 Text("Setup")
@@ -108,16 +107,57 @@ struct MainWindowView: View {
         }
     }
 
-    private func optionalRow(title: String, detail: String) -> some View {
+    /// Remote Display Camera's state, with what to do next (spec, User experience).
+    private var cameraRow: some View {
+        let approval = ProcessInfo.processInfo.isOperatingSystemAtLeast(
+            OperatingSystemVersion(majorVersion: 15, minorVersion: 0, patchVersion: 0))
+            ? "General › Login Items & Extensions › Camera Extensions" : "Privacy & Security"
+        let row: (detail: String, cta: String?, action: () -> Void) = switch c.cameraState {
+        case .notBundled: ("Not available in this build", nil, {})
+        case .notInApplications:
+            ("Move Remote Display Server to the Applications folder to install it", nil, {})
+        case .notInstalled: ("Lets a controller's camera appear here as Remote Display Camera",
+                             "Install…", { c.installCamera() })
+        case .working: ("Waiting for macOS…", nil, {})
+        case .awaitingApproval: ("An admin must allow it in System Settings › \(approval)",
+                                 "Open Settings…", { Permissions.openCameraExtensionSettings() })
+        case .installed: ("Installed · choose Remote Display Camera in FaceTime, Zoom or any app", nil, {})
+        case .removing: ("Removed · finishes when this Mac restarts", nil, {})
+        }
+        return optionalRow(title: "Camera", detail: c.cameraError ?? row.detail, ok: c.cameraState == .installed,
+                           failed: c.cameraError != nil, cta: row.cta, action: row.action)
+    }
+
+    /// Remote Display Microphone's state, with what to do next (spec, User experience).
+    private var microphoneRow: some View {
+        let row: (detail: String, cta: String?, action: () -> Void) = switch c.microphoneState {
+        case .notBundled: ("Not available in this build", nil, {})
+        case .notInstalled: ("Lets a controller's microphone appear here as Remote Display Microphone",
+                             "Install…", { c.installMicrophone() })
+        case .outdated: ("Another version is installed", "Update…", { c.installMicrophone() })
+        case .working: ("Waiting for an admin…", nil, {})
+        case .installed: ("Installed · choose Remote Display Microphone in FaceTime, Zoom or any app", nil, {})
+        }
+        return optionalRow(title: "Microphone", detail: c.microphoneError ?? row.detail,
+                           ok: c.microphoneState == .installed, failed: c.microphoneError != nil,
+                           cta: row.cta, action: row.action)
+    }
+
+    private func optionalRow(title: String, detail: String, ok: Bool = false, failed: Bool = false,
+                             cta: String? = nil, action: @escaping () -> Void = {}) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: "minus.circle")
+            Image(systemName: ok ? "checkmark.circle.fill" : "minus.circle")
                 .font(.system(size: 18))
-                .foregroundStyle(Color.secondary.opacity(0.5))
+                .foregroundStyle(ok ? Color.green : Color.secondary.opacity(0.5))
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.system(size: 13, weight: .medium))
-                Text(detail).font(.system(size: 11.5)).foregroundStyle(.secondary)
+                Text(detail).font(.system(size: 11.5)).foregroundStyle(failed ? .red : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
+            if let cta {
+                Button(cta, action: action).buttonStyle(.bordered).controlSize(.small)
+            }
         }
         .padding(.vertical, 2)
     }
@@ -250,6 +290,16 @@ struct MainWindowView: View {
             Toggle("Let controllers share their camera and microphone", isOn: Binding(
                 get: { c.deviceForwardOn }, set: { c.setDeviceForward($0) }))
                 .disabled(!c.serviceRunning)
+            let camera = [.installed, .awaitingApproval].contains(c.cameraState)
+            let microphone = [.installed, .outdated].contains(c.microphoneState)
+            if camera || microphone {
+                HStack {
+                    Text(camera && microphone ? "Remote Display Camera and Microphone"
+                         : camera ? "Remote Display Camera" : "Remote Display Microphone")
+                    Spacer()
+                    Button("Remove Camera and Microphone") { c.removeCameraAndMicrophone() }.controlSize(.small)
+                }
+            }
             if let err = c.lastError {
                 Text(err).font(.caption).foregroundStyle(.red)
             }
