@@ -5,8 +5,8 @@
 // The encoder is the one measured in docs/tests/camera-extension/harness/camera_codec.mm.
 // With --camera-test-pattern, a generated test card takes the camera's place (spec,
 // Controller side › Testing without a camera): same encoder, same rules, no camera.
-// A camera that goes away mid-capture, unplugged or stopped by a runtime error, is
-// reported once (decision 0020).
+// A camera that goes away mid-capture, unplugged, stopped by a runtime error or switched
+// to another format by another app, is reported once (decision 0020).
 // Same shape and flags as macos.mm: extern "C" functions named Mac…, -std=c++17, no ARC.
 // Called from macos_camera_capture.rs.
 
@@ -370,6 +370,9 @@ static void OnFrame(MacCameraCapture* c, CMSampleBufferRef sample) {
     CVPixelBufferRef frame = CMSampleBufferGetImageBuffer(sample);
     if (!frame || (int)CVPixelBufferGetWidth(frame) != c->width || (int)CVPixelBufferGetHeight(frame) != c->height) {
         c->mismatched++;
+        // Another app changed the camera's format, and the encoder no longer fits it:
+        // end the forward like an unplugged camera instead of freezing the host's picture.
+        [c->watch lost:@"format changed"];
         return;
     }
     Encode(c, frame, CMSampleBufferGetPresentationTimeStamp(sample));
@@ -535,7 +538,6 @@ static void Release(MacCameraCapture* c) {
         }
         for (id observer in c->observers) [[NSNotificationCenter defaultCenter] removeObserver:observer];
         [c->observers release];
-        [c->watch release];
     }
     if (c->session) {
         [c->session stopRunning];
@@ -556,6 +558,7 @@ static void Release(MacCameraCapture* c) {
     [c->output setSampleBufferDelegate:nil queue:NULL];
     [c->output release];
     [c->delegate release];
+    [c->watch release];  // only now: OnFrame uses it until the capture queue drains
     [c->session release];
     if (c->pool) CVPixelBufferPoolRelease(c->pool);
     if (c->queue) dispatch_release(c->queue);

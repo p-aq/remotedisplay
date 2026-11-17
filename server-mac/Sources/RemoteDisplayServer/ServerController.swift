@@ -152,6 +152,8 @@ final class ServerController {
     // MARK: - Lifecycle
 
     func start() {
+        // Read at launch, while the file on disk is still the one running: root's driver check pins this team.
+        NSLog("[remotedisplay] own team: %@", DriverInstallCommand.ownTeam ?? "none (ad hoc)")
         engineProblem = Self.checkEngine(at: enginePath)
         if let problem = engineProblem { NSLog("[remotedisplay] engine problem: %@", problem) }
         engineVersion = readEngineVersion()
