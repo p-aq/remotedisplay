@@ -31,7 +31,9 @@
   with `lipo`. It copies the result to
   `Contents/Library/SystemExtensions/app.remotedisplay.server.camera.systemextension`,
   but only when `SIGN_ID`, `APP_PROFILE` and `EXT_PROFILE` are all given. The extension
-  takes the app's version numbers, so a new app version updates it.
+  takes the app's version numbers, so a new app version updates it
+  ([decision 0032](0032-app-update-replaces-the-camera-extension.md) adds the request
+  that makes macOS do so).
 - **Signing,** as decision 0010:
   - the extension first, with its own identifier, entitlements (sandbox and app group)
     and profile;
@@ -62,7 +64,8 @@
   - installed;
   - removed, finishing when the Mac restarts.
 
-  A failed install or removal shows macOS's message on the row until the next try.
+  A failed install or removal shows macOS's message on the row until the next try, or
+  until the state next changes (decision 0032).
   Answers that arrive while the menu-bar menu is open wait until it closes (the menu
   guard).
 - **Removal.** The spec names a *Remove camera and microphone* button but not where it
@@ -81,6 +84,12 @@
   per-target settings, as in the harness.
 - To feed the camera, a local process can't just sign itself as
   `app.remotedisplay.server`: it would need the team's certificate.
+- The check says which program writes the frames, not that the owner agreed. Software
+  running as the owner can still start the real `remotedisplayd` with its own settings
+  and have it feed the camera; the owner's switch is a user-level command too
+  (decision 0009).
+- The second check finds the client by pid, since CoreMediaIO gives the extension no
+  audit token. It sees whatever process holds that pid when it runs.
 - Until an admin allows the extension, the engine reports the camera as `not-installed`:
   it only sees whether the device exists, so it can't tell "not approved yet" from
   "not installed". The Setup row tells the owner which one it is.

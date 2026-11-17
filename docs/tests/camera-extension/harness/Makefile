@@ -10,6 +10,7 @@
 #   make codec-test            H.264 encode → Annex B → decode checks (no signing needed)
 #   make codec-test-asan       the same under AddressSanitizer, with 20,000 fuzzed frames
 #   make format-test           server-mac's source stream wraps decoded frames (no signing needed)
+#   make update-test           when the server app asks macOS to replace the extension (no signing needed)
 
 TEAM_ID     ?=
 SIGN_ID     ?=
@@ -29,7 +30,9 @@ CODEC_FRAMEWORKS := -framework CoreFoundation -framework CoreMedia -framework Co
                -framework CoreGraphics -framework CoreText
 CODEC_TEST   = $(BUILD)/rd-camera-codec-test
 FORMAT_TEST  = $(BUILD)/rd-camera-format-test
+UPDATE_TEST  = $(BUILD)/rd-camera-update-test
 SERVER_EXT  := ../../../../server-mac/CameraExtension
+SERVER_APP  := ../../../../server-mac/Sources/RemoteDisplayServer
 BUILD       := build
 APP_ID      := app.remotedisplay.spike
 EXT_ID      := app.remotedisplay.spike.camera
@@ -52,7 +55,7 @@ endif
 # $(call fill,template,output): substitute the team and version placeholders.
 fill = sed -e 's/@TEAM_ID@/$(TEAM)/g' -e 's/@VERSION@/$(VERSION)/g' "$(1)" > "$(2)"
 
-.PHONY: all camera feeder codec codec-test codec-test-asan format-test check-signing install activate deactivate list feed clean
+.PHONY: all camera feeder codec codec-test codec-test-asan format-test update-test check-signing install activate deactivate list feed clean
 
 all: camera feeder codec
 
@@ -123,6 +126,13 @@ format-test:
 	$(SWIFTC) -parse-as-library -o $(FORMAT_TEST) format_test.swift $(SERVER_EXT)/SourceFormat.swift \
 	  $(SERVER_EXT)/NV12Canvas.swift
 	$(FORMAT_TEST)
+
+# The server app's reading of macOS's answer about the extension
+# (server-mac/Sources/RemoteDisplayServer/CameraExtension.swift).
+update-test:
+	@mkdir -p $(BUILD)
+	$(SWIFTC) -parse-as-library -o $(UPDATE_TEST) update_test.swift $(SERVER_APP)/CameraExtension.swift
+	$(UPDATE_TEST)
 
 install: camera
 	rm -rf "$(INSTALLED)"

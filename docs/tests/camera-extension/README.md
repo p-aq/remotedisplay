@@ -32,6 +32,7 @@ format-test` checks it.
 | `harness/camera_codec.mm`, `.h` | H.264 encode with `VTCompressionSession` → Annex B, and Annex B → AVCC → `VTDecompressionSession`, with input limits ([decisions 0004, 0005, 0016](../../architecture/decisions/README.md)). | Encoder: `src/platform/macos_camera_capture.mm`. Decoder: in front of `macos_camera_sink.mm` |
 | `harness/codec_test.mm` | `rd-camera-codec-test`: ten checks of the codec path in one process. Needs no camera, extension, signing or permission. | A Phase 1 test |
 | `harness/format_test.swift` | `rd-camera-format-test`: five checks that the server app's extension (`server-mac/CameraExtension/SourceFormat.swift`) can send decoded frames and its placeholder to apps. Needs no camera, extension, signing or permission. | A Phase 1 test |
+| `harness/update_test.swift` | `rd-camera-update-test`: ten checks of what the server app makes of macOS's answer about the extension, and when it asks macOS to replace another version (`CameraExtension.evaluate`, [decision 0032](../../architecture/decisions/0032-app-update-replaces-the-camera-extension.md)). Needs no extension, signing or permission. | A Phase 1 test |
 | `harness/Makefile` | Builds and signs everything with the Command Line Tools ([decision 0014](../../architecture/decisions/0014-phase0-camera-harness.md)). | Folded into `server-mac/Makefile` |
 
 ## What was tested and the result
@@ -91,6 +92,11 @@ Encoder comparison (both pass every check):
 | Encode latency, median / p95 / max | 5.1 / 5.6 / 42.6 ms | 5.6 / 6.2 / 11.2 ms |
 | Luma PSNR, median / min | 60 / 47 dB | 50 / 41 dB |
 | Bitrate after 2,000 → 500 | 488 kbit/s | 499 kbit/s |
+| Bits spent on the test card at a 2,000 kbit/s target (re-runs 2026-11-16, not printed by `make codec-test`) | about 438 kbit/s | 268–287 kbit/s |
+
+The PSNR row comes from runs that spent these different amounts, so it doesn't compare
+quality per bit ([decision 0016](../../architecture/decisions/0016-camera-encoder-and-decoder-contract.md),
+correction).
 
 ### Source stream formats (2026-10-30, issue #2)
 
@@ -106,6 +112,21 @@ tags that the engine's decoder attached in a probe ([Runtime findings](#runtime-
 | switching | Placeholder and decoded frames in turn: all wrap, with a new format only when the tags change | **PASS**: 8/8, 5 formats |
 
 Built against the code before the fix, the three decoded checks fail with −12743.
+
+### Updating an installed extension (2026-11-14, issue #2)
+
+`make update-test` on the same Mac mini. All ten checks pass:
+
+- nothing installed, this version in use, and only a version waiting for approval or
+  leaving at a restart: the state alone;
+- an older build, a newer build or another short version in use: installed, and to be
+  replaced;
+- an old version in use with the new one waiting: still to be replaced;
+- the new version in use with the old one leaving: nothing to do;
+- no bundled version to compare with: nothing to do.
+
+The replacement itself needs an installed extension: gate test 8 below, and the live
+session's test 21.
 
 ## Runtime findings
 
@@ -177,6 +198,7 @@ cd docs/tests/camera-extension/harness
 make codec-test        # both encoders
 make codec-test-asan   # sanitizers, 20,000 fuzzed access units
 make format-test       # the server app's source stream, with decoded frames' tags
+make update-test       # when the server app asks macOS to replace the extension
 ```
 
 Not covered here: the two microphone options, which get their own harness in
