@@ -9,6 +9,8 @@
 #   make hears          a tone through the speakers reaches what a controller receives
 #   make revoke         forget the probe's Screen Recording grant
 #   make nothing        with Screen Recording refused, nothing is sent
+#   make own-mic        a controller's microphone, played into Remote Display Microphone,
+#                       doesn't come back (needs ../../virtual-mic's driver installed)
 #   make clean          revoke, unregister and delete build/
 
 SIGN_ID   ?=
@@ -22,7 +24,7 @@ TESTS     := server::audio_service::host_sound::capture
 LOGS      := $(shell echo $${TMPDIR:-/tmp/})rd-sound-probe
 LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
-.PHONY: all hears nothing run revoke clean
+.PHONY: all hears nothing own-mic run revoke clean
 
 # cargo prints where it put the test binary; the bundle wraps that binary.
 all:
@@ -41,6 +43,9 @@ hears:
 
 nothing:
 	@$(MAKE) --no-print-directory run TEST=nothing_without_screen_recording
+
+own-mic:
+	@$(MAKE) --no-print-directory run TEST=controller_never_hears_its_own_microphone
 
 # `open` makes the bundle its own app, so macOS asks about Screen Recording for it. The
 # bundle's LSEnvironment points HOME into build/, so the engine's config
