@@ -368,6 +368,83 @@ fn nal_types(access_unit: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::nal_types;
+    use std::os::raw::c_int;
+
+    #[repr(C)]
+    struct RateRange {
+        min: f64,
+        max: f64,
+    }
+
+    extern "C" {
+        fn MacCameraPickRate(
+            ranges: *const RateRange,
+            count: c_int,
+            fps: c_int,
+            rate: *mut f64,
+            cost: *mut f64,
+        ) -> c_int;
+    }
+
+    /// The range the capture picks among `ranges` (min, max) for `fps`, the rate it gives
+    /// and how far that misses.
+    fn pick(ranges: &[(f64, f64)], fps: i32) -> Option<(usize, f64, f64)> {
+        let ranges: Vec<_> = ranges
+            .iter()
+            .map(|&(min, max)| RateRange { min, max })
+            .collect();
+        let (mut rate, mut cost) = (0.0, 0.0);
+        let i = unsafe {
+            MacCameraPickRate(
+                ranges.as_ptr(),
+                ranges.len() as c_int,
+                fps,
+                &mut rate,
+                &mut cost,
+            )
+        };
+        (i >= 0).then(|| (i as usize, rate, cost))
+    }
+
+    fn picked(ranges: &[(f64, f64)], fps: i32) -> Option<(usize, f64)> {
+        pick(ranges, fps).map(|(i, rate, _)| (i, rate))
+    }
+
+    #[test]
+    fn picks_the_frame_rate_range_that_fits_the_request() {
+        // USB cameras list fixed rates, sometimes the fastest first: the one that
+        // matches, not the first that reaches fps.
+        assert_eq!(picked(&[(60., 60.), (30., 30.)], 30), Some((1, 30.)));
+        assert_eq!(
+            picked(&[(30., 30.), (20., 20.), (15., 15.)], 15),
+            Some((2, 15.))
+        );
+        // A span that contains fps gives fps; a fixed rate wins a tie with it.
+        assert_eq!(picked(&[(1., 60.)], 30), Some((0, 30.)));
+        assert_eq!(picked(&[(1., 60.), (30., 30.)], 30), Some((1, 30.)));
+        assert_eq!(picked(&[(30., 30.), (30., 30.)], 30), Some((0, 30.)));
+        // Below fps, the nearest; any rate below fps beats one above it.
+        assert_eq!(picked(&[(15., 15.), (25., 25.)], 30), Some((1, 25.)));
+        assert_eq!(picked(&[(31., 31.), (5., 5.)], 30), Some((1, 5.)));
+        assert_eq!(picked(&[(5., 24.)], 30), Some((0, 24.)));
+        // Above fps only when nothing is at or below it, then the nearest.
+        assert_eq!(picked(&[(60., 60.), (50., 50.)], 30), Some((1, 50.)));
+        assert_eq!(picked(&[(40., 60.)], 30), Some((0, 40.)));
+        // Never a rate the host refuses: above 60 once rounded.
+        assert_eq!(picked(&[(120., 120.)], 30), None);
+        assert_eq!(picked(&[(120., 120.), (60., 60.)], 30), Some((1, 60.)));
+        assert_eq!(picked(&[(60.2, 60.2)], 30), Some((0, 60.2)));
+        assert_eq!(picked(&[(60.5, 120.)], 30), None);
+        assert_eq!(picked(&[(0., 0.)], 30), None);
+        assert_eq!(picked(&[], 30), None);
+        // The cost orders formats of the same size the same way.
+        let cost = |ranges: &[(f64, f64)]| pick(ranges, 30).unwrap().2;
+        assert_eq!(cost(&[(30., 30.)]), 0.);
+        assert!(cost(&[(30., 30.)]) < cost(&[(29.97, 29.97)]));
+        assert!(cost(&[(29.97, 29.97)]) < cost(&[(15., 15.)]));
+        assert!(cost(&[(1., 1.)]) < cost(&[(30.03, 30.03)]));
+        assert!(cost(&[(30.03, 30.03)]) < cost(&[(60., 60.)]));
+    }
 
     #[test]
     fn finds_nal_units_after_start_codes() {
