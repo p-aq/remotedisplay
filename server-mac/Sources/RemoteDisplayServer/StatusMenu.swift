@@ -20,6 +20,10 @@ struct StatusMenu: View {
         if let sender = c.cameraSender {
             Label("Camera from \(sender)", systemImage: "video.fill")
         }
+        if let other = c.otherCameraFeeder {
+            Label("Another program, \(other), is feeding Remote Display Camera",
+                  systemImage: "exclamationmark.triangle.fill")
+        }
         if let sender = c.microphoneSender {
             Label("Microphone from \(sender)", systemImage: "mic.fill")
         }

@@ -47,6 +47,9 @@ final class ServerController {
     var cameraState: CameraExtension.State = CameraExtension.bundled ? .notInstalled : .notBundled
     /// Why the last install or removal failed, until the next one.
     var cameraError: String?
+    /// The program feeding Remote Display Camera when it isn't the engine: the extension
+    /// lets any program feed it, one at a time (decision 0033, option 2). Nil otherwise.
+    var otherCameraFeeder: String?
     @ObservationIgnored private let cameraExtension = CameraExtension()
     /// Remote Display Microphone, the virtual mic's driver, which every build bundles
     /// (decision 0027). Setup's Microphone row shows its state.
@@ -263,6 +266,7 @@ final class ServerController {
         sessions = serviceRunning ? readSessions() : []
         cameraExtension.refresh()
         microphoneDriver.refresh()
+        refreshCameraFeeder()
 
         // If a permission flipped from NO to YES, restart the engine so it starts with
         // the permission already in effect.
@@ -276,6 +280,19 @@ final class ServerController {
         checkLocalNetwork()
         ensureDesiredState()
         firstRefresh = false
+    }
+
+    /// Asks Remote Display Camera who feeds it, once it's installed (CoreMediaIO is left
+    /// alone before that), and names the program when it isn't the engine.
+    private func refreshCameraFeeder() {
+        var other: String?
+        if cameraState == .installed, let pid = CameraFeeder.pid(), pid != enginePid() {
+            other = CameraFeeder.programName(pid)
+        }
+        if other != otherCameraFeeder {
+            NSLog("[remotedisplay] camera feeder other than the engine: %@", other ?? "none")
+            otherCameraFeeder = other
+        }
     }
 
     /// Local-network access is only meaningful while the engine is up (it does the

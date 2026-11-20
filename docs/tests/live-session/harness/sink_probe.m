@@ -1,6 +1,8 @@
 // Remote Display live-session test (../README.md, decision 0033): starts Remote Display
-// Camera's sink stream the way remotedisplayd does, then stops it after 0.3 s, sending no
-// frames. The extension logs whether it accepted this process as a feeder, and why not.
+// Camera's sink stream the way remotedisplayd does, then stops it after 0.3 s, or after the
+// seconds given (`./p1 30`), sending no frames. The extension logs whether it accepted this
+// process as a feeder, and why not. Held for a while, it shows whether the extension keeps
+// the sink for one feeder at a time and whether the app names it (decision 0033, option 2).
 // Build it several ways to see what the extension makes of each (decision 0033):
 //
 //   cc() { xcrun clang -fobjc-arc -framework CoreMediaIO -framework CoreMedia -framework Foundation "$@"; }
@@ -12,6 +14,7 @@
 #import <CoreMediaIO/CMIOHardware.h>
 #import <Foundation/Foundation.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 static NSString* Name(CMIOObjectID o) {
     CMIOObjectPropertyAddress a = {kCMIOObjectPropertyName, kCMIOObjectPropertyScopeGlobal, kCMIOObjectPropertyElementMain};
@@ -39,7 +42,11 @@ int main(int argc, char** argv) {
                 OSStatus e = CMIOStreamCopyBufferQueue(st[j], Altered, NULL, &q);
                 OSStatus s = e ? e : CMIODeviceStartStream(ids[i], st[j]);
                 printf("pid %d: start sink -> %d\n", getpid(), (int)s);
-                if (!s) { usleep(300000); CMIODeviceStopStream(ids[i], st[j]); }
+                if (!s) {
+                    double hold = argc > 1 ? atof(argv[1]) : 0.3;
+                    usleep((useconds_t)(hold * 1e6));
+                    CMIODeviceStopStream(ids[i], st[j]);
+                }
                 if (q) CFRelease(q);
                 return s ? 1 : 0;
             }

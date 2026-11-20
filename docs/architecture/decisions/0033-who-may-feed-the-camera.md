@@ -82,6 +82,24 @@ If the extension's environment refuses `proc_pidpath` or the file read, fall bac
 **option 2**, and record the remaining risk in the spec's security notes. Keep option 3 for
 a release, if a review of the threat says it's needed.
 
+**Option 2, built for the same session (branch `phase1/camera-one-feeder`):**
+- The extension accepts any feeder that CoreMediaIO doesn't name as another program. It
+  still runs the code check, but only logs *Verified* or *not verified*.
+- It keeps the sink for that feeder until the feeder stops, disconnects or exits. Another
+  feeder meanwhile is refused (`… is feeding the camera`), so the engine's request ends as
+  `sink-failed`.
+- The device publishes the feeder's pid as the custom property `4cc_feed_glob_0000`, as a
+  string, empty when none.
+- Once the camera is installed, the server app reads that property every 2 s. When the pid
+  isn't the engine's, the Camera row and the menu say *"Another program, NAME, is feeding
+  Remote Display Camera"*.
+- The spec's security table records the remaining risk.
+
+The test: hold the sink with the probe (`./p1 30`). The app should name it, and the
+controller's camera should be refused until the probe stops. Then the engine's own forward
+should show no warning. Without camera access (option B), the app may not see the device
+after an extension update until it restarts, the same limit as the engine's.
+
 ## Also found: the engine misses a camera that appears after it starts using CoreMediaIO
 
 Not the same question, but the same session, and it decides issue #7.
