@@ -82,6 +82,8 @@ void main() {
           'Another controller is sending its camera to this Mac');
       expect(stopReason('no-answer', 'camera', hostIsMac: true),
           "This Mac didn't answer");
+      expect(stopReason('sink-failed', 'camera', hostIsMac: true),
+          "This Mac couldn't start Remote Display Camera");
       expect(stopReason('camera-failed', 'camera', hostIsMac: true),
           "The camera didn't start");
       expect(stopReason('camera-lost', 'camera', hostIsMac: true),
@@ -95,6 +97,8 @@ void main() {
     test('a microphone forward that stopped on its own', () {
       expect(stopReason('microphone-failed', 'microphone', hostIsMac: true),
           "The microphone didn't start");
+      expect(stopReason('sink-failed', 'microphone', hostIsMac: true),
+          "This Mac couldn't start Remote Display Microphone");
       expect(stopReason('microphone-lost', 'microphone', hostIsMac: true),
           'The microphone was disconnected or stopped working');
       expect(stopReason('busy', 'microphone', hostIsMac: true),
