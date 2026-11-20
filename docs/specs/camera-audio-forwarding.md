@@ -22,7 +22,7 @@ Citrix shows the approach works on macOS: its host exposes redirected webcams th
 
 Remote Display is the right base for three reasons:
 
-- It is built for Mac hosts: a notarized menu-bar server app (server-mac/) runs the RustDesk 1.4.9 engine as remotedisplayd.
+- It is built for Mac hosts: a notarized menu-bar server app (server-mac/) runs the RustDesk 1.4.9 engine as remotedisplayd (1.5.1 in this work since [decision 0030](../architecture/decisions/0030-engine-rustdesk-1-5-1.md)).
 - The engine already sends audio both ways for RustDesk's voice calls, and already encodes and decodes H.264 with VideoToolbox through hwcodec.
 - It is AGPL-3.0, so improvements stay open.
 
@@ -118,7 +118,7 @@ Highlighted boxes are new in this spec. Not drawn: the Remote Display Server app
 | Devices menu | client/lib/session/session_toolbar.dart | New menu |
 | macOS camera capture and encode | src/platform/macos_camera_capture.mm | New file |
 | Camera sender | src/client/device_forward.rs, src/client/io_loop.rs | New file, hook |
-| Messages | libs/hbb_common/protos/message.proto (libs/base/protos/message.proto since RustDesk 1.5, [decision 0030](../architecture/decisions/0030-engine-rustdesk-1-5-1.md)) | New fields 200–204 |
+| Messages | libs/base/protos/message.proto (libs/hbb_common/protos/message.proto before RustDesk 1.5, [decision 0030](../architecture/decisions/0030-engine-rustdesk-1-5-1.md)) | New fields 200–204 |
 | Request handling, mic routing | src/server/connection.rs, src/server/device_forward.rs | Changed, new file |
 | Decode and sink feeder | src/platform/macos_camera_sink.mm | New file |
 | Camera extension | server-mac/CameraExtension/ | New Xcode target |
@@ -133,7 +133,7 @@ Five new messages carry the feature, and the mic reuses RustDesk's existing Audi
 
 Reserved numbers. Remote Display reserves Message.union numbers 200–219 for its own messages ([decision 0017](../architecture/decisions/0017-reserved-message-range-200.md)). RustDesk adds its messages at the end of the oneof (34 on its master in October 2026), so the block stays clear of upstream. This feature takes 200–204; later Remote Display features take the next free numbers in the block.
 
-Proposed additions to libs/hbb_common/protos/message.proto:
+Proposed additions to libs/base/protos/message.proto:
 
 ```proto
 // remotedisplay: device forwarding. Message.union numbers 200–219 are reserved
@@ -414,7 +414,7 @@ Start with Phase 0: it is small, self-contained Swift and C, and it answers the 
 
 ## References
 
-Code paths refer to [Remote Display](https://github.com/SamuelRioTz/remotedisplay) at commit 86f1b23 (October 11, 2026), whose engine is RustDesk 1.4.9; engine paths are relative to engine/rustdesk/.
+Code paths refer to [p-aq/remotedisplay](https://github.com/p-aq/remotedisplay), branch phase0/spike, at commit f87cef9 (November 20, 2026), whose engine is RustDesk 1.5.1 ([decision 0030](../architecture/decisions/0030-engine-rustdesk-1-5-1.md)); engine paths are relative to engine/rustdesk/. Every file path the spec cites exists there. The spec was first written against [Remote Display](https://github.com/SamuelRioTz/remotedisplay) at commit 86f1b23 (October 11, 2026), whose engine was RustDesk 1.4.9: its plans describe that tree, and its "As built" notes describe this one.
 
 - [Apple: Creating a camera extension with Core Media I/O](https://developer.apple.com/documentation/coremediaio/creating-a-camera-extension-with-core-media-i-o)
 - [Apple: WWDC22 session 10022, Create camera extensions with Core Media IO](https://developer.apple.com/videos/play/wwdc2022/10022/)
