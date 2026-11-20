@@ -8,8 +8,8 @@
 
 ## Context
 
-The camera session on the Mac mini (macOS 27.2.1, signed build, results in
-`remotedisplay-signing/session/results.md`) found that the extension refused
+The camera session on the Mac mini (macOS 27.2.1, signed build, results under "Run on
+2026-11-19" in `docs/tests/live-session/README.md`) found that the extension refused
 `remotedisplayd` every time, so the camera never worked until a test build let any feeder
 in. Decision 0019's two checks each fail:
 
