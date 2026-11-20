@@ -124,8 +124,10 @@ struct MainWindowView: View {
         case .installed: ("Installed · choose Remote Display Camera in FaceTime, Zoom or any app", nil, {})
         case .removing: ("Removed · finishes when this Mac restarts", nil, {})
         }
-        return optionalRow(title: "Camera", detail: c.cameraError ?? row.detail, ok: c.cameraState == .installed,
-                           failed: c.cameraError != nil, cta: row.cta, action: row.action)
+        let other = c.otherCameraFeeder.map { "Another program, \($0), is feeding Remote Display Camera" }
+        return optionalRow(title: "Camera", detail: c.cameraError ?? other ?? row.detail,
+                           ok: c.cameraState == .installed && other == nil,
+                           failed: c.cameraError != nil || other != nil, cta: row.cta, action: row.action)
     }
 
     /// Remote Display Microphone's state, with what to do next (spec, User experience).
