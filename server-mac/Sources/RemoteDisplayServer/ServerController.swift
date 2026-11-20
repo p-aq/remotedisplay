@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 import Observation
 import ServiceManagement
@@ -47,6 +48,10 @@ final class ServerController {
     var cameraState: CameraExtension.State = CameraExtension.bundled ? .notInstalled : .notBundled
     /// Why the last install or removal failed, until the next one.
     var cameraError: String?
+    /// Camera access for the app, which the engine shares (decision 0033, option B): without
+    /// it the engine misses Remote Display Camera when the extension's device appears after
+    /// the engine started, as after an extension update. Setup's Camera row asks for it.
+    var cameraAccess: AVAuthorizationStatus = .notDetermined
     @ObservationIgnored private let cameraExtension = CameraExtension()
     /// Remote Display Microphone, the virtual mic's driver, which every build bundles
     /// (decision 0027). Setup's Microphone row shows its state.
@@ -98,6 +103,7 @@ final class ServerController {
     private var lastAutoStart = Date.distantPast
     private var prevScreen = false
     private var prevAccessibility = false
+    private var prevCameraAccess = AVAuthorizationStatus.notDetermined
     private var firstRefresh = true
     @ObservationIgnored private let localNetProbe = LocalNetworkProbe()
     @ObservationIgnored private var lastLocalNetProbe = Date.distantPast
@@ -263,12 +269,18 @@ final class ServerController {
         sessions = serviceRunning ? readSessions() : []
         cameraExtension.refresh()
         microphoneDriver.refresh()
+        cameraAccess = Permissions.cameraAccess()
 
         // If a permission flipped from NO to YES, restart the engine so it starts with
         // the permission already in effect.
-        let justGranted = (accessibilityOK && !prevAccessibility) || (screenOK && !prevScreen)
+        // Camera access too: the running engine may already have missed Remote Display
+        // Camera, and CoreMediaIO only tells it about a camera when one is added.
+        let cameraGranted = cameraAccess == .authorized && prevCameraAccess != .authorized
+            && cameraState == .installed
+        let justGranted = (accessibilityOK && !prevAccessibility) || (screenOK && !prevScreen) || cameraGranted
         prevScreen = screenOK
         prevAccessibility = accessibilityOK
+        prevCameraAccess = cameraAccess
         forgetPromptsForGrantedPermissions()
         if justGranted && serviceRunning && !firstRefresh {
             restartEngine()
@@ -690,6 +702,17 @@ final class ServerController {
         } else {
             UserDefaults.standard.set(true, forKey: Self.screenPromptedKey)
             Permissions.requestScreenRecording()
+        }
+    }
+
+    /// Asks for camera access the first time; once macOS has an answer, opens Privacy &
+    /// Security › Camera, where it can be turned on.
+    func grantCameraAccess() {
+        NSLog("[remotedisplay] grantCameraAccess tapped (status %d)", cameraAccess.rawValue)
+        if cameraAccess == .notDetermined {
+            Permissions.requestCameraAccess { [weak self] _ in self?.refresh() }
+        } else {
+            Permissions.openCameraPrivacySettings()
         }
     }
 

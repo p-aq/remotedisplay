@@ -124,3 +124,15 @@ Not the same question, but the same session, and it decides issue #7.
   **Recommendation:** test B first, with build B plus a Setup button that asks for access.
   If the engine then sees a camera added later, B is the cleanest, and it's what
   CoreMediaIO expects. Otherwise A.
+
+  **Built for the test (branch `phase1/engine-camera-access`):**
+  - `remotedisplayd` and the app carry the camera entitlement;
+  - once the extension is installed, Setup's Camera row asks for camera access (*Allow…*),
+    or opens Privacy & Security › Camera after a refusal, and shows the row as done only
+    with access;
+  - when access is newly granted, the app restarts the engine, which may already have
+    missed the device.
+
+  The test repeats the 18 → 19 update with access granted: bump the version while a
+  controller is connected, and the engine should see the new device without a restart. Then
+  test 20 checks login.

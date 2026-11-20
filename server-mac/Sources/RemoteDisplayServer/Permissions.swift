@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import AVFoundation
 import CoreGraphics
 import Foundation
 import Network
@@ -18,6 +19,13 @@ enum Permissions {
         AXIsProcessTrusted()
     }
 
+    /// Camera access. The engine never reads a camera; it needs this so CoreMediaIO tells it
+    /// about Remote Display Camera when the extension's device appears after the engine
+    /// started (decision 0033, option B). Granted to the app, it covers the engine too.
+    static func cameraAccess() -> AVAuthorizationStatus {
+        AVCaptureDevice.authorizationStatus(for: .video)
+    }
+
     // MARK: - Requesting (triggers the native "Allow" dialog)
 
     static func requestScreenRecording() {
@@ -32,6 +40,14 @@ enum Permissions {
         _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
     }
 
+    /// Shows macOS's camera prompt the first time; `done` gets the answer on the main thread.
+    static func requestCameraAccess(_ done: @escaping (Bool) -> Void) {
+        AVCaptureDevice.requestAccess(for: .video) { granted in
+            NSLog("[remotedisplay] camera access requested -> %d", granted ? 1 : 0)
+            DispatchQueue.main.async { done(granted) }
+        }
+    }
+
     // MARK: - Open the exact panel
 
     /// Where an admin allows a camera extension: General › Login Items & Extensions on
@@ -42,6 +58,10 @@ enum Permissions {
         } else {
             open("x-apple.systempreferences:com.apple.preference.security?General")
         }
+    }
+
+    static func openCameraPrivacySettings() {
+        open("x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")
     }
 
     static func openScreenRecordingSettings() {
