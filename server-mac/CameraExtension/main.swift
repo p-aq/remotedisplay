@@ -346,9 +346,11 @@ let ownTeamID: String? = {
 
 /// True when the client is remotedisplayd signed by this extension's own team: its
 /// running code, looked up by pid, checked against the Makefile's designated
-/// requirement. Any other process, including one that signs itself with the same
+/// requirement, or, where the sandbox refuses that lookup, the program it runs from,
+/// checked on disk. Any other process, including one that signs itself with the same
 /// identifier, is refused. CoreMediaIO's signing identifier only refuses early: it
-/// reports "unknown" for remotedisplayd, a launchd agent (live session, 2026-11-19).
+/// reports "unknown" for remotedisplayd and every other feeder tried (live session,
+/// 2026-11-19).
 func isFeeder(_ client: CMIOExtensionClient) -> Bool {
     let reported = client.signingID ?? "nothing"
     if reported != kFeederSigningID && reported != "unknown" && reported != "nothing" {
@@ -369,12 +371,33 @@ func isFeeder(_ client: CMIOExtensionClient) -> Bool {
     if status == errSecSuccess, let code, let requirement {
         status = SecCodeCheckValidity(code, [], requirement)
     }
+    // The sandbox refuses looking up another process's code: EPERM for remotedisplayd,
+    // EACCES for other feeders (live session, 2026-11-19).
+    var path = ""
+    if status == 100001 || status == 100013, let requirement {
+        (status, path) = checkOnDisk(client.pid, requirement)
+    }
     if status != errSecSuccess {
-        log.error("Refused sink client \(client.pid): code check failed (\(status))")
+        log.error("Refused sink client \(client.pid) \(path, privacy: .public): code check failed (\(status))")
     } else {
-        log.info("Accepted sink client \(client.pid) (CoreMediaIO reports \(reported, privacy: .public))")
+        log.info("Accepted sink client \(client.pid) \(path, privacy: .public) (CoreMediaIO reports \(reported, privacy: .public))")
     }
     return status == errSecSuccess
+}
+
+/// The program `pid` runs from, checked on disk against `requirement`, and its path.
+func checkOnDisk(_ pid: pid_t, _ requirement: SecRequirement) -> (OSStatus, String) {
+    var buffer = [CChar](repeating: 0, count: 4096)
+    guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else {
+        return (OSStatus(100000 + errno), "(no path)")  // kPOSIXErrorBase + errno
+    }
+    let path = String(cString: buffer)
+    var staticCode: SecStaticCode?
+    var status = SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &staticCode)
+    if status == errSecSuccess, let staticCode {
+        status = SecStaticCodeCheckValidity(staticCode, [], requirement)
+    }
+    return (status, path)
 }
 
 let providerSource = ProviderSource(clientQueue: nil)
