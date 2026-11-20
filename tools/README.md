@@ -62,6 +62,135 @@ codesign --force --sign RemoteDisplaySign --identifier app.remotedisplay.engine 
 With a stable identity, permissions are granted **only once** and survive rebuilds.
 There are 2 permissions, physically on the Mac: Screen Recording and Accessibility.
 
+## Building the macOS engine with only the Command Line Tools (tested recipe — October 2026)
+
+For a contributor Mac without Xcode or Homebrew build tools (tested on an M4 Mac mini,
+macOS 15.7.7, Command Line Tools with SDK 26.2). Builds the server engine,
+`target/release/rustdesk`, which is the `ENGINE_BIN` that `server-mac/Makefile` bundles.
+Everything goes into one folder, here called `$TOOLCHAINS`; nothing is written to the home
+folder, `/usr/local`, `/opt/homebrew` or shell profiles, so deleting the folder (plus
+`target/`) undoes it.
+
+| Piece | Version | Why this one |
+|---|---|---|
+| Rust (rustup, `--no-modify-path`, `RUSTUP_HOME`/`CARGO_HOME` inside `$TOOLCHAINS`) | 1.81.0 + rustfmt | Upstream's `MAC_RUST_VERSION` in `.github/workflows/flutter-build.yml` |
+| vcpkg, **full** clone, `bootstrap-vcpkg.sh -disableMetrics` | commit `120deac` | The manifest's baseline. A shallow clone can't resolve the manifest's version overrides |
+| NASM, built from the source release | 2.16.03 | aom's port requires it even on arm64. Upstream CI warns against NASM 3.x (Homebrew's), and nasm.us's macOS binary is Intel-only, so build it: `./configure && make nasm ndisasm` |
+| pkgconf as `pkg-config`, built from source (`--disable-shared`) | 3.0.10 | `vcpkg_fixup_pkgconfig` needs it after aom builds |
+| libclang for bindgen | the Command Line Tools' (Apple clang 17) | Works; no `llvm@17` needed (deprecated in Homebrew). The engine's codecs compile, so the aom/vpx structs come out right |
+
+nasm.us publishes no checksums; both source tarballs were checked against the SHA-256 in
+Homebrew's formula for the same version.
+
+```bash
+# env.sh, sourced in every build shell
+export RUSTUP_HOME=$TOOLCHAINS/rustup CARGO_HOME=$TOOLCHAINS/cargo
+export VCPKG_ROOT=$TOOLCHAINS/vcpkg VCPKG_DEFAULT_BINARY_CACHE=$TOOLCHAINS/vcpkg-cache VCPKG_DISABLE_METRICS=1
+export PATH="$TOOLCHAINS/bin:$CARGO_HOME/bin:$VCPKG_ROOT:$PATH"   # bin/ holds nasm and pkg-config
+export SDKROOT=$(xcrun --show-sdk-path)
+export LIBCLANG_PATH=/Library/Developer/CommandLineTools/usr/lib
+export BINDGEN_EXTRA_CLANG_ARGS="-isysroot $SDKROOT"
+
+# from engine/rustdesk/
+$VCPKG_ROOT/vcpkg install --x-install-root=$VCPKG_ROOT/installed --clean-buildtrees-after-build
+cargo build --locked --release --features hwcodec --bin rustdesk
+```
+
+Results: vcpkg builds aom, ffmpeg 7.1, libjpeg-turbo, libvpx, libyuv, opus and its helper
+ports (pkgconf, meson) for `arm64-osx`. The engine builds in 3 m 42 s with 53 upstream
+warnings. The binary (24 MB) links only system libraries and prints `1.4.9` for
+`--version`. Disk: 4.9 GB for `$TOOLCHAINS`, 1.7 GB for `target/`.
+
+### The macOS client on the same toolchain (tested recipe — 2026-10-27)
+
+Adds the Flutter client to the same `$TOOLCHAINS` folder, with Xcode 26.3 selected only for
+the build shell (below). Same Mac and macOS.
+
+| Piece | Version | Why this one |
+|---|---|---|
+| Flutter, the arm64 archive from `flutter_infra_release`, SHA-256 from `releases_macos.json` | 3.24.5 (Dart 3.5.4) | The client's pinned version. Its `gen_snapshot` is x86_64, so it needs Rosetta |
+| `flutter_rust_bridge_codegen`, `cargo install --locked --features uuid` | 1.80.1 | Upstream's `.github/workflows/bridge.yml`, which also installs the next one |
+| `cargo-expand`, `cargo install --locked` | 1.0.95 | The codegen expands the engine's macros with it |
+| CocoaPods as a gem for macOS's own Ruby 2.6 (`GEM_HOME=$TOOLCHAINS/gems`) | 1.16.2 | The version in `client/macos/Podfile.lock` |
+
+**Keep Flutter, Dart and CocoaPods out of the home folder.** They store settings,
+analytics consent, the pub cache and CocoaPods specs under `HOME`. Run them through
+wrappers that set `HOME` to a folder inside `$TOOLCHAINS`, plus `PUB_CACHE`, `GEM_HOME`
+and `CFFIXED_USER_HOME`. The last one is needed because `xcodebuild` ignores `HOME`:
+without it, `flutter build macos` puts DerivedData in `~/Library/Developer/Xcode` and
+Xcode's build phase runs Flutter with the real home, which creates `~/.flutter`,
+`~/.dart-tool` (analytics on) and `~/.config/flutter`. Turn analytics off once with
+`flutter config --no-analytics` and `dart --disable-analytics`.
+
+**CocoaPods on Ruby 2.6.** The newest versions of several of its dependencies need a newer
+Ruby, and RubyGems 3.0 doesn't pick older ones on its own. Install these first, each with
+`--conservative --platform ruby`: ffi 1.16.3, zeitwerk 2.6.18, minitest 5.25.4,
+i18n 1.14.8, tzinfo 2.0.6, activesupport 6.1.7.10, ethon 0.18.0, typhoeus 1.6.0,
+xcodeproj 1.28.1, bigdecimal 4.1.3, connection_pool 2.5.5, json 2.7.6, and
+concurrent-ruby **1.3.4** (1.3.5 and later break activesupport 6.1 with "uninitialized
+constant ActiveSupport::LoggerThreadSafeLevel::Logger"). Native extensions (nkf, ffi)
+must compile against the 15.4 SDK, which matches Ruby 2.6's headers. Run the install
+with `DEVELOPER_DIR` unset and
+`SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk`, or they fail on a
+missing `universal-darwin24/ruby/config.h`.
+
+```bash
+# from engine/rustdesk/, with env.sh sourced (Xcode's SDK)
+(cd flutter && flutter pub get)
+flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs \
+  --dart-output ./flutter/lib/generated_bridge.dart \
+  --c-output ./flutter/macos/Runner/bridge_generated.h \
+  --llvm-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr
+cp flutter/macos/Runner/bridge_generated.h ../../client/macos/Runner/
+cp flutter/macos/Runner/bridge_generated.h ../../client/ios/Runner/
+CARGO_PROFILE_RELEASE_STRIP=false cargo build --locked --release --features flutter,hwcodec --lib
+strip -x target/release/liblibrustdesk.dylib
+cd ../../client && flutter build macos --release
+```
+
+- **Use Xcode's libclang for the codegen**, the one matching the SDK that `env.sh`
+  selects. With the Command Line Tools' libclang, ffigen fails to parse the SDK's
+  `sys/resource.h` ("unknown type name 'uint8_t'"). It still reports success, but types
+  `int32_t` lists as `Pointer<Int>`, and the Dart side doesn't compile ("The method
+  'asTypedList' isn't defined for the class 'Pointer<Int>'"). The generated header is
+  the same either way.
+- **The committed headers.** `client/macos/Runner/bridge_generated.h` and
+  `client/ios/Runner/bridge_generated.h` are copies of the generated one; the Dart and
+  Rust sides stay generated and ignored.
+
+Results: the library builds in 2 m 43 s, and the app
+(`build/macos/Build/Products/Release/RemoteDisplay.app`, 57.5 MB, ad-hoc signed) builds
+with only third-party warnings. `pod install` recomputes `Podfile.lock`'s plugin checksums on another
+Mac; that diff isn't a change, so don't commit it. Disk: 4.2 GB for Flutter, 0.5 GB for
+the pub cache.
+
+The binaries record the build Mac's macOS as their minimum (`minos 15.0` here), not
+rustc's default of 11.0, while the client app declares 12.0. Not yet checked on an older
+macOS.
+
+**The `screencapturekit` feature needs full Xcode.** It pulls in `cidre`, whose build script
+compiles its Objective-C helpers (`pomace`) with `xcodebuild`; with only the Command Line
+Tools it stops at "tool 'xcodebuild' requires Xcode". On macOS 15.x the newest Xcode that
+runs is 26.3; Xcode 26.4 and later need macOS Tahoe.
+
+Tested with Xcode 26.3 (17C529, from the Mac App Store) selected only for the build shell,
+so `xcode-select` stays on the Command Line Tools:
+
+```bash
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer   # before SDKROOT in env.sh
+cargo build --locked --release --features hwcodec,screencapturekit --bin rustdesk
+```
+
+It builds in about 3 minutes and the binary links `ScreenCaptureKit.framework`. `pomace`
+needs only the macOS SDK: no iOS platform, simulator or Metal toolchain. `xcodebuild`
+leaves a small `pomace-*` folder in `~/Library/Developer/Xcode/DerivedData` and creates
+`~/Library/Caches/org.swift.swiftpm`, `~/Library/org.swift.swiftpm` and `~/.swiftpm`. Opening the Xcode app the first time does much
+more: it installs system packages into `/Library/Developer` and `/Library/Apple` (the
+latter protected by SIP, so it can't be removed by hand) and offers iOS and watchOS
+simulators (about 18 GB, not needed). To keep a Mac closer to how it was, accept the
+license with `sudo xcodebuild -license` instead of opening the app. Whether the build
+works without the first-launch packages wasn't tested here: they were already installed.
+
 ## Default codec: VP9 (server)
 
 Upstream's auto codec picks AV1 if the client supports it; on LAN that buys nothing and its decode at

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Embedded into rd-mic-feeder's __TEXT,__info_plist. Option B taps the process's own
+     output, which may still count as system audio recording. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>app.remotedisplay.spike.mic-feeder</string>
+    <key>CFBundleName</key>
+    <string>rd-mic-feeder</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Routes a Remote Display controller's microphone into Remote Display Microphone.</string>
+</dict>
+</plist>

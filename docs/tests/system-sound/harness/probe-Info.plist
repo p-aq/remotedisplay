@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- rd-sound-probe.app: the engine's test binary as its own app, so Screen Recording is
+     asked for and granted to it alone. No Dock icon. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>app.remotedisplay.spike.sound-probe</string>
+    <key>CFBundleName</key>
+    <string>rd-sound-probe</string>
+    <key>CFBundleExecutable</key>
+    <string>rd-sound-probe</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
