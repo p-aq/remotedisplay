@@ -82,20 +82,45 @@ If the extension's environment refuses `proc_pidpath` or the file read, fall bac
 **option 2**, and record the remaining risk in the spec's security notes. Keep option 3 for
 a release, if a review of the threat says it's needed.
 
-## Also found: the engine misses a camera that appears after it starts
+## Also found: the engine misses a camera that appears after it starts using CoreMediaIO
 
-Not the same question, but the same session:
+Not the same question, but the same session, and it decides issue #7.
 
-- **What happened:** when the extension was replaced while `remotedisplayd` was starting,
-  CoreMediaIO's `registerassistantservice` checked the Camera permission for
-  `remotedisplayd`. It logged that the service "requires entitlement
-  com.apple.security.device.camera but it is missing". That engine never saw Remote
-  Display Camera and told every controller it wasn't installed, until it restarted.
-- **Where it matters:** at login, if the engine starts before the extension's device is
-  up (test 20), and after every extension update (decision 0032).
-- **Possible fixes:**
-  - the app restarts the engine once an activation request finishes;
-  - or `remotedisplayd` gets the camera entitlement and the Camera permission (issue #7),
-    if a launchd agent can be given it at all.
+- **What happened:** after the extension went from version 18 to 19, the engine never saw
+  Remote Display Camera: every controller was told `not-installed`, until the engine
+  restarted. A fresh process listed the camera and its sink all along.
+- **Why, from the logs:** when a camera device is added, CoreMediaIO's
+  `registerassistantservice` asks TCC whether each process *already using CoreMediaIO* may
+  use the camera, and tells only those that may. At the 18 → 19 swap the controller
+  reconnected at once, so the engine had already asked for Remote Display Camera's status.
+  When version 19's device appeared a second later, TCC was asked about `remotedisplayd`
+  and said "requires entitlement com.apple.security.device.camera but it is missing". The
+  engine was never told about the device. At the 17 → 18 swap nothing had connected yet, the
+  engine first touched CoreMediaIO after the device was up, and saw it. In both swaps TCC
+  was also asked about Spotify, another process already using CoreMediaIO.
+- **When it bites:**
+  - after every extension update (decision 0032), if a controller is connected or
+    reconnects quickly;
+  - at login, if a controller connects before the extension's device is up (test 20 will
+    show whether that happens).
+- **Issue #7's answer, then:** feeding the sink needs no Camera permission, but *seeing a
+  camera that appears later* does.
+- **Options:**
+  - **A. Restart the engine when the device appears.** The app watches for Remote Display
+    Camera (a fresh check, like `cmio_list`, or its own CoreMediaIO listener, since the app
+    *is* told). It restarts the engine when the camera shows up and the engine reports
+    `not-installed`. No new permission, but sessions drop at every update, and the app needs
+    a reliable trigger.
+  - **B. Give the engine Camera access.** It gets `com.apple.security.device.camera` (build B
+    already has it), and the app asks for camera access once in Setup. TCC keys the answer
+    on the identifier and requirement that the app and `remotedisplayd` share, so the
+    engine should inherit it; to be tested. The user sees a camera prompt for a server app,
+    which needs explaining in Setup ("to see Remote Display Camera").
+  - **C. Keep the engine off CoreMediaIO until the device is there.** The sink status comes
+    from a short-lived helper process, so the engine's first CoreMediaIO call happens after
+    the device is up. That fixes login but not updates, so it would still need A for
+    updates.
 
-  Test 20 and an update with the engine running will say which is needed.
+  **Recommendation:** test B first, with build B plus a Setup button that asks for access.
+  If the engine then sees a camera added later, B is the cleanest, and it's what
+  CoreMediaIO expects. Otherwise A.
