@@ -13,6 +13,12 @@ prompt ([results](#what-was-tested-and-the-result)). Two findings: Remote Displa
 Microphone wasn't listed in System Settings › Sound › Input, and without Screen Recording
 the session never got as far as showing the sound switch ([findings](#runtime-findings)).
 
+In the camera session (2026-11-19, paused before test 10) Remote Display Camera installed and
+updated without trouble, and the controller's camera reached Photo Booth, FaceTime, QuickTime,
+Zoom, Teams, Safari and Chrome at 1280×720 and 30 fps, about 236 ms glass to glass. But only
+on a test build: the real extension refuses `remotedisplayd`
+([notes](#run-on-2026-11-19-paused-before-test-10), decision 0033).
+
 ## What's here
 
 | Piece | What it is |
@@ -21,6 +27,8 @@ the session never got as far as showing the sound switch ([findings](#runtime-fi
 | `harness/controller.sh` | The same for the client, on a controller that didn't build it: `before` moves it to /Applications, `after` removes its config, logs and permissions |
 | `harness/profiles.sh` | On the build Mac, before a build with the camera: checks both provisioning profiles against what `server-mac/Makefile` signs. It checks each profile's team, App ID, platform and expiry, the install entitlement, the app group, the host Macs and the signing identity's certificate, then prints the `make` command. macOS itself only refuses a wrong profile on the host, at launch or activation |
 | `harness/clap.m`, `harness/Makefile` | `rd-clap`, run on the host: records a reference microphone and Remote Display Microphone at once, and gives each clap's delay between the two ([what the figure includes](#what-rd-claps-figure-includes)). `make latency` runs it as `rd-clap.app`, so microphone access goes to it alone. `make clap-test` checks the onset detection and the pairing on generated claps, and `make clean` resets its access and deletes it |
+| `harness/lipsync.m` | `rd-lipsync` (`make lipsync`, `lipsync-test`, `lipsync-clip`): test 10's lip sync from a QuickTime recording. It pairs each flash in the picture with its beep or clap in the sound, and writes contact sheets of the frames around each sound for claps read by eye |
+| `harness/sink_probe.m` | Starts Remote Display Camera's sink as `remotedisplayd` does, to see whether the extension accepts a given program as its feeder ([decision 0033](../../architecture/decisions/0033-who-may-feed-the-camera.md)) |
 
 To run a session, put the server app (`server-mac/.build/Remote Display Server.app`) and
 `host.sh` in one folder and AirDrop it to the host. For a controller other than the build
@@ -107,7 +115,8 @@ Run 2026-10-30. A person at both Macs did the steps and typed the admin password
 
 ## Next session: the camera and the calls
 
-Set up on 2026-11-14 ([results](#set-up-on-2026-11-14)); the tests are still to run. The
+Set up on 2026-11-14 ([results](#set-up-on-2026-11-14)); run on 2026-11-19 up to test 9, then
+paused ([notes](#run-on-2026-11-19-paused-before-test-10)). The
 camera needs a build signed by a paid Apple Developer Program team. macOS installs a camera extension only from an app whose
 provisioning profile allows it, and an ad-hoc build leaves the extension out
 ([decision 0019](../../architecture/decisions/0019-camera-extension-in-the-server-app.md)).
@@ -181,6 +190,29 @@ Two things stood in the way:
 The portal also turns on In-App Purchase for every new App ID. It's harmless here, and the
 profiles don't carry it.
 
+#### Run on 2026-11-19 (paused before test 10)
+
+The Mac mini hosted on macOS 27.2.1, upgraded from 15.7.7 since the setup above; the
+MacBook Pro controlled on macOS 26.7.3. Results are in the table below.
+
+- **The extension refused `remotedisplayd`.** Both of decision 0019's checks fail on a real
+  Mac: CoreMediaIO reports every sink client's signing identifier as `unknown`, and the
+  sandboxed extension may not look up another process's code (EPERM). A build with the
+  camera entitlement on `remotedisplayd` was refused the same way. Tests 3 to 9 ran on a
+  test build (version 19) that lets any feeder in; it is never to ship. Options and the next
+  test: [decision 0033](../../architecture/decisions/0033-who-may-feed-the-camera.md).
+- **Issue #7:** feeding the sink took no Camera permission and showed no prompt. But when
+  the extension's device appeared after `remotedisplayd` had started, CoreMediaIO checked
+  the Camera permission for it ("requires entitlement com.apple.security.device.camera but
+  it is missing"), and that engine never saw the device until it restarted.
+- **Every camera failure reaches the controller as `not-installed`,** so it said *Remote
+  Display Camera isn't installed on this Mac* while it was installed and the extension was
+  refusing the feeder.
+- **Xcode updated itself to 27.2** overnight; the next build stopped until the host's admin
+  accepted its license (`sudo …/xcodebuild -license accept`).
+- **The microphone forward ran during test 3:** about two minutes, 4 underruns, before the
+  microphone tests proper.
+
 ### Layout
 
 The Mac mini hosts and the MacBook Pro controls, the reverse of the first session:
@@ -207,16 +239,16 @@ the extension. A phone that joins the Zoom meetings is the far end.
 
 | # | Test | How | Passes when | Result |
 |---|---|---|---|---|
-| 1 | Install the camera | Setup › Camera › *Install…*, then allow it in System Settings › General › Login Items & Extensions › Camera Extensions, with the controller connected | `systemextensionsctl list` shows `app.remotedisplay.server.camera` `[activated enabled]`, Setup says it's installed, and the controller's Camera row becomes available without reconnecting | Pending |
-| 2 | Placeholder | Photo Booth, Remote Display Camera, nothing forwarded | The *No controller connected* card | Pending |
-| 3 | The test card | Open the client with `--camera-test-pattern`, then Devices › Camera › *Test pattern* | Photo Booth shows the card and its clock moves smoothly. The extension accepts `remotedisplayd` (its log). Record whether macOS asks for camera access for Remote Display Server (spec, Open questions) | Pending |
-| 4 | The real camera | The MacBook Pro's camera, in Photo Booth, FaceTime, QuickTime, Zoom, Teams and a WebRTC test page in Safari and Chrome | The picture shows in each | Pending |
-| 5 | No reader yet | Camera on, then open Photo Booth 30 s later | A live picture within 1 s | Pending |
-| 6 | Owner switches off | Settings › *Let controllers share their camera and microphone* off while forwarding | The forward stops and the controller's menu says why | Pending |
-| 7 | Network cut | Turn off the controller's Wi-Fi while forwarding | The placeholder within 1 s; the controller's camera light goes off | Pending |
-| 8 | Engine crash | `pkill remotedisplayd` on the host while forwarding | The placeholder within 1 s | Pending |
-| 9 | Glass to glass | A stopwatch with milliseconds on the host's screen beside Photo Booth, the controller's camera pointed at it; screenshots on the host | The difference between the two times, recorded | Pending |
-| 10 | Lip sync | QuickTime's *New Movie Recording* on the host from Remote Display Camera and Microphone; clap in view of the controller's camera | The clap's frame against its sound, recorded | Pending |
+| 1 | Install the camera | Setup › Camera › *Install…*, then allow it in System Settings › General › Login Items & Extensions › Camera Extensions, with the controller connected | `systemextensionsctl list` shows `app.remotedisplay.server.camera` `[activated enabled]`, Setup says it's installed, and the controller's Camera row becomes available without reconnecting | Host side **PASS** (2026-11-19): `[activated enabled]` after one approval. Installed before the controller connected, so the row's live update wasn't seen. OBS Virtual Camera, waiting for approval, was enabled by the same approval |
+| 2 | Placeholder | Photo Booth, Remote Display Camera, nothing forwarded | The *No controller connected* card | **PASS**: the card (Photo Booth mirrors its preview) |
+| 3 | The test card | Open the client with `--camera-test-pattern`, then Devices › Camera › *Test pattern* | Photo Booth shows the card and its clock moves smoothly. The extension accepts `remotedisplayd` (its log). Record whether macOS asks for camera access for Remote Display Server (spec, Open questions) | **FAIL** with the real extension, which refused `remotedisplayd` ([decision 0033](../../architecture/decisions/0033-who-may-feed-the-camera.md)). **PASS** with a test build that lets any feeder in: 1280×720 at 30 fps, the clock moving smoothly. No camera prompt (issue #7, below) |
+| 4 | The real camera | The MacBook Pro's camera, in Photo Booth, FaceTime, QuickTime, Zoom, Teams and a WebRTC test page in Safari and Chrome | The picture shows in each | **PASS** (test build) in all seven: 1280×720 at 30 fps, 0 frames dropped in the first 2,493 |
+| 5 | No reader yet | Camera on, then open Photo Booth 30 s later | A live picture within 1 s | **PASS** (test build) |
+| 6 | Owner switches off | Settings › *Let controllers share their camera and microphone* off while forwarding | The forward stops and the controller's menu says why | **PASS** (test build): the card; the controller said *This Mac hasn't turned on camera sharing*. 17 of 15,851 frames dropped before it |
+| 7 | Network cut | Turn off the controller's Wi-Fi while forwarding | The placeholder within 1 s; the controller's camera light goes off | **PASS** (test build): the outage was short enough that the connection never closed; the extension's own timer showed the card, and the picture came back with the Wi-Fi |
+| 8 | Engine crash | `pkill remotedisplayd` on the host while forwarding | The placeholder within 1 s | **PASS** (test build): the card within about a second; the app started a new engine and the controller reconnected, its camera off |
+| 9 | Glass to glass | A stopwatch with milliseconds on the host's screen beside Photo Booth, the controller's camera pointed at it; screenshots on the host | The difference between the two times, recorded | **≈ 236 ms** (test build, LAN, one reading) |
+| 10 | Lip sync | QuickTime's *New Movie Recording* on the host from Remote Display Camera and Microphone; clap in view of the controller's camera. Measure with `make lipsync MOVIE=…` in `harness/`; a phone playing `make lipsync-clip`'s flash-and-beep clip in front of the controller is more precise than a clap | The clap's frame against its sound, recorded | Pending; `make lipsync` measures it |
 | 11 | Default input | `make default-check` in `docs/tests/virtual-mic/harness/`, then look at Sound › Input and Output ([decision 0031](../../architecture/decisions/0031-virtual-mic-can-be-the-default-input.md)) | PASS; Input lists Remote Display Microphone and Output doesn't | Pending |
 | 12 | Dictation | Remote Display Microphone as the input under Sound › Input, then dictate into TextEdit. Turn Dictation on in Keyboard if it's off, and off again after | The words come out right: with 13, the Phase 2 gate | Pending |
 | 13 | Zoom's test meeting | zoom.us/test on the host, with Remote Display Camera and Remote Display Microphone | The preview shows the picture, and the microphone test plays the speech back clearly | Pending |
@@ -227,7 +259,7 @@ the extension. A phone that joins the Zoom meetings is the far end.
 | 18 | Teams | Teams' test call on the host, as 13 | As 13 | Pending |
 | 19 | Over Tailscale | 16 again, connected by the host's Tailscale address | The phone sees the controller's camera: the Phase 1 gate | Pending |
 | 20 | Restart | Restart the host with both devices installed | After login the camera and the microphone work without reinstalling | Pending |
-| 21 | Upgrade | Install a newer build over this one with Photo Booth open | What Photo Booth shows, recorded; no stale device once it relaunches | Pending |
+| 21 | Upgrade | Install a newer build over this one with Photo Booth open | What Photo Booth shows, recorded; no stale device once it relaunches | **Mostly PASS**: 17 → 18 → 19, each replaced without asking, with Photo Booth showing the card throughout; the older versions wait to uninstall at the next restart. Not yet: Photo Booth relaunched |
 | 22 | Remove | Settings › *Remove Camera and Microphone* | The extension leaves `systemextensionsctl list`, or says it finishes at a restart; Remote Display Microphone goes | Pending |
 | 23 | Nothing left behind | `make clean` in `harness/`, for `rd-clap`'s microphone access; `host.sh after`, again after a restart if it asks; `controller.sh after` | Only the volume line differs | Pending |
 

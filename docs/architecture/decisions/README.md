@@ -47,3 +47,4 @@ architecture README's change log (and its departures table, if it departs).
 | [0030](0030-engine-rustdesk-1-5-1.md) | The engine moves to RustDesk 1.5.1, and the speaker path keeps upstream's new playback | Accepted | Follows (SYNC.md's update flow); 1.5.1 rather than 1.5.0 |
 | [0031](0031-virtual-mic-can-be-the-default-input.md) | Remote Display Microphone can be the Mac's default input | Accepted | Departs ("can't become a default device"); keeps its goal |
 | [0032](0032-app-update-replaces-the-camera-extension.md) | A new app version asks macOS to replace the installed camera extension | Accepted | Follows (Packaging › Updates); says how |
+| [0033](0033-who-may-feed-the-camera.md) | Who may feed Remote Display Camera, now that the extension can't ask macOS | Proposed | Changes 0019's feeder rule; keeps its goal |
