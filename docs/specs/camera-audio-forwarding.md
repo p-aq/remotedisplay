@@ -300,6 +300,8 @@ The menu-bar app and the engine. There is no IPC between them today. ServerContr
 
 Camera permission for the feeder. Phase 0 checks whether a process that only feeds a sink stream needs the Camera permission. Plan for yes: add NSCameraUsageDescription to server-mac/Info.plist, so a CoreMediaIO call that triggers a privacy check can't terminate remotedisplayd. Setup gains a row only if Phase 0 shows a prompt.
 
+As found in the camera session of 2026-11-19 ([decision 0033](../architecture/decisions/0033-who-may-feed-the-camera.md)): feeding the sink needs no Camera permission and shows no prompt, but CoreMediaIO tells a process about a camera that appears after it started using CoreMediaIO only if the process may use the camera. Being tested (option B): remotedisplayd and the app carry com.apple.security.device.camera, and Setup's Camera row, rather than a new row, asks for camera access once the extension is installed.
+
 ## Security and privacy
 
 Forwarding a camera or mic into another computer is sensitive in both directions, so both ends must agree each time it starts.

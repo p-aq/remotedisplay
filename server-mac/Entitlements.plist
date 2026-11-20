@@ -4,5 +4,11 @@
 <dict>
     <key>com.apple.security.app-sandbox</key>
     <false/>
+    <!-- Camera access, asked for once by Setup's Camera row (decision 0033, option B). Not
+         to read a camera: CoreMediaIO only tells a process about a camera added after it
+         started using CoreMediaIO if it may use the camera, and without it remotedisplayd
+         never sees Remote Display Camera after an extension update. -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
 </dict>
 </plist>

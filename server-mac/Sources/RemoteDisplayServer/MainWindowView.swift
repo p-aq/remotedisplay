@@ -121,10 +121,19 @@ struct MainWindowView: View {
         case .working: ("Waiting for macOS…", nil, {})
         case .awaitingApproval: ("An admin must allow it in System Settings › \(approval)",
                                  "Open Settings…", { Permissions.openCameraExtensionSettings() })
+        // Installed, the service still needs camera access to notice Remote Display Camera
+        // when it comes back after an update (decision 0033, option B).
+        case .installed where c.cameraAccess == .notDetermined:
+            ("Installed · allow camera access so the service sees Remote Display Camera after an update",
+             "Allow…", { c.grantCameraAccess() })
+        case .installed where c.cameraAccess != .authorized:
+            ("Installed · allow camera access in System Settings › Privacy & Security › Camera",
+             "Open Settings…", { c.grantCameraAccess() })
         case .installed: ("Installed · choose Remote Display Camera in FaceTime, Zoom or any app", nil, {})
         case .removing: ("Removed · finishes when this Mac restarts", nil, {})
         }
-        return optionalRow(title: "Camera", detail: c.cameraError ?? row.detail, ok: c.cameraState == .installed,
+        let ready = c.cameraState == .installed && c.cameraAccess == .authorized
+        return optionalRow(title: "Camera", detail: c.cameraError ?? row.detail, ok: ready,
                            failed: c.cameraError != nil, cta: row.cta, action: row.action)
     }
 

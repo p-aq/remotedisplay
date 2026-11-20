@@ -7,6 +7,9 @@
 <dict>
     <key>com.apple.security.app-sandbox</key>
     <false/>
+    <!-- As in Entitlements.plist: the app asks for camera access, which remotedisplayd shares. -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
     <!-- Restricted: needs the embedded provisioning profile, or macOS kills the app at launch. -->
     <key>com.apple.developer.system-extension.install</key>
     <true/>
