@@ -55,6 +55,13 @@
 
   Anything else is refused and logged with the reason (subsystem
   `app.remotedisplay.server.camera`). Apps reading the camera aren't checked.
+
+  **Since 2026-11-20** neither check works as written on a real Mac (camera session,
+  2026-11-19). CoreMediaIO reports `unknown` for every sink client, and the sandbox refuses
+  the lookup by pid. So an identifier of `unknown` now goes on to the signature check, and
+  when the lookup is refused, the extension checks the client's program on disk against
+  the same requirement. Whether the installed extension may do that is still to be tested.
+  The options are in [decision 0033](0033-who-may-feed-the-camera.md) (proposed).
 - **The Camera row in Setup** asks macOS on every 2-second refresh and shows one of:
   - not available in this build;
   - move the app to Applications first;
