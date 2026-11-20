@@ -344,13 +344,15 @@ let ownTeamID: String? = {
     return (info as? [String: Any])?[kSecCodeInfoTeamIdentifier as String] as? String
 }()
 
-/// True when the client is remotedisplayd signed by this extension's own team: the
-/// signing identifier CoreMediaIO reports, then the running code checked against the
-/// Makefile's designated requirement. Any other process, including one that signs
-/// itself with the same identifier, is refused.
+/// True when the client is remotedisplayd signed by this extension's own team: its
+/// running code, looked up by pid, checked against the Makefile's designated
+/// requirement. Any other process, including one that signs itself with the same
+/// identifier, is refused. CoreMediaIO's signing identifier only refuses early: it
+/// reports "unknown" for remotedisplayd, a launchd agent (live session, 2026-11-19).
 func isFeeder(_ client: CMIOExtensionClient) -> Bool {
-    guard client.signingID == kFeederSigningID else {
-        log.error("Refused sink client \(client.pid): signed as \(client.signingID ?? "nothing", privacy: .public)")
+    let reported = client.signingID ?? "nothing"
+    if reported != kFeederSigningID && reported != "unknown" && reported != "nothing" {
+        log.error("Refused sink client \(client.pid): signed as \(reported, privacy: .public)")
         return false
     }
     guard let team = ownTeamID else {
@@ -369,6 +371,8 @@ func isFeeder(_ client: CMIOExtensionClient) -> Bool {
     }
     if status != errSecSuccess {
         log.error("Refused sink client \(client.pid): code check failed (\(status))")
+    } else {
+        log.info("Accepted sink client \(client.pid) (CoreMediaIO reports \(reported, privacy: .public))")
     }
     return status == errSecSuccess
 }
