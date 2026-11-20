@@ -105,8 +105,8 @@ struct DeviceState {
     /// for the default one or when off.
     device: String,
     /// Why it stopped without being switched off, "" otherwise: the host's reason
-    /// ("not-allowed", "not-installed", "not-approved", "busy", "bad-format", or
-    /// "refused" when it gave none), "no-answer", "camera-failed" or "microphone-failed"
+    /// ("not-allowed", "not-installed", "not-approved", "busy", "bad-format",
+    /// "sink-failed", or "refused" when it gave none), "no-answer", "camera-failed" or "microphone-failed"
     /// when it didn't start, or "camera-lost" or "microphone-lost" when it went away
     /// (decisions 0020 and 0023).
     reason: String,

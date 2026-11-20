@@ -53,6 +53,9 @@ pub const NOT_ALLOWED: &str = "not-allowed";
 pub const BUSY: &str = "busy";
 /// A request whose format is outside what the host accepts (decision 0016).
 pub const BAD_FORMAT: &str = "bad-format";
+/// The sink was there but didn't start: the camera extension or the microphone driver
+/// refused it, so `not-installed` would send the user looking in the wrong place.
+pub const SINK_FAILED: &str = "sink-failed";
 /// The camera formats the host accepts (decision 0016): 16×16 to 1920×1080 in either
 /// orientation, so a portrait camera fits too.
 const MIN_SIDE: i32 = 16;
@@ -486,7 +489,7 @@ impl Forwards {
             Err(err) => {
                 log::warn!("Camera sink not opened: {}", err);
                 self.release(Kind::CAMERA);
-                response(Kind::CAMERA, false, NOT_INSTALLED)
+                response(Kind::CAMERA, false, SINK_FAILED)
             }
         }
     }
@@ -508,7 +511,7 @@ impl Forwards {
             Err(err) => {
                 log::warn!("Remote Display Microphone not opened: {}", err);
                 self.release(Kind::MICROPHONE);
-                response(Kind::MICROPHONE, false, NOT_INSTALLED)
+                response(Kind::MICROPHONE, false, SINK_FAILED)
             }
         }
     }
@@ -845,6 +848,28 @@ mod tests {
         assert!(name.starts_with("xxx"));
         drop(conn);
         assert_eq!(forwarding_of(&senders), "{}");
+    }
+
+    #[test]
+    fn a_sink_that_is_there_but_refuses_is_not_called_missing() {
+        let senders = Senders::default();
+        let sinks = Sinks {
+            camera_status: Box::new(|| READY),
+            open_camera: Box::new(|_, _, _| hbb_common::bail!("sink not available (-4)")),
+            mic_status: Box::new(|| READY),
+            open_mic: Box::new(|| hbb_common::bail!("driver refused")),
+            allowed: Box::new(|| true),
+        };
+        let mut conn = Forwards::with(1, sinks, senders.clone());
+        assert_eq!(
+            answer(conn.on_message(camera_on())),
+            (false, SINK_FAILED.into())
+        );
+        assert_eq!(
+            answer(conn.on_message(mic_on())),
+            (false, SINK_FAILED.into())
+        );
+        assert!(senders.lock().unwrap().is_empty());
     }
 
     #[test]
