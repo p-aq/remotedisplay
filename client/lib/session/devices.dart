@@ -65,41 +65,57 @@ String _noun(String kind) => kind == 'camera' ? 'camera' : 'microphone';
 String _device(String kind) =>
     kind == 'camera' ? 'Remote Display Camera' : 'Remote Display Microphone';
 
+/// What the menu calls the host: the first label of the hostname it reports
+/// ("Mac-mini.local" → "Mac-mini"), or "the computer you're controlling" when
+/// it reports none. "This Mac", read on the controller, sounded like the
+/// controller itself (decision 0012).
+String hostName(String? hostname) {
+  final label = (hostname ?? '').split('.').first.trim();
+  return label.isEmpty ? "the computer you're controlling" : label;
+}
+
+/// [host] at the start of a sentence: the fallback capitalized, a hostname as is.
+String _start(String host) =>
+    host.startsWith('the ') ? 'T${host.substring(1)}' : host;
+
 /// Why the host can't receive [kind], or null when it can. [status] is
-/// [hostStatus]; [hostIsMac] tells a 1.0.x Mac host from a host that isn't a Mac.
-String? hostReason(String? status, String kind, {required bool hostIsMac}) {
+/// [hostStatus]; [hostIsMac] tells a 1.0.x Mac host from a host that isn't a
+/// Mac; [host] is [hostName].
+String? hostReason(String? status, String kind,
+    {required bool hostIsMac, required String host}) {
   if (status == null) {
     return hostIsMac
-        ? 'Update Remote Display Server on this Mac'
+        ? 'Update Remote Display Server on $host'
         : 'Only a Mac can receive a ${_noun(kind)} for now';
   }
   switch (status) {
     case 'ready':
       return null;
     case 'not-allowed':
-      return "This Mac hasn't turned on ${_noun(kind)} sharing";
+      return "${_start(host)} hasn't turned on ${_noun(kind)} sharing";
     case 'not-installed':
-      return "${_device(kind)} isn't installed on this Mac";
+      return "${_device(kind)} isn't installed on $host";
     case 'not-approved':
-      return '${_device(kind)} is waiting for approval on this Mac';
+      return '${_device(kind)} is waiting for approval on $host';
     default:
-      return "This Mac can't receive a ${_noun(kind)} right now";
+      return "${_start(host)} can't receive a ${_noun(kind)} right now";
   }
 }
 
 /// Why a forward of [kind] stopped on its own ([ForwardState.reason]), or null.
-String? stopReason(String reason, String kind, {required bool hostIsMac}) {
+String? stopReason(String reason, String kind,
+    {required bool hostIsMac, required String host}) {
   switch (reason) {
     case '':
       return null;
     case 'busy':
-      return 'Another controller is sending its ${_noun(kind)} to this Mac';
+      return 'Another controller is sending its ${_noun(kind)} to $host';
     case 'bad-format':
-      return "This Mac can't take this ${_noun(kind)}'s picture size or frame rate";
+      return "${_start(host)} can't take this ${_noun(kind)}'s picture size or frame rate";
     case 'no-answer':
-      return "This Mac didn't answer";
+      return "${_start(host)} didn't answer";
     case 'sink-failed':
-      return "This Mac couldn't start ${_device(kind)}";
+      return "${_start(host)} couldn't start ${_device(kind)}";
     case 'camera-failed':
     case 'microphone-failed':
       return "The ${_noun(kind)} didn't start";
@@ -109,9 +125,9 @@ String? stopReason(String reason, String kind, {required bool hostIsMac}) {
     case 'not-allowed':
     case 'not-installed':
     case 'not-approved':
-      return hostReason(reason, kind, hostIsMac: hostIsMac);
+      return hostReason(reason, kind, hostIsMac: hostIsMac, host: host);
     default:
-      return 'This Mac turned the ${_noun(kind)} off';
+      return '${_start(host)} turned the ${_noun(kind)} off';
   }
 }
 
@@ -191,11 +207,12 @@ String? echoHint({required bool micOn, required bool soundOn}) =>
 /// Why the host's sound can't play here, or null when it can (decision 0028).
 /// [audioAllowed] is the host's audio permission for this session; [hostSound]
 /// its `rd_host_sound` from the login response, which a host without it doesn't
-/// send.
-String? soundReason({required bool audioAllowed, Object? hostSound}) {
-  if (!audioAllowed) return "This computer doesn't share its sound";
+/// send; [host] is [hostName].
+String? soundReason(
+    {required bool audioAllowed, Object? hostSound, required String host}) {
+  if (!audioAllowed) return "${_start(host)} doesn't share its sound";
   if (hostSound == 'unavailable') {
-    return "This Mac can't share its sound until Screen Recording is on there";
+    return "${_start(host)} can't share its sound until Screen Recording is on there";
   }
   return null;
 }

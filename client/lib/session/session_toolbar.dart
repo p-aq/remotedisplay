@@ -809,6 +809,8 @@ class _SessionToolbarState extends State<SessionToolbar> {
     final sessionId = ffi.sessionId;
     final pi = ffi.ffiModel.pi;
     final hostIsMac = pi.platform == kPeerPlatformMacOS;
+    // The host by name, so "this Mac" isn't read as the controller.
+    final host = hostName(pi.hostname);
     final forwards = ffi.ffiModel.deviceForward.value;
     final camera = ForwardState.parse(forwards, 'camera');
     final mic = ForwardState.parse(forwards, 'microphone');
@@ -820,7 +822,7 @@ class _SessionToolbarState extends State<SessionToolbar> {
         isMacOS ? bind.mainGetCapturePermission(kind: 'camera') : 'unsupported';
     final hostWhy = hostReason(
         hostStatus(camera, pi.platformAdditions, 'camera'), 'camera',
-        hostIsMac: hostIsMac);
+        hostIsMac: hostIsMac, host: host);
     final permissionWhy = picked != null && !needsCameraAccess(picked.id)
         ? null
         : permissionReason(permission, 'camera');
@@ -843,7 +845,8 @@ class _SessionToolbarState extends State<SessionToolbar> {
       items.add(_deviceRow(false, 'Camera', note: 'No camera found'));
     } else {
       items.add(_deviceRow(false, 'Camera',
-          note: stopReason(camera.reason, 'camera', hostIsMac: hostIsMac) ??
+          note: stopReason(camera.reason, 'camera',
+                  hostIsMac: hostIsMac, host: host) ??
               (cameras.length > 1 ? null : picked.name),
           onTap: () => _setCamera(true, picked.id)));
     }
@@ -861,7 +864,8 @@ class _SessionToolbarState extends State<SessionToolbar> {
     // The host may not allow its sound, or may not be able to capture it.
     final soundWhy = soundReason(
         audioAllowed: ffi.ffiModel.permissions['audio'] != false,
-        hostSound: pi.platformAdditions['rd_host_sound']);
+        hostSound: pi.platformAdditions['rd_host_sound'],
+        host: host);
     // The session toggle the engine's Mute uses (toolbarDisplayToggle).
     const mute = 'disable-audio';
     final muted =
@@ -879,7 +883,7 @@ class _SessionToolbarState extends State<SessionToolbar> {
         : 'unsupported';
     final micHostWhy = hostReason(
         hostStatus(mic, pi.platformAdditions, 'microphone'), 'microphone',
-        hostIsMac: hostIsMac);
+        hostIsMac: hostIsMac, host: host);
     final micPermissionWhy = permissionReason(micPermission, 'microphone');
     // A voice call sends this Mac's microphone too; the host would get both.
     final inCall =
@@ -904,7 +908,8 @@ class _SessionToolbarState extends State<SessionToolbar> {
       items.add(_deviceRow(false, 'Microphone', note: 'No microphone found'));
     } else {
       items.add(_deviceRow(false, 'Microphone',
-          note: stopReason(mic.reason, 'microphone', hostIsMac: hostIsMac) ??
+          note: stopReason(mic.reason, 'microphone',
+                  hostIsMac: hostIsMac, host: host) ??
               (mics.length > 1 ? null : pickedMic.name),
           onTap: () => _setMicrophone(true, pickedMic.id)));
     }

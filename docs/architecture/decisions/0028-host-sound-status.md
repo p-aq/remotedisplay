@@ -33,7 +33,8 @@
   the host doesn't allow audio, as before ("This computer doesn't share its sound"), or
   says "unavailable". The latter reads "This Mac can't share its sound until Screen
   Recording is on there". A host without the key, such as 1.0.x, changes nothing. The
-  headphones hint counts the sound as off in both cases.
+  headphones hint counts the sound as off in both cases. Since 2026-11-20 both name the
+  host instead of "This computer" or "This Mac" (decision 0012).
 - **At login only, no `DeviceStatus` for sound.** Granting Screen Recording restarts the
   engine, so the next session hears the new status.
 

@@ -16,6 +16,10 @@ already appears under Input › Session, and would duplicate "Play the Mac's sou
 
 - The Devices menu is always shown; its sound switch works with 1.0.x hosts. Camera and
   mic rows are disabled with a reason when unavailable.
+  **Since 2026-11-20** the reasons name the host by the hostname it reports, its first
+  label (*"Mac-mini hasn't turned on camera sharing"*), or *"the computer you're
+  controlling"* when it reports none. They said *"This Mac"*, which, read on the
+  controller, sounded like the controller itself (camera session, 2026-11-19).
 - `rd_camera_sink` and `rd_mic_sink` are status strings: `ready`, `not-installed`,
   `not-approved`, `not-allowed`.
   **Since 2026-11-20** a refusing `DeviceForwardResponse` can also say `sink-failed`: the
