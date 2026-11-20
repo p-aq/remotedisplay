@@ -60,49 +60,91 @@ void main() {
   });
 
   group('reasons', () {
+    test('name the host, not "this Mac"', () {
+      expect(hostName('Mac-mini.local'), 'Mac-mini');
+      expect(hostName('Mac-mini'), 'Mac-mini');
+      expect(hostName(''), "the computer you're controlling");
+      expect(hostName(null), "the computer you're controlling");
+      final fallback = hostName(null);
+      expect(
+          hostReason('not-allowed', 'camera', hostIsMac: true, host: fallback),
+          "The computer you're controlling hasn't turned on camera sharing");
+      expect(
+          hostReason('not-installed', 'camera',
+              hostIsMac: true, host: fallback),
+          "Remote Display Camera isn't installed on the computer you're controlling");
+    });
+
     test('the host', () {
-      expect(hostReason('ready', 'camera', hostIsMac: true), isNull);
-      expect(hostReason('not-allowed', 'camera', hostIsMac: true),
-          "This Mac hasn't turned on camera sharing");
-      expect(hostReason('not-installed', 'microphone', hostIsMac: true),
-          "Remote Display Microphone isn't installed on this Mac");
-      expect(hostReason('not-approved', 'camera', hostIsMac: true),
-          'Remote Display Camera is waiting for approval on this Mac');
-      expect(hostReason(null, 'camera', hostIsMac: true),
-          'Update Remote Display Server on this Mac');
-      expect(hostReason(null, 'camera', hostIsMac: false),
+      expect(hostReason('ready', 'camera', hostIsMac: true, host: 'Mac-mini'),
+          isNull);
+      expect(
+          hostReason('not-allowed', 'camera',
+              hostIsMac: true, host: 'Mac-mini'),
+          "Mac-mini hasn't turned on camera sharing");
+      expect(
+          hostReason('not-installed', 'microphone',
+              hostIsMac: true, host: 'Mac-mini'),
+          "Remote Display Microphone isn't installed on Mac-mini");
+      expect(
+          hostReason('not-approved', 'camera',
+              hostIsMac: true, host: 'Mac-mini'),
+          'Remote Display Camera is waiting for approval on Mac-mini');
+      expect(hostReason(null, 'camera', hostIsMac: true, host: 'Mac-mini'),
+          'Update Remote Display Server on Mac-mini');
+      expect(hostReason(null, 'camera', hostIsMac: false, host: 'Mac-mini'),
           'Only a Mac can receive a camera for now');
-      expect(hostReason('something-new', 'camera', hostIsMac: true),
-          "This Mac can't receive a camera right now");
+      expect(
+          hostReason('something-new', 'camera',
+              hostIsMac: true, host: 'Mac-mini'),
+          "Mac-mini can't receive a camera right now");
     });
 
     test('a forward that stopped on its own', () {
-      expect(stopReason('', 'camera', hostIsMac: true), isNull);
-      expect(stopReason('busy', 'camera', hostIsMac: true),
-          'Another controller is sending its camera to this Mac');
-      expect(stopReason('no-answer', 'camera', hostIsMac: true),
-          "This Mac didn't answer");
-      expect(stopReason('sink-failed', 'camera', hostIsMac: true),
-          "This Mac couldn't start Remote Display Camera");
-      expect(stopReason('camera-failed', 'camera', hostIsMac: true),
+      expect(
+          stopReason('', 'camera', hostIsMac: true, host: 'Mac-mini'), isNull);
+      expect(stopReason('busy', 'camera', hostIsMac: true, host: 'Mac-mini'),
+          'Another controller is sending its camera to Mac-mini');
+      expect(
+          stopReason('no-answer', 'camera', hostIsMac: true, host: 'Mac-mini'),
+          "Mac-mini didn't answer");
+      expect(
+          stopReason('sink-failed', 'camera',
+              hostIsMac: true, host: 'Mac-mini'),
+          "Mac-mini couldn't start Remote Display Camera");
+      expect(
+          stopReason('camera-failed', 'camera',
+              hostIsMac: true, host: 'Mac-mini'),
           "The camera didn't start");
-      expect(stopReason('camera-lost', 'camera', hostIsMac: true),
+      expect(
+          stopReason('camera-lost', 'camera',
+              hostIsMac: true, host: 'Mac-mini'),
           'The camera was disconnected or stopped working');
-      expect(stopReason('not-allowed', 'camera', hostIsMac: true),
-          hostReason('not-allowed', 'camera', hostIsMac: true));
-      expect(stopReason('refused', 'camera', hostIsMac: true),
-          'This Mac turned the camera off');
+      expect(
+          stopReason('not-allowed', 'camera',
+              hostIsMac: true, host: 'Mac-mini'),
+          hostReason('not-allowed', 'camera',
+              hostIsMac: true, host: 'Mac-mini'));
+      expect(stopReason('refused', 'camera', hostIsMac: true, host: 'Mac-mini'),
+          'Mac-mini turned the camera off');
     });
 
     test('a microphone forward that stopped on its own', () {
-      expect(stopReason('microphone-failed', 'microphone', hostIsMac: true),
+      expect(
+          stopReason('microphone-failed', 'microphone',
+              hostIsMac: true, host: 'Mac-mini'),
           "The microphone didn't start");
-      expect(stopReason('sink-failed', 'microphone', hostIsMac: true),
-          "This Mac couldn't start Remote Display Microphone");
-      expect(stopReason('microphone-lost', 'microphone', hostIsMac: true),
+      expect(
+          stopReason('sink-failed', 'microphone',
+              hostIsMac: true, host: 'Mac-mini'),
+          "Mac-mini couldn't start Remote Display Microphone");
+      expect(
+          stopReason('microphone-lost', 'microphone',
+              hostIsMac: true, host: 'Mac-mini'),
           'The microphone was disconnected or stopped working');
-      expect(stopReason('busy', 'microphone', hostIsMac: true),
-          'Another controller is sending its microphone to this Mac');
+      expect(
+          stopReason('busy', 'microphone', hostIsMac: true, host: 'Mac-mini'),
+          'Another controller is sending its microphone to Mac-mini');
       expect(permissionReason('denied', 'microphone'),
           'Allow microphone access in System Settings');
     });
@@ -115,13 +157,19 @@ void main() {
     });
 
     test("the host's sound", () {
-      expect(soundReason(audioAllowed: true, hostSound: 'ready'), isNull);
+      expect(
+          soundReason(audioAllowed: true, hostSound: 'ready', host: 'Mac-mini'),
+          isNull);
       // A 1.0.x host, or one that doesn't say.
-      expect(soundReason(audioAllowed: true), isNull);
-      expect(soundReason(audioAllowed: true, hostSound: 'unavailable'),
-          "This Mac can't share its sound until Screen Recording is on there");
-      expect(soundReason(audioAllowed: false, hostSound: 'ready'),
-          "This computer doesn't share its sound");
+      expect(soundReason(audioAllowed: true, host: 'Mac-mini'), isNull);
+      expect(
+          soundReason(
+              audioAllowed: true, hostSound: 'unavailable', host: 'Mac-mini'),
+          "Mac-mini can't share its sound until Screen Recording is on there");
+      expect(
+          soundReason(
+              audioAllowed: false, hostSound: 'ready', host: 'Mac-mini'),
+          "Mac-mini doesn't share its sound");
     });
 
     test("the controller's own access", () {

@@ -70,7 +70,7 @@ On the controller, per session:
 - The session toolbar gains a Devices menu: ‹ · peer · full screen · fit · Input · Screen · Devices · ✕. It is always there, because Play the Mac's sound here works with every host, including 1.0.x.
 - Devices holds on/off switches for Camera (with a picker when there is more than one), Microphone (with a picker), and Play the Mac's sound here. That last switch replaces the engine's Mute toggle, which today shows under Input › Session; Input stops showing it so there aren't two opposite switches for one setting.
 - The first time, macOS asks the controller app for Camera access. If access was denied, the row says "Allow camera access in System Settings" and opens the right pane.
-- When the host can't receive, the Camera or Microphone row is shown disabled and says why, for example "This Mac hasn't turned on camera sharing" or "Update Remote Display Server on this Mac". The row updates if the host owner changes the setting during the session.
+- When the host can't receive, the Camera or Microphone row is shown disabled and says why, for example "This Mac hasn't turned on camera sharing" or "Update Remote Display Server on this Mac" (as built, with the host's name in place of "this Mac": [decision 0012](../architecture/decisions/0012-devices-menu-and-device-status.md)). The row updates if the host owner changes the setting during the session.
 
 On the host, while forwarding:
 
