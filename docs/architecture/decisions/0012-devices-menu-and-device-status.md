@@ -18,6 +18,10 @@ already appears under Input › Session, and would duplicate "Play the Mac's sou
   mic rows are disabled with a reason when unavailable.
 - `rd_camera_sink` and `rd_mic_sink` are status strings: `ready`, `not-installed`,
   `not-approved`, `not-allowed`.
+  **Since 2026-11-20** a refusing `DeviceForwardResponse` can also say `sink-failed`: the
+  device is there, but its sink didn't start (the camera extension or the microphone driver
+  refused it). Before, the host said `not-installed`, and the controller told the user to
+  install a device that was installed (camera session, 2026-11-19).
 - A new `DeviceStatus` message (field 104, now 204: [decision 0017](0017-reserved-message-range-200.md)) updates a status mid-session.
 - Input › Session stops showing the engine's Mute toggle.
 - FFI adds device lists with hot-plug events and the controller's own permission state;

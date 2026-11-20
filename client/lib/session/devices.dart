@@ -98,6 +98,8 @@ String? stopReason(String reason, String kind, {required bool hostIsMac}) {
       return "This Mac can't take this ${_noun(kind)}'s picture size or frame rate";
     case 'no-answer':
       return "This Mac didn't answer";
+    case 'sink-failed':
+      return "This Mac couldn't start ${_device(kind)}";
     case 'camera-failed':
     case 'microphone-failed':
       return "The ${_noun(kind)} didn't start";
