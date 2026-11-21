@@ -121,6 +121,10 @@ struct MainWindowView: View {
         case .working: ("Waiting for macOS…", nil, {})
         case .awaitingApproval: ("An admin must allow it in System Settings › \(approval)",
                                  "Open Settings…", { Permissions.openCameraExtensionSettings() })
+        // Updated with the app: apps that were using it lost it (decision 0033, option A).
+        case .installed where c.cameraUpdated:
+            ("Updated · reopen apps that were using Remote Display Camera, such as FaceTime, Zoom or Photo Booth",
+             "OK", { c.dismissCameraUpdated() })
         case .installed: ("Installed · choose Remote Display Camera in FaceTime, Zoom or any app", nil, {})
         case .removing: ("Removed · finishes when this Mac restarts", nil, {})
         }

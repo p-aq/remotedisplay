@@ -22,6 +22,11 @@
 
 ## Decision
 
+**Since 2026-11-21** a finished replacement also restarts the engine, 3 s later, and Setup's
+Camera row and the menu tell the owner to reopen apps that were using Remote Display Camera,
+until they click OK. Running programs, the engine included, didn't get the new device
+([decision 0033](0033-who-may-feed-the-camera.md), option A).
+
 - **Compare on every state check.** The check reads the version of the extension in use
   (`bundleShortVersion`, `bundleVersion`) and the bundled one's `Info.plist`. Any
   difference counts, older or newer: the app's own extension is the one that matches its

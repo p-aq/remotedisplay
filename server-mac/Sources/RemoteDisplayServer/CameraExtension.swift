@@ -66,6 +66,10 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
     /// Each new state on the main queue, with a message when an install, update or removal
     /// fails.
     var onChange: (State, String?) -> Void = { _, _ in }
+    /// On the main queue once macOS has replaced another version with the bundled one.
+    var onReplaced: () -> Void = {}
+    /// The request under way replaces another version.
+    private var replacing = false
     /// The install, update or removal under way; state checks wait for it.
     private var pending: OSSystemExtensionRequest?
     private var pendingRemoval = false
@@ -108,6 +112,7 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
         guard Self.bundled, pending == nil else { return }
         pending = request
         pendingRemoval = removal
+        replacing = false
         request.delegate = self
         beforeRequest = last ?? .notInstalled
         report(.working)
@@ -140,6 +145,7 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
                  withExtension ext: OSSystemExtensionProperties) -> OSSystemExtensionRequest.ReplacementAction {
         NSLog("[remotedisplay] camera extension %@ (%@) replaces %@ (%@)", ext.bundleShortVersion,
               ext.bundleVersion, existing.bundleShortVersion, existing.bundleVersion)
+        if request === pending { replacing = true }
         return .replace
     }
 
@@ -152,6 +158,8 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
     func request(_ request: OSSystemExtensionRequest, didFinishWithResult result: OSSystemExtensionRequest.Result) {
         guard request === pending else { checking = false; return }
         pending = nil
+        if replacing && result == .completed { onReplaced() }
+        replacing = false
         if result == .willCompleteAfterReboot && pendingRemoval {
             report(.removing)
         } else {
