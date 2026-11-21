@@ -16,9 +16,12 @@
 //                                   checks the result is within one frame.
 //
 // Sound onsets use rd-clap's rule (clap.m): the first 1 ms window above 10× the median
-// window peak after 150 ms of quiet. A flash starts at the first frame whose mean
-// brightness crosses halfway between the darkest and brightest frames, so the picture's
-// times are good to about one frame (33 ms at 30 fps).
+// window peak after 150 ms of quiet. The picture is watched in the part of the frame where
+// the flash is: of a 16×9 grid, the cell with the biggest jump in brightness from one frame
+// to the next, so a clip played in a small window on a phone counts as well as a full
+// screen. A flash starts at the first frame whose brightness there crosses halfway between
+// its darkest and brightest, so the picture's times are good to about one frame (33 ms at
+// 30 fps).
 
 #import <AVFoundation/AVFoundation.h>
 #import <CoreImage/CoreImage.h>
@@ -205,9 +208,14 @@ static size_t SoundOnsets(Series w, double* out, size_t max) {
     return n;
 }
 
-// Each frame's mean brightness (every 8th pixel of the luma plane) and its time.
+enum { kCellsX = 16, kCellsY = 9, kCells = kCellsX * kCellsY };
+
+// Each frame's mean brightness, every 8th pixel of the luma plane, in the grid cell whose
+// brightness jumps most from one frame to the next (where the flash is), and its time.
 static Series FrameBrightness(AVAsset* asset) {
     Series s = {0};
+    double* cells = NULL;  // frames × kCells
+    size_t frames = 0, capacity = 0;
     AVAssetTrack* track = [asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
     if (!track) return s;
     AVAssetReader* r = [AVAssetReader assetReaderWithAsset:asset error:nil];
@@ -223,15 +231,34 @@ static Series FrameBrightness(AVAsset* asset) {
             const uint8_t* y = CVPixelBufferGetBaseAddressOfPlane(pb, 0);
             size_t stride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0), h = CVPixelBufferGetHeightOfPlane(pb, 0),
                    wd = CVPixelBufferGetWidthOfPlane(pb, 0);
-            double sum = 0;
-            size_t count = 0;
+            double sum[kCells] = {0};
+            size_t count[kCells] = {0};
             for (size_t row = 0; row < h; row += 8)
-                for (size_t col = 0; col < wd; col += 8, count++) sum += y[row * stride + col];
+                for (size_t col = 0; col < wd; col += 8) {
+                    size_t c = (row * kCellsY / h) * kCellsX + col * kCellsX / wd;
+                    sum[c] += y[row * stride + col];
+                    count[c]++;
+                }
             CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
-            push(&s, CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sb)), count ? sum / count : 0);
+            if (frames == capacity) {
+                capacity = capacity ? capacity * 2 : 1024;
+                cells = realloc(cells, capacity * kCells * sizeof(double));
+            }
+            for (size_t c = 0; c < kCells; c++) cells[frames * kCells + c] = count[c] ? sum[c] / count[c] : 0;
+            frames++;
+            push(&s, CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sb)), 0);
         }
         CFRelease(sb);
     }
+    size_t best = 0;
+    double bestJump = -1;
+    for (size_t c = 0; c < kCells; c++)
+        for (size_t f = 1; f < frames; f++) {
+            double jump = cells[f * kCells + c] - cells[(f - 1) * kCells + c];
+            if (jump > bestJump) { bestJump = jump; best = c; }
+        }
+    for (size_t f = 0; f < frames; f++) s.v[f] = cells[f * kCells + best];
+    free(cells);
     return s;
 }
 
