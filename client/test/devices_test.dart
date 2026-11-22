@@ -68,28 +68,45 @@ void main() {
       final fallback = hostName(null);
       expect(
           hostReason('not-allowed', 'camera', hostIsMac: true, host: fallback),
-          "The computer you're controlling hasn't turned on camera sharing");
+          "Turn on camera sharing in Remote Display Server's Settings on the computer you're controlling");
       expect(
           hostReason('not-installed', 'camera',
               hostIsMac: true, host: fallback),
-          "Remote Display Camera isn't installed on the computer you're controlling");
+          "Install Remote Display Camera from Setup in Remote Display Server on the computer you're controlling");
+      // At the start of a sentence, capitalized.
+      expect(
+          hostReason('something-new', 'camera',
+              hostIsMac: true, host: fallback),
+          "The computer you're controlling can't receive a camera right now");
     });
 
-    test('the host', () {
+    test('the host, with where to fix it', () {
       expect(hostReason('ready', 'camera', hostIsMac: true, host: 'Mac-mini'),
           isNull);
       expect(
           hostReason('not-allowed', 'camera',
               hostIsMac: true, host: 'Mac-mini'),
-          "Mac-mini hasn't turned on camera sharing");
+          "Turn on camera sharing in Remote Display Server's Settings on Mac-mini");
+      expect(
+          hostReason('not-allowed', 'microphone',
+              hostIsMac: true, host: 'Mac-mini'),
+          "Turn on microphone sharing in Remote Display Server's Settings on Mac-mini");
+      expect(
+          hostReason('not-installed', 'camera',
+              hostIsMac: true, host: 'Mac-mini'),
+          'Install Remote Display Camera from Setup in Remote Display Server on Mac-mini');
       expect(
           hostReason('not-installed', 'microphone',
               hostIsMac: true, host: 'Mac-mini'),
-          "Remote Display Microphone isn't installed on Mac-mini");
+          'Install Remote Display Microphone from Setup in Remote Display Server on Mac-mini');
       expect(
           hostReason('not-approved', 'camera',
               hostIsMac: true, host: 'Mac-mini'),
-          'Remote Display Camera is waiting for approval on Mac-mini');
+          'An admin needs to allow Remote Display Camera in System Settings on Mac-mini');
+      expect(
+          hostReason('not-approved', 'microphone',
+              hostIsMac: true, host: 'Mac-mini'),
+          'An admin needs to allow Remote Display Microphone in System Settings on Mac-mini');
       expect(hostReason(null, 'camera', hostIsMac: true, host: 'Mac-mini'),
           'Update Remote Display Server on Mac-mini');
       expect(hostReason(null, 'camera', hostIsMac: false, host: 'Mac-mini'),

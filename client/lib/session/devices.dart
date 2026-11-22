@@ -78,9 +78,9 @@ String hostName(String? hostname) {
 String _start(String host) =>
     host.startsWith('the ') ? 'T${host.substring(1)}' : host;
 
-/// Why the host can't receive [kind], or null when it can. [status] is
-/// [hostStatus]; [hostIsMac] tells a 1.0.x Mac host from a host that isn't a
-/// Mac; [host] is [hostName].
+/// Why the host can't receive [kind], or null when it can, said as where to fix
+/// it. [status] is [hostStatus]; [hostIsMac] tells a 1.0.x Mac host from a host
+/// that isn't a Mac; [host] is [hostName].
 String? hostReason(String? status, String kind,
     {required bool hostIsMac, required String host}) {
   if (status == null) {
@@ -92,11 +92,13 @@ String? hostReason(String? status, String kind,
     case 'ready':
       return null;
     case 'not-allowed':
-      return "${_start(host)} hasn't turned on ${_noun(kind)} sharing";
+      // The owner's switch in the server app's Settings.
+      return "Turn on ${_noun(kind)} sharing in Remote Display Server's Settings on $host";
     case 'not-installed':
-      return "${_device(kind)} isn't installed on $host";
+      // Setup's Camera and Microphone rows install them.
+      return 'Install ${_device(kind)} from Setup in Remote Display Server on $host';
     case 'not-approved':
-      return '${_device(kind)} is waiting for approval on $host';
+      return 'An admin needs to allow ${_device(kind)} in System Settings on $host';
     default:
       return "${_start(host)} can't receive a ${_noun(kind)} right now";
   }
