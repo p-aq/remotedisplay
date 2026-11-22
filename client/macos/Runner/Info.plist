@@ -43,6 +43,10 @@
 	<string>$(PRODUCT_COPYRIGHT)</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Remote Display connects to your computers on the local network (no external servers).</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_rdprobe._udp</string>
+	</array>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
 	<key>NSMicrophoneUsageDescription</key>

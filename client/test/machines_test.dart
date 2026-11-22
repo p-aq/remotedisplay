@@ -402,6 +402,69 @@ void main() {
     });
   });
 
+  group("macOS's Local Network control", () {
+    const denied = LocalNetworkAccess.denied;
+    const allowed = LocalNetworkAccess.allowed;
+    const unknown = LocalNetworkAccess.unknown;
+    const noAccess =
+        "Remote Display isn't allowed on your local network, so it can't find your computers.";
+
+    test("reads the Runner's answer; anything else is unknown", () {
+      expect(LocalNetworkAccess.parse('allowed'), allowed);
+      expect(LocalNetworkAccess.parse('denied'), denied);
+      for (final answer in [null, '', 'busy', true, 1]) {
+        expect(LocalNetworkAccess.parse(answer), unknown);
+      }
+    });
+
+    test('the empty card says so when access is denied, scan or no scan', () {
+      for (final settling in [true, false]) {
+        for (final unreachable in [true, false]) {
+          expect(
+              emptyHomeText(denied,
+                  settling: settling, unreachable: unreachable),
+              noAccess);
+        }
+      }
+    });
+
+    test('otherwise the empty card says what it said before', () {
+      for (final access in [allowed, unknown]) {
+        expect(emptyHomeText(access, settling: true, unreachable: true),
+            'Looking for computers on your network…');
+        expect(emptyHomeText(access, settling: false, unreachable: true),
+            'No computers answer from this network right now.');
+        expect(emptyHomeText(access, settling: false, unreachable: false),
+            'No computers yet. Start Remote Display Server on the Mac (same network, or Tailscale on both) or enter its address below.');
+      }
+    });
+
+    test('with computers shown, a line under them says it instead', () {
+      expect(localNetworkNote(denied, computersShown: true),
+          "Remote Display isn't allowed on your local network, so it can't find computers there.");
+      expect(localNetworkNote(denied, computersShown: false), isNull);
+      expect(localNetworkNote(allowed, computersShown: true), isNull);
+      expect(localNetworkNote(unknown, computersShown: true), isNull);
+    });
+
+    test('asks at most once per scan round, never twice at once', () {
+      final check = LocalNetworkCheck();
+      expect(check.start(), isTrue);
+      // Still running, or answered: not again in this round.
+      expect(check.start(), isFalse);
+      check.done();
+      expect(check.start(), isFalse);
+      // A new round may ask once.
+      check.newRound();
+      expect(check.start(), isTrue);
+      // A round that begins while an ask runs waits for its answer.
+      check.newRound();
+      expect(check.start(), isFalse);
+      check.done();
+      expect(check.start(), isTrue);
+    });
+  });
+
   test('address helpers', () {
     expect(isTailscaleAddress('100.64.0.2'), isTrue);
     expect(isTailscaleAddress('100.127.255.1:21120'), isTrue);
