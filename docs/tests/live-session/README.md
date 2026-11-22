@@ -19,6 +19,12 @@ Zoom, Teams, Safari and Chrome at 1280×720 and 30 fps, about 236 ms glass to gl
 on a test build: the real extension refuses `remotedisplayd`
 ([notes](#run-on-2026-11-19-paused-before-test-10), decision 0033).
 
+The session finished on 2026-11-21 ([notes](#run-on-2026-11-21-tests-10-to-23)):
+- decision 0033 is settled: one feeder at a time (option 2), and the engine restarts when the
+  camera is new (option A);
+- tests 10–18 and 20–23 pass, with lip sync at +58 ms and the microphone at 124 ms;
+- test 19 (Tailscale), Phase 1's gate, is still to do.
+
 ## What's here
 
 | Piece | What it is |
@@ -213,6 +219,33 @@ MacBook Pro controlled on macOS 26.7.3. Results are in the table below.
 - **The microphone forward ran during test 3:** about two minutes, 4 underruns, before the
   microphone tests proper.
 
+#### Run on 2026-11-21 (tests 10 to 23)
+
+Same Macs. Each build ran on the 2026-11-18 engine. Build 25 (PRs #61, #64 and #68) ran from
+test 10 on; it accepts any feeder, one at a time, and restarts the engine when the camera is
+new.
+
+- **Option 1 can't work.** Version 20 (#61) gets each feeder's path, but its sandbox may not
+  read the file: EACCES under the user's temp folder, and EPERM under `/Applications` for
+  `remotedisplayd` and for a test feeder signed with the real requirement.
+- **Option 2 passes:**
+  - the engine feeds the camera with no warning;
+  - a second feeder is refused while it does;
+  - a feeder that came first is named in the server app's menu (*Another program, p1, is
+    feeding Remote Display Camera*), and the controller's camera is refused until it stops.
+- **After an extension update, running programs don't get the new camera.**
+  - The engine, Photo Booth and Safari all lost it.
+  - Camera access for the engine (option B) didn't help. TCC answered *allowed* for the
+    running engine, and it still never got the device.
+  - A restarted engine got it.
+  - So the app now restarts the engine after an update or an approval (option A, #68), and
+    tells the owner to reopen apps that use the camera. Teams, running through the
+    updates, needed reopening (test 18).
+- **While the engine runs without the app, Launch Services counts the engine as Remote
+  Display Server.** It sits in the app's `Contents/MacOS` with the app's identifier. So
+  opening the app does nothing, and a scripted quit reaches the engine. `open -n` works
+  around it.
+
 ### Layout
 
 The Mac mini hosts and the MacBook Pro controls, the reverse of the first session:
@@ -248,20 +281,20 @@ the extension. A phone that joins the Zoom meetings is the far end.
 | 7 | Network cut | Turn off the controller's Wi-Fi while forwarding | The placeholder within 1 s; the controller's camera light goes off | **PASS** (test build): the outage was short enough that the connection never closed; the extension's own timer showed the card, and the picture came back with the Wi-Fi |
 | 8 | Engine crash | `pkill remotedisplayd` on the host while forwarding | The placeholder within 1 s | **PASS** (test build): the card within about a second; the app started a new engine and the controller reconnected, its camera off |
 | 9 | Glass to glass | A stopwatch with milliseconds on the host's screen beside Photo Booth, the controller's camera pointed at it; screenshots on the host | The difference between the two times, recorded | **≈ 236 ms** (test build, LAN, one reading) |
-| 10 | Lip sync | QuickTime's *New Movie Recording* on the host from Remote Display Camera and Microphone; clap in view of the controller's camera. Measure with `make lipsync MOVIE=…` in `harness/`; a phone playing `make lipsync-clip`'s flash-and-beep clip in front of the controller is more precise than a clap | The clap's frame against its sound, recorded | Pending; `make lipsync` measures it |
-| 11 | Default input | `make default-check` in `docs/tests/virtual-mic/harness/`, then look at Sound › Input and Output ([decision 0031](../../architecture/decisions/0031-virtual-mic-can-be-the-default-input.md)) | PASS; Input lists Remote Display Microphone and Output doesn't | Pending |
-| 12 | Dictation | Remote Display Microphone as the input under Sound › Input, then dictate into TextEdit. Turn Dictation on in Keyboard if it's off, and off again after | The words come out right: with 13, the Phase 2 gate | Pending |
-| 13 | Zoom's test meeting | zoom.us/test on the host, with Remote Display Camera and Remote Display Microphone | The preview shows the picture, and the microphone test plays the speech back clearly | Pending |
-| 14 | Microphone latency | `make latency` on the host, the LifeCam next to the MacBook Pro; clap every two seconds. `rd-clap` takes the LifeCam as the Mac mini's only wired input and says which it took | The median is under 150 ms | Pending |
-| 15 | No host sound | *Play the Mac's sound here* off, microphone on | The microphone still reaches the host | Pending |
-| 16 | A call with the host's sound | A Zoom meeting on the host with the phone, *Play the Mac's sound here* on | The phone and the controller hear each other; echo and ducking recorded (spec, Open questions) | Pending |
-| 17 | No headphones | As 16, with the controller on its own speakers and microphone | The phone hears no echo, or the Devices menu shows the headphones hint | Pending |
-| 18 | Teams | Teams' test call on the host, as 13 | As 13 | Pending |
-| 19 | Over Tailscale | 16 again, connected by the host's Tailscale address | The phone sees the controller's camera: the Phase 1 gate | Pending |
-| 20 | Restart | Restart the host with both devices installed | After login the camera and the microphone work without reinstalling | Pending |
-| 21 | Upgrade | Install a newer build over this one with Photo Booth open | What Photo Booth shows, recorded; no stale device once it relaunches | **Mostly PASS**: 17 → 18 → 19, each replaced without asking, with Photo Booth showing the card throughout; the older versions wait to uninstall at the next restart. Not yet: Photo Booth relaunched |
-| 22 | Remove | Settings › *Remove Camera and Microphone* | The extension leaves `systemextensionsctl list`, or says it finishes at a restart; Remote Display Microphone goes | Pending |
-| 23 | Nothing left behind | `make clean` in `harness/`, for `rd-clap`'s microphone access; `host.sh after`, again after a restart if it asks; `controller.sh after` | Only the volume line differs | Pending |
+| 10 | Lip sync | QuickTime's *New Movie Recording* on the host from Remote Display Camera and Microphone; clap in view of the controller's camera. Measure with `make lipsync MOVIE=…` in `harness/`; a phone playing `make lipsync-clip`'s flash-and-beep clip in front of the controller is more precise than a clap | The clap's frame against its sound, recorded | **PASS** (build 25; recorded): a phone played `lipsync-clip.mov` in front of the MacBook Pro, and QuickTime on the host recorded Remote Display Camera and Microphone. `make lipsync`: 20 flashes, 19 beeps, **sound +58 ms late** (median; 18 of 19 within ±1 ms), 2 ms drift over 18 s, including the phone's own playback offset. The flash detector now watches the part of the frame that changes most, for a clip in a small window |
+| 11 | Default input | `make default-check` in `docs/tests/virtual-mic/harness/`, then look at Sound › Input and Output ([decision 0031](../../architecture/decisions/0031-virtual-mic-can-be-the-default-input.md)) | PASS; Input lists Remote Display Microphone and Output doesn't | **PASS**: `make default-check`. The microphone can be the default input but not an output, the feeder stays hidden, and each default was put back (the input stays the LifeCam) |
+| 12 | Dictation | Remote Display Microphone as the input under Sound › Input, then dictate into TextEdit. Turn Dictation on in Keyboard if it's off, and off again after | The words come out right: with 13, the Phase 2 gate | **PASS**: dictated into TextEdit on the host, spoken into the MacBook Pro; the words came out right. With 13, Phase 2's gate is met |
+| 13 | Zoom's test meeting | zoom.us/test on the host, with Remote Display Camera and Remote Display Microphone | The preview shows the picture, and the microphone test plays the speech back clearly | **PASS**: the preview showed the MacBook Pro's camera, and Zoom's microphone test played the speech back clearly |
+| 14 | Microphone latency | `make latency` on the host, the LifeCam next to the MacBook Pro; clap every two seconds. `rd-clap` takes the LifeCam as the Mac mini's only wired input and says which it took | The median is under 150 ms | **PASS**: `make latency DURATION=30`, the LifeCam (USB, 1.5 ms) as reference. **Median 124 ms** over 8 claps (91–132 ms) |
+| 15 | No host sound | *Play the Mac's sound here* off, microphone on | The microphone still reaches the host | **PASS** (from 14): *Play the Mac's sound here* was off while all 8 claps reached the host |
+| 16 | A call with the host's sound | A Zoom meeting on the host with the phone, *Play the Mac's sound here* on | The phone and the controller hear each other; echo and ducking recorded (spec, Open questions) | **PASS**: both sides heard each other. No echo while the headset volume stays low; louder, the headphones leak into the MacBook Pro's microphone. No ducking noticed |
+| 17 | No headphones | As 16, with the controller on its own speakers and microphone | The phone hears no echo, or the Devices menu shows the headphones hint | **PASS** (run first): both sides heard each other, with no echo on the phone while it was away from the MacBook Pro. The headphones hint wasn't checked by eye; `devices_test.dart` covers it |
+| 18 | Teams | Teams' test call on the host, as 13 | As 13 | **PASS**: this Teams has no test call, so Meet now's pre-join screen. After Teams was reopened (it had run through the extension updates), the preview showed the camera and the microphone's level moved |
+| 19 | Over Tailscale | 16 again, connected by the host's Tailscale address | The phone sees the controller's camera: the Phase 1 gate | **Not run**: Tailscale can't be installed on the MacBook Pro. Phase 1's gate is still open |
+| 20 | Restart | Restart the host with both devices installed | After login the camera and the microphone work without reinstalling | **PASS**: after a restart only the current extension was left, the engine started from its LaunchAgent with the app closed, and the camera and microphone worked once the controller reconnected |
+| 21 | Upgrade | Install a newer build over this one with Photo Booth open | What Photo Booth shows, recorded; no stale device once it relaunches | **Mostly PASS**: 17 → 18 → 19, each replaced without asking, with Photo Booth showing the card throughout; the older versions wait to uninstall at the next restart. Photo Booth relaunched after the restart: one Remote Display Camera, no stale device (2026-11-21). Apps running during an update lose the camera until reopened, which #68's note now says |
+| 22 | Remove | Settings › *Remove Camera and Microphone* | The extension leaves `systemextensionsctl list`, or says it finishes at a restart; Remote Display Microphone goes | **PASS**: the Camera row said *Removed · finishes when this Mac restarts*, the extension waited to uninstall, and the microphone's driver and device were gone |
+| 23 | Nothing left behind | `make clean` in `harness/`, for `rd-clap`'s microphone access; `host.sh after`, again after a restart if it asks; `controller.sh after` | Only the volume line differs | **PASS** after a second restart: `host.sh after` matches `before.txt` but for macOS's own settings (dictation, sign-in, Accessibility) and OBS Virtual Camera, which test 1's approval enabled. `make clean` reset `rd-clap`'s microphone access |
 
 ### Still not covered
 
