@@ -1,7 +1,8 @@
 # 0033. Who may feed Remote Display Camera, now that the extension can't ask macOS
 
-- **Status:** Proposed, 2026-11-20 (issue #2), after the camera session of 2026-11-19. Not
-  yet chosen: the options and a recommendation are below, for Paolo.
+- **Status:** Accepted, 2026-11-21 (issue #2): option 2 for who feeds the camera, and
+  option A for a camera that appears after the engine started; see "Outcome" below.
+  Proposed 2026-11-20, after the camera session of 2026-11-19.
 - **Original design:** Changes decision 0019's rule "Only `remotedisplayd` may feed the
   sink", whose two checks don't work on a real Mac. The goal stays the same: no other
   program puts frames into a meeting through Remote Display Camera.
@@ -100,6 +101,27 @@ controller's camera should be refused until the probe stops. Then the engine's o
 should show no warning. Without camera access (option B), the app may not see the device
 after an extension update until it restarts, the same limit as the engine's.
 
+## Outcome (camera session, 2026-11-21)
+
+- **Option 1 doesn't work.** The installed extension gets each feeder's path, but its
+  sandbox may not read the file: EACCES (100013) in the user's temp folder, EPERM (100001)
+  under `/Applications`. A test feeder signed by the team as `app.remotedisplay.server`, the
+  requirement itself, was refused the same way, and so was `remotedisplayd`.
+- **Option 2 is chosen.** It passed all three checks:
+  - the engine fed the camera, with no warning;
+  - a second feeder was refused while the engine fed it;
+  - a feeder that came first was named in the server app's menu, and the controller's
+    camera was refused until it stopped.
+- **Option B didn't help, so option A is chosen** (next section). With camera access
+  granted, macOS asked TCC about the running engine when the updated device appeared, and
+  the answer was *allowed*. The engine still never got the device. Neither did Photo Booth
+  or Safari, both allowed, while freshly started programs saw it. A restarted engine did.
+  So the app restarts the engine once Remote Display Camera is new: 3 s after macOS
+  finishes replacing it, and after an admin allows it while the engine runs. After an
+  update, Setup's Camera row and the menu say *"Updated · reopen apps that were using Remote
+  Display Camera"* until the owner clicks OK (Paolo's request). No camera permission and no
+  Setup step are added.
+
 ## Also found: the engine misses a camera that appears after it starts using CoreMediaIO
 
 Not the same question, but the same session, and it decides issue #7.
@@ -141,4 +163,5 @@ Not the same question, but the same session, and it decides issue #7.
 
   **Recommendation:** test B first, with build B plus a Setup button that asks for access.
   If the engine then sees a camera added later, B is the cleanest, and it's what
-  CoreMediaIO expects. Otherwise A.
+  CoreMediaIO expects. Otherwise A. (Tested 2026-11-21: B didn't help, so A; see
+  "Outcome".)
