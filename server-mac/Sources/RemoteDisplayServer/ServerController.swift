@@ -855,12 +855,23 @@ final class ServerController {
     /// over, a few seconds later, when macOS has published it. A controller reconnects by
     /// itself; any camera forward had already stopped with the old device.
     private func restartEngineForNewCamera(_ why: String) {
+        // One restart for an update that an admin also allowed.
+        guard !cameraRestartScheduled else { return }
+        cameraRestartScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-            guard let self, !self.quitting, self.serviceRunning else { return }
-            self.trace("camera extension \(why): restarting the engine")
-            self.restartEngine()
+            // restartEngine() blocks the main thread while the engine puts the displays
+            // back, so not while the menu is open; and asks for the engine afresh, as
+            // `serviceRunning` isn't updated while the menu is open.
+            self?.whenMenuClosed {
+                guard let self else { return }
+                self.cameraRestartScheduled = false
+                guard !self.quitting, self.processRunning() else { return }
+                self.trace("camera extension \(why): restarting the engine")
+                self.restartEngine()
+            }
         }
     }
+    @ObservationIgnored private var cameraRestartScheduled = false
 
     /// Setup's Install… for Microphone: one admin prompt, then the device is there.
     func installMicrophone() {
@@ -873,6 +884,7 @@ final class ServerController {
     func removeCameraAndMicrophone() {
         if [.installed, .awaitingApproval].contains(cameraState) {
             cameraError = nil
+            dismissCameraUpdated()  // a later install isn't an update
             cameraExtension.remove()
         }
         if [.installed, .outdated].contains(microphoneState) {
