@@ -56,6 +56,15 @@ from outside.
 - Mid-session changes reach the menu and the toolbar button without polling, including a
   connection that drops: the forward shows off and the host's status falls back to the
   new login response.
+  **Since 2026-11-21** a short status line over the session shows them too, since the
+  menu closes when tapped (`ForwardNotices` in `devices.dart`): on, the first time in a
+  session with the device to choose in the call on the host; refused or stopped, with
+  the menu's reason; the host's status changing under a forward. A dropped connection
+  arrives like a switch-off, off without a reason. The toolbar tells the two apart by
+  its own switch-offs and, once a picture comes from a newer connection
+  (`FfiModel.peerInfoEpoch`), says *"The connection dropped, so the camera turned off"*
+  (issue #70). A switch-off from another window of the same session reads as a drop
+  there.
 - A camera plugged in while the menu is open shows up the next time it opens. Unplugging
   the camera being sent isn't handled yet: capture doesn't watch for
   `AVCaptureDeviceWasDisconnectedNotification`, so the forward isn't told, and the case

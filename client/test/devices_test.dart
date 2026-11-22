@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:remotedisplay_client/session/devices.dart';
 
@@ -168,7 +170,7 @@ void main() {
 
     test('headphones while the microphone and the sound are both on', () {
       expect(echoHint(micOn: true, soundOn: true),
-          'Use headphones, or the call hears its own echo');
+          'If the call hears itself, use headphones at a low volume');
       expect(echoHint(micOn: true, soundOn: false), isNull);
       expect(echoHint(micOn: false, soundOn: true), isNull);
     });
@@ -241,6 +243,204 @@ void main() {
           pickMicrophone(mics, const ForwardState(), 'USB Mic')?.id, 'USB Mic');
       expect(pickMicrophone(mics, const ForwardState(), 'unplugged')?.id,
           'MacBook Pro Microphone');
+    });
+  });
+
+  group('the status line', () {
+    // The engine's rd_device_forward state with the camera and the microphone.
+    String state(
+            {String camera = 'off',
+            String cameraReason = '',
+            String cameraHost = '',
+            String mic = 'off',
+            String micHost = ''}) =>
+        jsonEncode({
+          'camera': {
+            'forward': camera,
+            'device': camera == 'off' ? '' : 'cam-1',
+            'reason': cameraReason,
+            'host': cameraHost
+          },
+          'microphone': {
+            'forward': mic,
+            'device': mic == 'off' ? '' : 'USB Mic',
+            'reason': '',
+            'host': micHost
+          },
+        });
+    String? notice(String before, String after,
+            {String kind = 'camera',
+            bool tip = false,
+            String host = 'Mac-mini'}) =>
+        forwardNotice(ForwardState.parse(before, kind),
+            ForwardState.parse(after, kind), kind,
+            hostIsMac: true, host: host, tip: tip);
+    Map<String, String> feed(ForwardNotices notices, String json,
+            {int epoch = 1, bool soundOn = false}) =>
+        notices.forwards(json,
+            epoch: epoch, hostIsMac: true, host: 'Mac-mini', soundOn: soundOn);
+    const cameraTip =
+        'Camera on · choose Remote Display Camera in the call on Mac-mini';
+    const micTip =
+        'Microphone on · choose Remote Display Microphone in the call on Mac-mini';
+    const sharing =
+        "Turn on camera sharing in Remote Display Server's Settings on Mac-mini";
+    const echo = 'If the call hears itself, use headphones at a low volume';
+
+    test('says the result of a tap', () {
+      final asking = state(camera: 'asking');
+      final on = state(camera: 'on');
+      expect(notice(asking, on, tip: true), cameraTip);
+      expect(notice(asking, on), 'Camera on');
+      expect(
+          notice(state(mic: 'asking'), state(mic: 'on'),
+              kind: 'microphone', tip: true),
+          micTip);
+      expect(notice(asking, on, tip: true, host: hostName(null)),
+          "Camera on · choose Remote Display Camera in the call on the computer you're controlling");
+      expect(notice(asking, state(cameraReason: 'busy')),
+          'Another controller is sending its camera to Mac-mini');
+      expect(notice(asking, state(cameraReason: 'no-answer')),
+          "Mac-mini didn't answer");
+      // A camera that doesn't start never asks the host.
+      expect(notice(state(), state(cameraReason: 'camera-failed')),
+          "The camera didn't start");
+    });
+
+    test('says what stopped a forward, or changed under it', () {
+      final on = state(camera: 'on');
+      expect(notice(on, state(cameraReason: 'camera-lost')),
+          'The camera was disconnected or stopped working');
+      expect(
+          notice(on, state(camera: 'on', cameraHost: 'not-allowed')), sharing);
+      expect(
+          notice(on,
+              state(cameraReason: 'not-allowed', cameraHost: 'not-allowed')),
+          sharing);
+      expect(notice(on, state(camera: 'on', cameraHost: 'ready')), isNull);
+    });
+
+    test('leaves the rest to the menu', () {
+      // Starting, switched off, another camera.
+      expect(notice(state(), state(camera: 'asking')), isNull);
+      expect(notice(state(camera: 'on'), state()), isNull);
+      expect(notice(state(camera: 'on'), state(camera: 'asking')), isNull);
+      // The host's status while off, and a reason already said.
+      expect(notice(state(), state(cameraHost: 'not-allowed')), isNull);
+      expect(
+          notice(state(cameraReason: 'busy'),
+              state(cameraReason: 'busy', cameraHost: 'ready')),
+          isNull);
+    });
+
+    test('a dropped connection', () {
+      expect(droppedNotice({'camera'}),
+          'The connection dropped, so the camera turned off');
+      expect(droppedNotice({'microphone'}),
+          'The connection dropped, so the microphone turned off');
+      expect(droppedNotice({'microphone', 'camera'}),
+          'The connection dropped, so the camera and microphone turned off');
+      expect(droppedNotice({}), isNull);
+    });
+
+    test('gives the device tip once a session', () {
+      final n = ForwardNotices();
+      expect(feed(n, state(camera: 'asking')), isEmpty);
+      expect(feed(n, state(camera: 'on')), {'camera': cameraTip});
+      n.switchingOff('camera');
+      expect(feed(n, state()), isEmpty);
+      feed(n, state(camera: 'asking'));
+      expect(feed(n, state(camera: 'on')), {'camera': 'Camera on'});
+      // The microphone has its own.
+      feed(n, state(camera: 'on', mic: 'asking'));
+      expect(feed(n, state(camera: 'on', mic: 'on')), {'microphone': micTip});
+    });
+
+    test("doesn't repeat itself, but answers each try", () {
+      final n = ForwardNotices();
+      feed(n, state(camera: 'asking'));
+      feed(n, state(camera: 'on'));
+      // The owner turns sharing off: the host's status, then the forward ends.
+      expect(feed(n, state(camera: 'on', cameraHost: 'not-allowed')),
+          {'camera': sharing});
+      expect(
+          feed(
+              n, state(cameraReason: 'not-allowed', cameraHost: 'not-allowed')),
+          isEmpty);
+      // And on again; then refused twice, and said both times.
+      expect(feed(n, state(cameraReason: 'not-allowed', cameraHost: 'ready')),
+          isEmpty);
+      const busy = 'Another controller is sending its camera to Mac-mini';
+      for (var i = 0; i < 2; i++) {
+        expect(feed(n, state(camera: 'asking', cameraHost: 'ready')), isEmpty);
+        expect(feed(n, state(cameraReason: 'busy', cameraHost: 'ready')),
+            {'camera': busy});
+      }
+    });
+
+    test('gives the echo hint once a session', () {
+      final n = ForwardNotices();
+      feed(n, state(mic: 'asking'), soundOn: true);
+      expect(feed(n, state(mic: 'on'), soundOn: true),
+          {'microphone': micTip, 'echo': echo});
+      n.switchingOff('microphone');
+      feed(n, state(), soundOn: true);
+      feed(n, state(mic: 'asking'), soundOn: true);
+      expect(feed(n, state(mic: 'on'), soundOn: true),
+          {'microphone': 'Microphone on'});
+      expect(n.soundTurnedOn(), isEmpty);
+    });
+
+    test('gives the echo hint when the sound comes on with the microphone', () {
+      final n = ForwardNotices();
+      expect(n.soundTurnedOn(), isEmpty);
+      feed(n, state(mic: 'asking'));
+      expect(feed(n, state(mic: 'on')), {'microphone': micTip});
+      expect(n.soundTurnedOn(), {'echo': echo});
+      expect(n.soundTurnedOn(), isEmpty);
+    });
+
+    test('says a dropped connection turned the forwards off, once it is back',
+        () {
+      final n = ForwardNotices();
+      feed(n, state(camera: 'asking', mic: 'asking'));
+      feed(n, state(camera: 'on', mic: 'on'));
+      // The connection ends: the engine reports both off, without a reason.
+      expect(feed(n, state()), isEmpty);
+      // A picture again from the same connection isn't the session coming back.
+      expect(n.connected(1), isEmpty);
+      expect(n.connected(2), {
+        'connection':
+            'The connection dropped, so the camera and microphone turned off'
+      });
+      expect(n.connected(3), isEmpty);
+    });
+
+    test('a switch-off from here is not a dropped connection', () {
+      final n = ForwardNotices();
+      feed(n, state(camera: 'asking'));
+      feed(n, state(camera: 'on'));
+      n.switchingOff('camera');
+      expect(feed(n, state()), isEmpty);
+      expect(n.connected(2), isEmpty);
+    });
+
+    test('an end heard after the next connection began is said at once', () {
+      final n = ForwardNotices();
+      feed(n, state(camera: 'asking'));
+      feed(n, state(camera: 'on'));
+      expect(feed(n, state(), epoch: 2),
+          {'connection': 'The connection dropped, so the camera turned off'});
+      expect(n.connected(2), isEmpty);
+    });
+
+    test('a forward turned on again is no longer counted as dropped', () {
+      final n = ForwardNotices();
+      feed(n, state(camera: 'asking'));
+      feed(n, state(camera: 'on'));
+      feed(n, state());
+      feed(n, state(camera: 'asking'));
+      expect(n.connected(2), isEmpty);
     });
   });
 }

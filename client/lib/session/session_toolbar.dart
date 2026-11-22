@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:bot_toast/bot_toast.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
@@ -112,10 +114,36 @@ class _SessionToolbarState extends State<SessionToolbar> {
   // The camera picked in Devices last time (its unique ID).
   static const _optCamera = 'remotedisplay-camera';
   static const _optMicrophone = 'remotedisplay-microphone';
+  // The session toggle the engine's Mute uses (toolbarDisplayToggle).
+  static const _mute = 'disable-audio';
+
+  // The status line over the session (decision 0018): Devices' menu closes when
+  // tapped, so what a tap, the host or the connection did to a forward shows here.
+  late final ForwardNotices _notices;
+  final _workers = <Worker>[];
+  final _status = <String, String>{};
+  Timer? _statusTimer;
+  static const _statusTime = Duration(seconds: 5);
 
   @override
   void initState() {
     super.initState();
+    final model = _ffi.ffiModel;
+    _notices = ForwardNotices(model.deviceForward.value);
+    _workers.addAll([
+      ever<String>(model.deviceForward, (forwards) {
+        final host = hostName(model.pi.hostname);
+        _say(_notices.forwards(forwards,
+            epoch: model.peerInfoEpoch,
+            hostIsMac: model.pi.platform == kPeerPlatformMacOS,
+            host: host,
+            soundOn: _soundOn(_ffi, host)));
+      }),
+      // A picture again, from a new connection if the last one dropped.
+      ever<bool>(model.waitForFirstImage, (waiting) {
+        if (!waiting) _say(_notices.connected(model.peerInfoEpoch));
+      }),
+    ]);
     if (!isDesktop) {
       _mobileFullscreen =
           bind.mainGetLocalOption(key: _optMobileFullscreen) != 'N';
@@ -132,6 +160,15 @@ class _SessionToolbarState extends State<SessionToolbar> {
         }
       });
     }
+  }
+
+  @override
+  void dispose() {
+    for (final worker in _workers) {
+      worker.dispose();
+    }
+    _statusTimer?.cancel();
+    super.dispose();
   }
 
   static const _bg = Color(0xE61A1D24); // translucent graphite
@@ -866,10 +903,8 @@ class _SessionToolbarState extends State<SessionToolbar> {
         audioAllowed: ffi.ffiModel.permissions['audio'] != false,
         hostSound: pi.platformAdditions['rd_host_sound'],
         host: host);
-    // The session toggle the engine's Mute uses (toolbarDisplayToggle).
-    const mute = 'disable-audio';
     final muted =
-        bind.sessionGetToggleOptionSync(sessionId: sessionId, arg: mute);
+        bind.sessionGetToggleOptionSync(sessionId: sessionId, arg: _mute);
 
     items.add(_sep());
     items.add(_header('MICROPHONE'));
@@ -931,9 +966,62 @@ class _SessionToolbarState extends State<SessionToolbar> {
             : "Play the computer's sound here",
         note: soundWhy,
         onTap: soundWhy == null
-            ? () => bind.sessionToggleOption(sessionId: sessionId, value: mute)
+            ? () {
+                bind.sessionToggleOption(sessionId: sessionId, value: _mute);
+                // Turned on: the echo hint, if the microphone is on too.
+                if (muted) _say(_notices.soundTurnedOn());
+              }
             : null));
     await _showItemsMenu(anchor, items);
+  }
+
+  /// Whether the host's sound plays here: the host shares it, and Devices'
+  /// sound switch is on (the engine's Mute off).
+  bool _soundOn(FFI ffi, String host) =>
+      soundReason(
+              audioAllowed: ffi.ffiModel.permissions['audio'] != false,
+              hostSound: ffi.ffiModel.pi.platformAdditions['rd_host_sound'],
+              host: host) ==
+          null &&
+      !bind.sessionGetToggleOptionSync(sessionId: ffi.sessionId, arg: _mute);
+
+  /// The status line, just above the pill: [lines] for a few seconds, each
+  /// replacing an earlier line about the same thing. On BotToast's layer, as
+  /// the engine's own session toasts, so it shows over a menu too.
+  void _say(Map<String, String> lines) {
+    if (lines.isEmpty || !mounted) return;
+    for (final line in lines.entries) {
+      _status.remove(line.key);
+      _status[line.key] = line.value;
+    }
+    _statusTimer?.cancel();
+    _statusTimer = Timer(_statusTime, _status.clear);
+    final text = _status.values.join('\n');
+    BotToast.showCustomText(
+      onlyOne: true,
+      duration: _statusTime,
+      align: Alignment.bottomLeft,
+      ignoreContentClick: true,
+      toastBuilder: (_) => Padding(
+        // The pill's 16 px, plus its 44 px height and a gap.
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 68),
+        child: Material(
+          type: MaterialType.transparency,
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 420),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: _bg,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0x14FFFFFF)),
+            ),
+            child: Text(text,
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 13, height: 1.35)),
+          ),
+        ),
+      ),
+    );
   }
 
   /// Turns this Mac's camera on (as [device]) or off for the host. The first
@@ -949,7 +1037,12 @@ class _SessionToolbarState extends State<SessionToolbar> {
         return;
       }
     }
-    if (on) bind.mainSetLocalOption(key: _optCamera, value: device);
+    if (on) {
+      bind.mainSetLocalOption(key: _optCamera, value: device);
+    } else {
+      // For the status line: this off is the user's, not the connection's.
+      _notices.switchingOff('camera');
+    }
     await bind.sessionSetDeviceForward(
         sessionId: sessionId, kind: 'camera', on: on, device: device);
   }
@@ -973,6 +1066,8 @@ class _SessionToolbarState extends State<SessionToolbar> {
         return;
       }
       bind.mainSetLocalOption(key: _optMicrophone, value: device);
+    } else {
+      _notices.switchingOff('microphone');
     }
     await bind.sessionSetDeviceForward(
         sessionId: sessionId, kind: 'microphone', on: on, device: device);

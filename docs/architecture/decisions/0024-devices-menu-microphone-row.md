@@ -41,6 +41,9 @@
 - **The hint.** While the microphone is on and *Play the Mac's sound here* is on, the row
   says "Use headphones, or the call hears its own echo". It stays until voice processing
   is measured and either replaces it or isn't enough.
+  **Since 2026-11-21** it reads *"If the call hears itself, use headphones at a low
+  volume"*, and the status line over the session shows it once a session, when the
+  microphone and the host's sound are both on (decision 0018).
 - **The Devices button** is filled while the camera or the microphone goes to the host.
 
 ## Consequences
