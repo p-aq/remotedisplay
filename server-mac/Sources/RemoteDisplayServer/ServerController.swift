@@ -227,9 +227,11 @@ final class ServerController {
             lastAutoStart = Date() // so ensureDesiredState() does not bootstrap it again 2 s later
             setServiceEnabled(true) // writes the LaunchAgent's plist too
         } else if serviceDesired && !quitting && engineProblem == nil,
-                  let program = agentProgram(), program != enginePath {
-            // The plist names another engine, as after an update from a build with the
-            // engine in Contents/MacOS (decision 0034). Point it here and restart once.
+                  let program = agentProgram(), program == Bundle.main.bundlePath + "/Contents/MacOS/remotedisplayd" {
+            // The plist names this app's engine in its old place, as after an update from a
+            // build with the engine in Contents/MacOS (decision 0034). Point it here and
+            // restart once. Only that case: another copy of the app opened elsewhere
+            // mustn't take the running engine over.
             trace("LaunchAgent starts \(program): rewriting it for \(enginePath), restarting the engine")
             writeAgentPlist()
             restartEngine()
