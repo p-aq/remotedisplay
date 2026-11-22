@@ -79,6 +79,8 @@ On the host, while forwarding:
 - The menu-bar icon carries a camera or mic badge while a controller is sending, and the menu names that controller.
 - On the controller, the Mac's own camera light shows when capture is on.
 
+As built ([decision 0011](../architecture/decisions/0011-extension-owns-placeholder.md)): the card says "Remote Display Camera" over "Waiting for the camera". Meeting guests see it, and it also shows while a controller is connected with its camera off, so it doesn't mention controllers.
+
 ## Architecture overview
 
 Each device rides the existing Remote Display session, and the host turns it back into an ordinary camera, microphone or sound source.
