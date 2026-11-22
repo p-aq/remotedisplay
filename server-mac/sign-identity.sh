@@ -6,8 +6,9 @@
 # Application" certificate of that team wins (distribution outside the App Store);
 # otherwise its "Apple Development" one. Exit 0 with the name on stdout, 1 if the team
 # has no identity (callers under `set -e` rely on that).
-# Usage: sign-identity.sh [TEAM_ID]   (default K45698KZ4W)
-TEAM="${1:-K45698KZ4W}"
+# Usage: sign-identity.sh [TEAM_ID]   (default: team-id.sh's answer, the original project's
+# team K45698KZ4W unless RD_TEAM_ID is set in the environment or the private signing.env)
+TEAM="${1:-$("$(dirname "$0")/team-id.sh")}"
 pick() { # $1 = certificate kind; no pipe into `while` (a `return` there only leaves the subshell)
   local name ou
   while IFS= read -r name; do

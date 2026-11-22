@@ -18,11 +18,15 @@ INFO_PLIST  = Info.plist
 ENGINE_BIN ?= $(HOME)/dev/rustdesk/target/release/rustdesk
 
 # STABLE signing identity (TCC permissions survive rebuilds), chosen by TEAM through
-# sign-identity.sh: Sam's personal team only (Developer ID Application if present,
+# sign-identity.sh: one team only (Developer ID Application if present,
 # else Apple Development). Never the first "Apple Development" match — on this Mac
 # that was the certificate of another organisation. Stable signing + SAME identity for
 # app and engine = a single permission that persists. Override with SIGN_ID=... or TEAM_ID=...
-TEAM_ID ?= K45698KZ4W
+# The team comes from team-id.sh: RD_TEAM_ID in the environment or in the private
+# ~/.config/remotedisplay/signing.env, else the original project's. Asked once per run.
+ifeq ($(origin TEAM_ID),undefined)
+TEAM_ID := $(shell ./team-id.sh)
+endif
 SIGN_ID ?= $(shell ./sign-identity.sh $(TEAM_ID))
 CODE_ID := app.remotedisplay.server
 # Explicit designated requirement keyed on identifier + team only. codesign's default one also

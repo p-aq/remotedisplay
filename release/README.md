@@ -51,9 +51,25 @@ binaries in git (`release/out/` is in .gitignore).
 
 ## Signing and notarization (Mac)
 
-- Identity: `server-mac/sign-identity.sh` picks the personal team's (K45698KZ4W)
-  *Developer ID Application* certificate, else its *Apple Development* one. Never another
-  team's certificate.
+- Team: `server-mac/team-id.sh` says which Apple team signs:
+  - `RD_TEAM_ID` from the environment;
+  - else from `~/.config/remotedisplay/signing.env`;
+  - else the original project's team, K45698KZ4W.
+
+  A fork sets its own team in `signing.env` and never commits it. The Makefile and
+  `release-mac.sh` pass it on: it goes into the server's designated requirement and its
+  entitlements, so signing with one team's certificate and another's requirement can't happen.
+- Identity: `server-mac/sign-identity.sh` picks that team's *Developer ID Application*
+  certificate, else its *Apple Development* one. Never another team's certificate.
+- `signing.env` (mode 600, sourced by `release-mac.sh`) holds:
+  - `RD_TEAM_ID`;
+  - `RD_SIGNING_KEYCHAIN` and `RD_SIGNING_KEYCHAIN_PASSWORD`, for a dedicated keychain;
+  - `RD_NOTARY_PROFILE`, by default `remotedisplay-notary`;
+  - `RD_SERVER_PROFILE` and `RD_CAMERA_PROFILE`: the Developer ID provisioning profiles for
+    `app.remotedisplay.server` and `app.remotedisplay.server.camera`. Without both, the
+    server ships without the camera extension;
+  - `RD_RELEASE_REPO`, by default `p-aq/remotedisplay`, where `--upload` publishes and both
+    apps' update checks look.
 - The Developer ID identity is kept in a dedicated keychain,
   `~/Library/Keychains/remotedisplay-signing.keychain-db`, unlocked for `codesign` without
   prompts (`security set-key-partition-list`) and listed in the user search list. Its

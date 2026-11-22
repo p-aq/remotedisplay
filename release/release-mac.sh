@@ -36,7 +36,12 @@ for a in "$@"; do case "$a" in --skip-android) SKIP_ANDROID=1;; --skip-ios) SKIP
 [ -f "$HOME/.config/remotedisplay/signing.env" ] && . "$HOME/.config/remotedisplay/signing.env"
 "$ROOT/server-mac/unlock-signing-keychain.sh"   # locked after a reboot → codesign would prompt
 NOTARY_PROFILE="${RD_NOTARY_PROFILE:-remotedisplay-notary}"
-SIGN_ID="$("$ROOT/server-mac/sign-identity.sh")" || SIGN_ID=""
+# The team (RD_TEAM_ID in signing.env for a fork; never in the repository) signs everything and
+# goes into the server's designated requirement and entitlements, so make sign gets it too.
+TEAM_ID="$("$ROOT/server-mac/team-id.sh")"
+SIGN_ID="$("$ROOT/server-mac/sign-identity.sh" "$TEAM_ID")" || SIGN_ID=""
+# Where --upload publishes: this fork's releases, which both apps' update checks read.
+RELEASE_REPO="${RD_RELEASE_REPO:-p-aq/remotedisplay}"
 NOTARIZE=0
 case "$SIGN_ID" in "Developer ID Application:"*) NOTARIZE=1;; esac
 if [ $SKIP_NOTARIZE = 1 ]; then NOTARIZE=0; fi
@@ -118,7 +123,7 @@ fi
 #    signing keychain, so no keychain prompt)
 if [ $SKIP_SERVER = 0 ]; then
   ENGINE_BIN="${ENGINE_BIN:-$ROOT/engine/rustdesk/target/release/rustdesk}"
-  ( cd "$ROOT/server-mac" && make sign ENGINE_BIN="$ENGINE_BIN" ${SIGN_ID:+SIGN_ID="$SIGN_ID"} \
+  ( cd "$ROOT/server-mac" && make sign ENGINE_BIN="$ENGINE_BIN" TEAM_ID="$TEAM_ID" ${SIGN_ID:+SIGN_ID="$SIGN_ID"} \
       ${RD_SERVER_PROFILE:+APP_PROFILE="$RD_SERVER_PROFILE"} ${RD_CAMERA_PROFILE:+EXT_PROFILE="$RD_CAMERA_PROFILE"} )
   notarize_app "$ROOT/server-mac/.build/Remote Display Server.app"
   make_dmg "$ROOT/server-mac/.build/Remote Display Server.app" "$OUT/RemoteDisplay-Server-$VER-macos.dmg" "Remote Display Server"
@@ -137,14 +142,14 @@ fi
 
 echo "OK -> $OUT"; ls -la "$OUT" | grep -E "RemoteDisplay-"
 
-# 5) Upload to GitHub Releases (the Mac already has gh authenticated as SamuelRioTz).
+# 5) Upload to GitHub Releases in $RELEASE_REPO (gh authenticated as an account that can publish there).
 if [ "$UPLOAD" = 1 ]; then
   TAG="v$VER"
-  if ! gh release view "$TAG" >/dev/null 2>&1; then
-    gh release create "$TAG" --title "Remote Display $VER" --notes "Build $VER."
+  if ! gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+    gh release create "$TAG" --repo "$RELEASE_REPO" --title "Remote Display $VER" --notes "Build $VER."
   fi
   # Upload only THIS version's artifacts (don't overwrite Windows's if they're already there).
   FILES=("$OUT"/RemoteDisplay-*"$VER"*)
-  [ -e "${FILES[0]}" ] && gh release upload "$TAG" "${FILES[@]}" --clobber
+  [ -e "${FILES[0]}" ] && gh release upload "$TAG" "${FILES[@]}" --repo "$RELEASE_REPO" --clobber
   echo "uploaded to GitHub Releases ($TAG)"
 fi
