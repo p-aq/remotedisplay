@@ -22,7 +22,7 @@ Citrix shows the approach works on macOS: its host exposes redirected webcams th
 
 Remote Display is the right base for three reasons:
 
-- It is built for Mac hosts: a notarized menu-bar server app (server-mac/) runs the RustDesk 1.4.9 engine as remotedisplayd.
+- It is built for Mac hosts: a notarized menu-bar server app (server-mac/) runs the RustDesk 1.4.9 engine as remotedisplayd (1.5.1 in this work since [decision 0030](../architecture/decisions/0030-engine-rustdesk-1-5-1.md)).
 - The engine already sends audio both ways for RustDesk's voice calls, and already encodes and decodes H.264 with VideoToolbox through hwcodec.
 - It is AGPL-3.0, so improvements stay open.
 
@@ -118,7 +118,7 @@ Highlighted boxes are new in this spec. Not drawn: the Remote Display Server app
 | Devices menu | client/lib/session/session_toolbar.dart | New menu |
 | macOS camera capture and encode | src/platform/macos_camera_capture.mm | New file |
 | Camera sender | src/client/device_forward.rs, src/client/io_loop.rs | New file, hook |
-| Messages | libs/hbb_common/protos/message.proto (libs/base/protos/message.proto since RustDesk 1.5, [decision 0030](../architecture/decisions/0030-engine-rustdesk-1-5-1.md)) | New fields 200–204 |
+| Messages | libs/base/protos/message.proto (libs/hbb_common/protos/message.proto before RustDesk 1.5, [decision 0030](../architecture/decisions/0030-engine-rustdesk-1-5-1.md)) | New fields 200–204 |
 | Request handling, mic routing | src/server/connection.rs, src/server/device_forward.rs | Changed, new file |
 | Decode and sink feeder | src/platform/macos_camera_sink.mm | New file |
 | Camera extension | server-mac/CameraExtension/ | New Xcode target |
@@ -133,7 +133,7 @@ Five new messages carry the feature, and the mic reuses RustDesk's existing Audi
 
 Reserved numbers. Remote Display reserves Message.union numbers 200–219 for its own messages ([decision 0017](../architecture/decisions/0017-reserved-message-range-200.md)). RustDesk adds its messages at the end of the oneof (34 on its master in October 2026), so the block stays clear of upstream. This feature takes 200–204; later Remote Display features take the next free numbers in the block.
 
-Proposed additions to libs/hbb_common/protos/message.proto:
+Proposed additions to libs/base/protos/message.proto:
 
 ```proto
 // remotedisplay: device forwarding. Message.union numbers 200–219 are reserved
@@ -311,6 +311,7 @@ Forwarding a camera or mic into another computer is sensitive in both directions
 | Media is exposed on the network | Media rides the existing encrypted session; no new listener, port or relay |
 | A stale feed lingers after a disconnect | The host stops the sink and shows the placeholder within 1 second of the session ending; the extension shows it on its own after 500 ms without frames, even if remotedisplayd has crashed |
 | A second controller takes over a live device | One sender per device; later requests get busy |
+| Another program on the host feeds Remote Display Camera | The extension can't tell which program feeds it ([decision 0033](../architecture/decisions/0033-who-may-feed-the-camera.md)), so it takes one feeder at a time and publishes which; the server app's menu and Setup name a feeder that isn't the engine. Remaining risk: a program that starts feeding before the engine holds the camera until it stops, and is only shown, not stopped |
 | A controller plays audio into the host without a request | Controller audio is accepted only while a mic forward or voice call is active for that connection; anything else is dropped (today any controller can) |
 | Malformed frames crash the host engine | Validate every width, height and frame rate before use; decode on a guarded thread; drop bad frames; fuzz the new messages |
 
@@ -332,6 +333,8 @@ The camera extension is what changes how Remote Display Server is built and sign
 - Notarization. A Developer ID system extension loads only once notarized ([Apple DTS](https://developer.apple.com/forums/thread/710046)). The release flow already notarizes the DMG; the build now also has to embed the provisioning profiles.
 - Location. Only an app in /Applications can activate the extension; Setup says so when the app runs from elsewhere.
 - Updates. A new app version updates the extension. Apps such as Photo Booth may not see the new version until they relaunch ([report](https://developer.apple.com/forums/thread/734259)), so release notes should say so.
+
+As built ([decision 0033](../architecture/decisions/0033-who-may-feed-the-camera.md), option A): after replacing the extension, the app restarts the engine, which didn't see the new device either. Setup's Camera row and the menu then say to reopen apps that were using Remote Display Camera, until the owner clicks OK.
 - Virtual mic (Option A). Ship the driver inside the app and install it with an admin prompt, or as a signed .pkg.
 - Removal. A Remove camera and microphone button deactivates the extension (OSSystemExtensionRequest.deactivationRequest) and deletes the driver.
 - Forks. Anyone building their own copy needs their own Apple Developer team and profiles. Apple's camera extension guide links to development-mode steps for testing builds that aren't notarized.
@@ -414,7 +417,7 @@ Start with Phase 0: it is small, self-contained Swift and C, and it answers the 
 
 ## References
 
-Code paths refer to [Remote Display](https://github.com/SamuelRioTz/remotedisplay) at commit 86f1b23 (October 11, 2026), whose engine is RustDesk 1.4.9; engine paths are relative to engine/rustdesk/.
+Code paths refer to [p-aq/remotedisplay](https://github.com/p-aq/remotedisplay), branch phase0/spike, at commit f87cef9 (November 20, 2026), whose engine is RustDesk 1.5.1 ([decision 0030](../architecture/decisions/0030-engine-rustdesk-1-5-1.md)); engine paths are relative to engine/rustdesk/. Every file path the spec cites exists there. The spec was first written against [Remote Display](https://github.com/SamuelRioTz/remotedisplay) at commit 86f1b23 (October 11, 2026), whose engine was RustDesk 1.4.9: its plans describe that tree, and its "As built" notes describe this one.
 
 - [Apple: Creating a camera extension with Core Media I/O](https://developer.apple.com/documentation/coremediaio/creating-a-camera-extension-with-core-media-i-o)
 - [Apple: WWDC22 session 10022, Create camera extensions with Core Media IO](https://developer.apple.com/videos/play/wwdc2022/10022/)
