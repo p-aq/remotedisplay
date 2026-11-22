@@ -1,6 +1,7 @@
 # 0034. The engine runs from Contents/Helpers, so macOS doesn't take it for the app
 
-- **Status:** Proposed, 2026-11-21, after the camera session of 2026-11-21. For Paolo.
+- **Status:** Accepted, 2026-11-21 (Paolo): option 1; see "As built" below.
+  Proposed 2026-11-21, after the camera session of 2026-11-21.
 - **Original design:** Changes where the server app bundles `remotedisplayd`:
   `Contents/MacOS` since Remote Display 1.0, now `Contents/Helpers`. It keeps the rule
   that the app and the engine share one code identity, so one grant of Screen Recording
@@ -67,6 +68,27 @@ accessory app and a headless engine like ours, the engine started through launch
 - opening the app while the engine runs starts the app;
 - a scripted quit quits the app, and its own Quit still stops the engine;
 - an update from a build with the engine in `Contents/MacOS` moves it over.
+
+## As built
+
+- `server-mac/Makefile` copies `remotedisplayd` into `Contents/Helpers` and signs it there,
+  in the same order, with the same flags and `Entitlements.plist`. Signed builds sign it on
+  its own, never with `--deep` (decision 0010). The ad-hoc build still signs with `--deep`,
+  which covers `Contents/Helpers` and gives the engine the same identifier and entitlements
+  as before.
+- `ServerController.swift`: `enginePath` is `Contents/Helpers/remotedisplayd`. The `pgrep`
+  patterns match `Contents/Helpers` and `Contents/MacOS`; the `MacOS` part can go after the
+  next release.
+- At launch, when the service is wanted and the engine is running, the app reads the
+  LaunchAgent's plist. If it names another program than this app's engine, the app
+  rewrites it and restarts the engine once. When the engine isn't running, the existing
+  start rewrites the plist anyway.
+- The plist now has `AssociatedBundleIdentifiers` (`app.remotedisplay.server`), so macOS's
+  background-item notification and Login Items should name Remote Display Server, not
+  "remotedisplayd".
+- The live-session `host.sh` killed leftovers matching `Contents/MacOS/` only; it now
+  matches the whole bundle's `Contents/`.
+- Not yet tested on a Mac: the four checks under "To verify".
 
 ## Consequences
 

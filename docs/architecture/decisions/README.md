@@ -48,4 +48,4 @@ architecture README's change log (and its departures table, if it departs).
 | [0031](0031-virtual-mic-can-be-the-default-input.md) | Remote Display Microphone can be the Mac's default input | Accepted | Departs ("can't become a default device"); keeps its goal |
 | [0032](0032-app-update-replaces-the-camera-extension.md) | A new app version asks macOS to replace the installed camera extension | Accepted | Follows (Packaging › Updates); says how |
 | [0033](0033-who-may-feed-the-camera.md) | Who may feed Remote Display Camera, now that the extension can't ask macOS | Accepted | Changes 0019's feeder rule; keeps its goal |
-| [0034](0034-engine-runs-from-helpers.md) | The engine runs from Contents/Helpers, so macOS doesn't take it for the app | Proposed | Changes where the app bundles `remotedisplayd`; keeps the shared code identity |
+| [0034](0034-engine-runs-from-helpers.md) | The engine runs from Contents/Helpers, so macOS doesn't take it for the app | Accepted | Changes where the app bundles `remotedisplayd`; keeps the shared code identity |
