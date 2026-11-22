@@ -221,6 +221,10 @@ final class CameraDevice: NSObject, CMIOExtensionDeviceSource {
         }
     }
 
+    /// Known limit: `stopStream` doesn't say which client stops. If a feeder that died is
+    /// taken over (`claimSink`) before CoreMediaIO delivers its own stop, that late stop
+    /// releases the new feeder's claim and stops consuming its frames, until it starts
+    /// again. The window is the moment between a feeder's death and CoreMediaIO noticing it.
     func sinkStopped() {
         queue.async {
             self.sinkRunning = false
