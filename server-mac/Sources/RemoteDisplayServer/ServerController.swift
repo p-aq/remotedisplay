@@ -47,6 +47,19 @@ final class ServerController {
     var cameraState: CameraExtension.State = CameraExtension.bundled ? .notInstalled : .notBundled
     /// Why the last install or removal failed, until the next one.
     var cameraError: String?
+    /// The app replaced the camera extension with its own version (an app update): apps that
+    /// were using Remote Display Camera have to be reopened to see it again, so Setup's Camera
+    /// row and the menu say so until the owner dismisses it. Kept across launches.
+    var cameraUpdated = UserDefaults.standard.bool(forKey: ServerController.cameraUpdatedKey)
+    static let cameraUpdatedKey = "cameraExtensionUpdated"
+    /// The program feeding Remote Display Camera when it isn't the engine: the extension
+    /// lets any program feed it, one at a time (decision 0033, option 2). Nil otherwise.
+    var otherCameraFeeder: String?
+    /// When Remote Display Camera last became installed in this launch. The app leaves
+    /// CoreMediaIO alone until it has been for a few seconds, so its first lookup sees the
+    /// device: a process already using CoreMediaIO may never get one that appears later
+    /// (camera session, 2026-11-21).
+    @ObservationIgnored private var cameraInstalledAt: Date?
     @ObservationIgnored private let cameraExtension = CameraExtension()
     /// Remote Display Microphone, the virtual mic's driver, which every build bundles
     /// (decision 0027). Setup's Microphone row shows its state.
@@ -167,7 +180,21 @@ final class ServerController {
                     // macOS moved on from the failure, as when an admin allows it later.
                     self.cameraError = nil
                 }
+                // Allowed by an admin while the engine ran: a new device, as after an update.
+                if self.cameraState == .awaitingApproval && state == .installed {
+                    self.restartEngineForNewCamera("allowed")
+                }
+                if state == .installed, self.cameraState != .installed { self.cameraInstalledAt = Date() }
+                if state != .installed { self.cameraInstalledAt = nil }
                 if self.cameraState != state { self.cameraState = state }
+            }
+        }
+        cameraExtension.onReplaced = { [weak self] in
+            self?.whenMenuClosed {
+                guard let self else { return }
+                self.cameraUpdated = true
+                UserDefaults.standard.set(true, forKey: Self.cameraUpdatedKey)
+                self.restartEngineForNewCamera("updated")
             }
         }
         microphoneDriver.onChange = { [weak self] state, error in
@@ -263,6 +290,7 @@ final class ServerController {
         sessions = serviceRunning ? readSessions() : []
         cameraExtension.refresh()
         microphoneDriver.refresh()
+        refreshCameraFeeder()
 
         // If a permission flipped from NO to YES, restart the engine so it starts with
         // the permission already in effect.
@@ -276,6 +304,21 @@ final class ServerController {
         checkLocalNetwork()
         ensureDesiredState()
         firstRefresh = false
+    }
+
+    /// Asks Remote Display Camera who feeds it, once it has been installed for 5 s
+    /// (CoreMediaIO is left alone before that, see `cameraInstalledAt`), and names the
+    /// program when it isn't the engine.
+    private func refreshCameraFeeder() {
+        var other: String?
+        if cameraState == .installed, let since = cameraInstalledAt, Date().timeIntervalSince(since) >= 5,
+           let pid = CameraFeeder.pid(), pid != enginePid() {
+            other = CameraFeeder.programName(pid)
+        }
+        if other != otherCameraFeeder {
+            NSLog("[remotedisplay] camera feeder other than the engine: %@", other ?? "none")
+            otherCameraFeeder = other
+        }
     }
 
     /// Local-network access is only meaningful while the engine is up (it does the
@@ -799,6 +842,37 @@ final class ServerController {
         cameraExtension.install()
     }
 
+    /// The owner has read that the camera was updated (Setup's OK).
+    func dismissCameraUpdated() {
+        cameraUpdated = false
+        UserDefaults.standard.removeObject(forKey: Self.cameraUpdatedKey)
+    }
+
+    /// CoreMediaIO doesn't reliably tell a process that already uses it about a camera that
+    /// appears later: after an extension update the running engine, Photo Booth and Safari
+    /// all lost Remote Display Camera, while a fresh process saw it (camera session,
+    /// 2026-11-21; decision 0033, option A). So once the device is new, the engine starts
+    /// over, a few seconds later, when macOS has published it. A controller reconnects by
+    /// itself; any camera forward had already stopped with the old device.
+    private func restartEngineForNewCamera(_ why: String) {
+        // One restart for an update that an admin also allowed.
+        guard !cameraRestartScheduled else { return }
+        cameraRestartScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            // restartEngine() blocks the main thread while the engine puts the displays
+            // back, so not while the menu is open; and asks for the engine afresh, as
+            // `serviceRunning` isn't updated while the menu is open.
+            self?.whenMenuClosed {
+                guard let self else { return }
+                self.cameraRestartScheduled = false
+                guard !self.quitting, self.processRunning() else { return }
+                self.trace("camera extension \(why): restarting the engine")
+                self.restartEngine()
+            }
+        }
+    }
+    @ObservationIgnored private var cameraRestartScheduled = false
+
     /// Setup's Install… for Microphone: one admin prompt, then the device is there.
     func installMicrophone() {
         microphoneError = nil
@@ -810,6 +884,7 @@ final class ServerController {
     func removeCameraAndMicrophone() {
         if [.installed, .awaitingApproval].contains(cameraState) {
             cameraError = nil
+            dismissCameraUpdated()  // a later install isn't an update
             cameraExtension.remove()
         }
         if [.installed, .outdated].contains(microphoneState) {

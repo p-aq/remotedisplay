@@ -20,6 +20,16 @@ struct StatusMenu: View {
         if let sender = c.cameraSender {
             Label("Camera from \(sender)", systemImage: "video.fill")
         }
+        if c.cameraUpdated && c.cameraState == .installed {
+            // Opens Setup, where the Camera row says the same and OK dismisses it.
+            Button("Remote Display Camera was updated: reopen apps that use it…") {
+                AppDelegate.shared?.showMainWindow()
+            }
+        }
+        if let other = c.otherCameraFeeder {
+            Label("Another program, \(other), is feeding Remote Display Camera",
+                  systemImage: "exclamationmark.triangle.fill")
+        }
         if let sender = c.microphoneSender {
             Label("Microphone from \(sender)", systemImage: "mic.fill")
         }
