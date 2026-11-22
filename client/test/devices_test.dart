@@ -283,6 +283,42 @@ void main() {
     });
   });
 
+  group('the sending badge', () {
+    const off = ForwardState();
+    const on = ForwardState(forward: 'on', device: 'cam-1');
+    const asking = ForwardState(forward: 'asking', device: 'USB Mic');
+
+    test('says what is sent and where, asking included', () {
+      expect(sendingTooltip(on, off, host: 'Mac-mini'),
+          'Sending your camera to Mac-mini');
+      expect(sendingTooltip(off, asking, host: 'Mac-mini'),
+          'Sending your microphone to Mac-mini');
+      expect(sendingTooltip(asking, on, host: 'Mac-mini'),
+          'Sending your camera and microphone to Mac-mini');
+      expect(sendingTooltip(on, off, host: hostName(null)),
+          "Sending your camera to the computer you're controlling");
+    });
+
+    test('is hidden while nothing is sent', () {
+      expect(sendingTooltip(off, off, host: 'Mac-mini'), isNull);
+      // Stopped on its own: off, whatever the reason.
+      expect(
+          sendingTooltip(const ForwardState(reason: 'busy'), off,
+              host: 'Mac-mini'),
+          isNull);
+    });
+
+    test('reads both kinds out of one engine event', () {
+      const event =
+          '{"camera":{"forward":"asking","device":"cam-1","reason":"","host":""},"microphone":{"forward":"on","device":"USB Mic","reason":"","host":"ready"}}';
+      expect(
+          sendingTooltip(ForwardState.parse(event, 'camera'),
+              ForwardState.parse(event, 'microphone'),
+              host: hostName('Mac-mini.local')),
+          'Sending your camera and microphone to Mac-mini');
+    });
+  });
+
   group('the status line', () {
     // The engine's rd_device_forward state with the camera and the microphone.
     String state(

@@ -82,6 +82,14 @@ from outside.
   Accessibility for Remote Display Server there"*, under its own key beside the
   forward lines. A host without the keys changes nothing (UX audit of 2026-11-21,
   item 1).
+- **Since 2026-11-22** a small badge beside the pill shows while the camera or the
+  microphone goes to the host, asking included: a green camera, an orange microphone,
+  macOS's own colours for them. The Devices button's fill was the only sign, and on a
+  Mac the pill dims to 35% while the pointer is elsewhere, and drops the button when
+  collapsed. The badge sits outside the pill's fade, so it keeps full opacity in both
+  cases and on touch devices. Its tooltip says what goes where, *"Sending your camera
+  and microphone to Mac-mini"* (`sendingTooltip` in `devices.dart`; UX audit of
+  2026-11-21, item 3).
 - A camera plugged in while the menu is open shows up the next time it opens. Unplugging
   the camera being sent isn't handled yet: capture doesn't watch for
   `AVCaptureDeviceWasDisconnectedNotification`, so the forward isn't told, and the case

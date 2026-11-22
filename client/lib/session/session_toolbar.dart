@@ -52,6 +52,7 @@ import 'win_events.dart';
 ///   codec and image (true color, monitor quality, multi-monitor).
 /// - **Devices**: what I lend the host — this Mac's camera (and later its
 ///   microphone) — and whether its sound plays here (decisions 0012 and 0018).
+///   While either is sent, a badge beside the pill says so.
 /// Local option: hide the trackpad/mouse pointer over the remote canvas
 /// (mobile). Default: hidden.
 const kOptHideLocalPointer = 'remotedisplay-hide-local-pointer';
@@ -189,6 +190,10 @@ class _SessionToolbarState extends State<SessionToolbar> {
   static const _fg = Color(0xFFB8BDC7);
   static const _fgDim = Color(0xFF6A7280);
   static const _danger = Color(0xFFE5484D);
+  // macOS's own indicators: green for the camera, orange for the microphone
+  // (their dark-mode shades, on the pill's graphite).
+  static const _cameraSent = Color(0xFF30D158);
+  static const _micSent = Color(0xFFFF9F0A);
 
   FFI get _ffi => widget.getFfi();
 
@@ -225,36 +230,45 @@ class _SessionToolbarState extends State<SessionToolbar> {
         alignment: Alignment.bottomLeft,
         child: Padding(
           padding: const EdgeInsets.only(left: 16, bottom: 16),
-          child: MouseRegion(
-            onEnter: (_) => setState(() => _hover = true),
-            onExit: (_) => setState(() => _hover = false),
-            child: AnimatedOpacity(
-              opacity: opacity,
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOut,
-              child: Container(
-                key: _pillKey,
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _bg,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: const Color(0x14FFFFFF)),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x66000000),
-                      blurRadius: 24,
-                      offset: Offset(0, 8),
-                    ),
-                  ],
-                ),
-                child: AnimatedSize(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              MouseRegion(
+                onEnter: (_) => setState(() => _hover = true),
+                onExit: (_) => setState(() => _hover = false),
+                child: AnimatedOpacity(
+                  opacity: opacity,
                   duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeOutCubic,
-                  alignment: Alignment.centerLeft,
-                  child: _collapsed ? _collapsedContent() : _expandedContent(),
+                  curve: Curves.easeOut,
+                  child: Container(
+                    key: _pillKey,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _bg,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0x14FFFFFF)),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x66000000),
+                          blurRadius: 24,
+                          offset: Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: AnimatedSize(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOutCubic,
+                      alignment: Alignment.centerLeft,
+                      child:
+                          _collapsed ? _collapsedContent() : _expandedContent(),
+                    ),
+                  ),
                 ),
               ),
-            ),
+              // Beside the pill, outside its fade.
+              _sendingBadge(),
+            ],
           ),
         ),
       ),
@@ -822,6 +836,49 @@ class _SessionToolbarState extends State<SessionToolbar> {
                         : 'Devices',
             _showDevicesMenu,
             color: sending ? Colors.white : _fg);
+      });
+
+  /// While this Mac's camera or microphone goes to the host (asking counts, as
+  /// for the Devices button), a small badge beside the pill: a green camera, an
+  /// orange microphone, and a tooltip that says what goes where (UX audit of
+  /// 2026-11-21, item 3). Outside the pill's fade, it stays at full opacity
+  /// while the pill is dimmed or collapsed, and on touch devices.
+  Widget _sendingBadge() => Obx(() {
+        final forwards = _ffi.ffiModel.deviceForward.value;
+        final camera = ForwardState.parse(forwards, 'camera');
+        final mic = ForwardState.parse(forwards, 'microphone');
+        final tooltip = sendingTooltip(camera, mic,
+            host: hostName(_ffi.ffiModel.pi.hostname));
+        if (tooltip == null) return const SizedBox.shrink();
+        final cameraOn = camera.on || camera.asking;
+        final micOn = mic.on || mic.asking;
+        // The gap outside the tooltip, so a click there reaches the session.
+        return Padding(
+          padding: const EdgeInsets.only(left: 8),
+          child: Tooltip(
+            message: tooltip,
+            waitDuration: const Duration(milliseconds: 400),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 5),
+              decoration: BoxDecoration(
+                color: _bg,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0x14FFFFFF)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (cameraOn)
+                    const Icon(Icons.videocam_rounded,
+                        size: 14, color: _cameraSent),
+                  if (cameraOn && micOn) const SizedBox(width: 4),
+                  if (micOn)
+                    const Icon(Icons.mic_rounded, size: 14, color: _micSent),
+                ],
+              ),
+            ),
+          ),
+        );
       });
 
   /// A device switch with a note under its label: why it can't be used, why it
