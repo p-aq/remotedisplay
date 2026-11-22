@@ -7,12 +7,13 @@ import 'package:package_info_plus/package_info_plus.dart';
 /// Tells the home screen when a newer release is published on GitHub. One
 /// request per launch (the GitHub API allows 60/h unauthenticated), no data
 /// about this device is sent beyond the User-Agent. The update itself stays
-/// manual: the link opens the releases page.
+/// manual: the link opens the releases page. It asks this fork's releases: the
+/// original project's don't have the camera and microphone (Paolo, 2026-11-21).
 class UpdateCheck {
   static const releasesApi =
-      'https://api.github.com/repos/SamuelRioTz/remotedisplay/releases/latest';
+      'https://api.github.com/repos/p-aq/remotedisplay/releases/latest';
   static const releasesPage =
-      'https://github.com/SamuelRioTz/remotedisplay/releases/latest';
+      'https://github.com/p-aq/remotedisplay/releases/latest';
 
   /// Newer version available (e.g. "1.0.3"), or null.
   static final ValueNotifier<String?> available = ValueNotifier(null);
