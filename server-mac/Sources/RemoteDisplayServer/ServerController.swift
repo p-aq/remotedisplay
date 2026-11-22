@@ -126,7 +126,9 @@ final class ServerController {
         if menuOpen { deferredWhileMenuOpen.append(block) } else { block() }
     }
 
-    private var enginePath: String { Bundle.main.bundlePath + "/Contents/MacOS/remotedisplayd" }
+    /// In Contents/Helpers, not Contents/MacOS, where Launch Services took the engine for the
+    /// app (decision 0034).
+    private var enginePath: String { Bundle.main.bundlePath + "/Contents/Helpers/remotedisplayd" }
     private var agentPlistPath: String { NSHomeDirectory() + "/Library/LaunchAgents/\(Self.agentLabel).plist" }
     private var logDir: String { NSHomeDirectory() + "/Library/Logs/RemoteDisplayServer" }
     private var configDir: String { NSHomeDirectory() + "/Library/Preferences/RemoteDisplay" }
@@ -223,8 +225,23 @@ final class ServerController {
         // launch, killing any in-progress remote session.
         if !serviceRunning && serviceDesired {
             lastAutoStart = Date() // so ensureDesiredState() does not bootstrap it again 2 s later
-            setServiceEnabled(true)
+            setServiceEnabled(true) // writes the LaunchAgent's plist too
+        } else if serviceDesired && !quitting && engineProblem == nil,
+                  let program = agentProgram(), program != enginePath {
+            // The plist names another engine, as after an update from a build with the
+            // engine in Contents/MacOS (decision 0034). Point it here and restart once.
+            trace("LaunchAgent starts \(program): rewriting it for \(enginePath), restarting the engine")
+            writeAgentPlist()
+            restartEngine()
+            lastAutoStart = Date()
         }
+    }
+
+    /// The program the LaunchAgent's plist starts, or nil without a plist. launchd takes
+    /// `Program` first, then the first of `ProgramArguments`.
+    private func agentProgram() -> String? {
+        guard let plist = NSDictionary(contentsOfFile: agentPlistPath) else { return nil }
+        return plist["Program"] as? String ?? (plist["ProgramArguments"] as? [String])?.first
     }
 
     /// If the user wants the service active and the engine isn't up, relaunch it
@@ -355,7 +372,10 @@ final class ServerController {
 
     /// The engine as launchd runs it: the bundled binary with exactly `--server`.
     /// Anchored so that shells or scripts merely mentioning the name do not match.
-    private static let enginePattern = "/Contents/MacOS/remotedisplayd --server$"
+    /// `MacOS` also finds an engine started from Contents/MacOS by a build before decision
+    /// 0034 and still running after an update, so it can be stopped. It can go after the
+    /// next release.
+    private static let enginePattern = "/Contents/(Helpers|MacOS)/remotedisplayd --server$"
 
     private func enginePid() -> Int32? {
         let out = run("/usr/bin/pgrep", ["-f", Self.enginePattern])
@@ -607,6 +627,8 @@ final class ServerController {
         runLaunchctl(["bootstrap", guiDomain, agentPlistPath])
     }
 
+    /// AssociatedBundleIdentifiers: macOS's background-item notification and Login Items
+    /// name the app, Remote Display Server, instead of "remotedisplayd".
     private func writeAgentPlist() {
         try? FileManager.default.createDirectory(atPath: NSHomeDirectory() + "/Library/LaunchAgents", withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(atPath: logDir, withIntermediateDirectories: true)
@@ -616,6 +638,7 @@ final class ServerController {
         <plist version="1.0">
         <dict>
             <key>Label</key><string>\(Self.agentLabel)</string>
+            <key>AssociatedBundleIdentifiers</key><array><string>app.remotedisplay.server</string></array>
             <key>ProgramArguments</key>
             <array>
                 <string>\(enginePath)</string>
@@ -648,7 +671,8 @@ final class ServerController {
     /// --cm-no-ui`, the connection manager, once a client has connected) that outlive it
     /// when the service is stopped or the app quits. Left behind, they keep the bundle
     /// "in use" (Finder refuses to replace the app) and hold the old version's code.
-    private static let helperPattern = "/Contents/MacOS/remotedisplayd --(cm|cm-no-ui)"
+    /// `MacOS` as in `enginePattern`, for one release.
+    private static let helperPattern = "/Contents/(Helpers|MacOS)/remotedisplayd --(cm|cm-no-ui)"
 
     private func pkillHelpers() {
         // The connection manager ignores SIGTERM (a 1.0.7 one survived two of them on

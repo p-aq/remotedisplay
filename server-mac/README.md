@@ -87,8 +87,10 @@ A single bundle, two executables:
 ```
 Remote Display Server.app/Contents/
 ├── MacOS/
-│   ├── RemoteDisplayServer   ← SwiftUI UI (MenuBarExtra)
-│   └── remotedisplayd        ← Rust engine (cargo, no flutter) = the `rustdesk` binary
+│   └── RemoteDisplayServer   ← SwiftUI UI (MenuBarExtra)
+├── Helpers/
+│   └── remotedisplayd        ← Rust engine (cargo, no flutter) = the `rustdesk` binary;
+│                               not in MacOS, where macOS took it for the app (decision 0034)
 └── Library/
     ├── SystemExtensions/
     │   └── app.remotedisplay.server.camera.systemextension

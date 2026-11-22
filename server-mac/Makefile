@@ -6,12 +6,15 @@ BINARY      = $(BUILD_DIR)/$(APP_NAME)
 APP_BUNDLE  = $(OUT_DIR)/$(BUNDLE_NAME).app
 CONTENTS    = $(APP_BUNDLE)/Contents
 MACOS_DIR   = $(CONTENTS)/MacOS
+# The engine sits in Helpers, not beside the app in MacOS: Launch Services took it for the
+# app there, so opening the app did nothing while it ran alone (decision 0034).
+HELPERS_DIR = $(CONTENTS)/Helpers
 RES_DIR     = $(CONTENTS)/Resources
 INFO_PLIST  = Info.plist
 
 # The engine binary (server, no flutter). Built separately with:
 #   cargo build --release --bin rustdesk   (in the fork)
-# Copied into the bundle as remotedisplayd.
+# Copied into the bundle as Contents/Helpers/remotedisplayd.
 ENGINE_BIN ?= $(HOME)/dev/rustdesk/target/release/rustdesk
 
 # STABLE signing identity (TCC permissions survive rebuilds), chosen by TEAM through
@@ -106,11 +109,11 @@ driver:
 
 bundle: build driver $(if $(filter yes,$(CAMERA)),camera)
 	@rm -rf "$(APP_BUNDLE)"
-	@mkdir -p "$(MACOS_DIR)" "$(RES_DIR)"
+	@mkdir -p "$(MACOS_DIR)" "$(HELPERS_DIR)" "$(RES_DIR)"
 	@cp "$(BINARY)" "$(MACOS_DIR)/$(APP_NAME)"
 	@test -x "$(ENGINE_BIN)" || { echo "ERROR: ENGINE_BIN=$(ENGINE_BIN) does not exist (build the engine first)"; exit 1; }
-	@cp "$(ENGINE_BIN)" "$(MACOS_DIR)/remotedisplayd"
-	@chmod +x "$(MACOS_DIR)/remotedisplayd"
+	@cp "$(ENGINE_BIN)" "$(HELPERS_DIR)/remotedisplayd"
+	@chmod +x "$(HELPERS_DIR)/remotedisplayd"
 	@cp "$(INFO_PLIST)" "$(CONTENTS)/Info.plist"
 	@test -f AppIcon.icns && cp AppIcon.icns "$(RES_DIR)/AppIcon.icns" || true
 	@mkdir -p "$(DRIVER_BUNDLE)/Contents/MacOS" "$(DRIVER_BUNDLE)/Contents/Resources"
@@ -154,7 +157,7 @@ endif
 	@# and codesign doesn't count Library/Audio as nested code.
 	@codesign --sign "$(SIGN_ID)" --identifier "$(DRIVER_ID)" --options runtime --timestamp \
 	  --force "$(DRIVER_BUNDLE)"
-	@codesign $(SIGN_FLAGS) --entitlements Entitlements.plist "$(MACOS_DIR)/remotedisplayd"
+	@codesign $(SIGN_FLAGS) --entitlements Entitlements.plist "$(HELPERS_DIR)/remotedisplayd"
 	@codesign $(SIGN_FLAGS) --entitlements "$(APP_ENTITLEMENTS)" "$(MACOS_DIR)/$(APP_NAME)"
 	@codesign $(SIGN_FLAGS) --entitlements "$(APP_ENTITLEMENTS)" "$(APP_BUNDLE)"
 	@codesign --verify --deep --strict "$(APP_BUNDLE)"

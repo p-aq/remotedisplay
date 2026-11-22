@@ -120,7 +120,7 @@ after)
   osascript -e "quit app id \"$ID\"" 2>/dev/null
   sleep 2
   launchctl bootout "gui/$(id -u)/$ID" 2>/dev/null
-  pkill -f "$APP/Contents/MacOS/" 2>/dev/null
+  pkill -f "$APP/Contents/" 2>/dev/null # the app, and the engine in Helpers or MacOS
   if [ -e "$DRIVER" ]; then
     echo "Remote Display Microphone is still installed; removing it needs your password:"
     sudo sh -c "rm -rf '$DRIVER' && (killall coreaudiod || true)"
