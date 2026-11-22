@@ -438,6 +438,9 @@ pub struct Connection {
     audio_gate: audio_gate::AudioGate,
     // remotedisplay: camera and microphone forwarding (device_forward.rs).
     device_forward: super::device_forward::Forwards,
+    // remotedisplay: the controller's name for the server app, removed when the connection
+    // drops, however it ends (session_names.rs).
+    session_name: super::session_names::SessionName,
     options_in_login: Option<OptionMessage>,
     #[cfg(not(any(target_os = "ios")))]
     pressed_modifiers: HashSet<rdev::Key>,
@@ -647,6 +650,7 @@ impl Connection {
             voice_calling: false,
             audio_gate: Default::default(),
             device_forward: super::device_forward::Forwards::new(id),
+            session_name: super::session_names::SessionName::new(id, addr),
             options_in_login: None,
             #[cfg(not(any(target_os = "ios")))]
             pressed_modifiers: Default::default(),
@@ -1940,6 +1944,8 @@ impl Connection {
         self.lr.trusted_device_v2_token.clear();
         self.authorized = true;
         self.unauthorized_id = None;
+        // remotedisplay: the server app names this controller from now on (session_names.rs).
+        self.session_name.logged_in(&self.lr.my_name);
         // One-time means gone once it has let a peer in, not once that peer
         // leaves. This session's later logins come in on the password the
         // session remembers, so they are not affected.
