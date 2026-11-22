@@ -222,6 +222,45 @@ String? soundReason(
   return null;
 }
 
+/// The login response's platform additions as the engine's latest `peer_info`
+/// event carried them (`FfiModel.cachedPeerData.peerInfo`), or empty. The
+/// engine keeps the event as soon as it arrives; `PeerInfo.platformAdditions`
+/// follows only after its handler has waited on other calls, so on a
+/// reconnection it can still hold the last connection's when the waiting box
+/// shows.
+Map<String, dynamic> loginAdditions(Map<String, dynamic> peerInfo) {
+  try {
+    final additions = jsonDecode(peerInfo['platform_additions'] as String);
+    return additions is Map<String, dynamic> ? additions : const {};
+  } catch (_) {
+    return const {};
+  }
+}
+
+/// What the session shows in place of the engine's "Connected, waiting for
+/// image..." when the host can't share its screen, or null when it can
+/// (decision 0018). [hostScreen] is its `rd_host_screen` from the login
+/// response, "unavailable" without Screen Recording; a host older than the key
+/// doesn't send it, and nothing changes. [host] is [hostName].
+({String title, String text})? screenReason(Object? hostScreen,
+        {required String host}) =>
+    hostScreen == 'unavailable'
+        ? (
+            title: "${_start(host)} can't share its screen",
+            text: 'Turn on Screen Recording for Remote Display Server on $host'
+          )
+        : null;
+
+/// What the status line says, once the picture shows, when the host drops
+/// clicks and keys, or null (decision 0018). [hostControl] is its
+/// `rd_host_control` from the login response, "unavailable" without
+/// Accessibility; a host older than the key doesn't send it. [host] is
+/// [hostName].
+String? controlReason(Object? hostControl, {required String host}) =>
+    hostControl == 'unavailable'
+        ? "Clicks and keys won't reach $host · turn on Accessibility for Remote Display Server there"
+        : null;
+
 /// What the status line over the session says when a forward of [kind] goes from
 /// [before] to [after], or null when the change needs no line (decision 0018).
 /// The menu closes when tapped, so this is where the result of a tap shows:
@@ -268,10 +307,10 @@ String? droppedNotice(Set<String> kinds) {
 /// The status line's memory for one session (decision 0018). The toolbar feeds
 /// it the engine's forward state and the session's events, and shows what it
 /// returns: lines keyed by what they are about ("camera", "microphone", "echo",
-/// "connection"), so a newer line replaces an older one about the same thing.
-/// It says each change once, gives the device tip and the echo hint once a
-/// session, and keeps a forward that went off with its connection until the
-/// session is back.
+/// "connection", "control"), so a newer line replaces an older one about the
+/// same thing. It says each change once, gives the device tip, the echo hint
+/// and a host's missing Accessibility once a session, and keeps a forward that
+/// went off with its connection until the session is back.
 class ForwardNotices {
   ForwardNotices([this._forwards = '']);
 
@@ -279,6 +318,7 @@ class ForwardNotices {
   String _forwards;
   final _tipped = <String>{};
   bool _echoed = false;
+  bool _controlSaid = false;
 
   /// The line last said per kind. A new try clears it, so a refusal that
   /// follows the host's status saying the same thing isn't said twice, but the
@@ -324,8 +364,16 @@ class ForwardNotices {
   /// The user turned the host's sound on.
   Map<String, String> soundTurnedOn() => _echo(soundOn: true);
 
-  /// The session shows a picture from connection [epoch].
-  Map<String, String> connected(int epoch) => _back(epoch);
+  /// The session shows a picture from connection [epoch]. [control] is
+  /// [controlReason] for that connection, said the first time it comes.
+  Map<String, String> connected(int epoch, {String? control}) {
+    final lines = {..._back(epoch)};
+    if (control != null && !_controlSaid) {
+      _controlSaid = true;
+      lines['control'] = control;
+    }
+    return lines;
+  }
 
   /// The line for the forwards an earlier connection than [epoch] took with
   /// it, once.

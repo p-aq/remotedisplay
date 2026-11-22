@@ -191,6 +191,43 @@ void main() {
           "Mac-mini doesn't share its sound");
     });
 
+    test("the host's screen and control, with where to fix them", () {
+      expect(screenReason('unavailable', host: 'Mac-mini'), (
+        title: "Mac-mini can't share its screen",
+        text: 'Turn on Screen Recording for Remote Display Server on Mac-mini'
+      ));
+      expect(controlReason('unavailable', host: 'Mac-mini'),
+          "Clicks and keys won't reach Mac-mini · turn on Accessibility for Remote Display Server there");
+      expect(screenReason('unavailable', host: hostName(null))?.title,
+          "The computer you're controlling can't share its screen");
+      expect(controlReason('unavailable', host: hostName(null)),
+          "Clicks and keys won't reach the computer you're controlling · turn on Accessibility for Remote Display Server there");
+      // Ready, or a host older than the keys: nothing to say.
+      for (final status in ['ready', null]) {
+        expect(screenReason(status, host: 'Mac-mini'), isNull);
+        expect(controlReason(status, host: 'Mac-mini'), isNull);
+      }
+    });
+
+    test("reads the login keys out of the engine's peer_info event", () {
+      final additions = loginAdditions({
+        'hostname': 'Mac-mini.local',
+        'platform_additions':
+            '{"rd_host_screen":"unavailable","rd_host_control":"ready"}'
+      });
+      expect((additions['rd_host_screen'], additions['rd_host_control']),
+          ('unavailable', 'ready'));
+      // Before the first event, a host that sends none, and bad JSON.
+      for (final event in <Map<String, dynamic>>[
+        {},
+        {'platform_additions': ''},
+        {'platform_additions': '[1]'},
+        {'platform_additions': '{'}
+      ]) {
+        expect(loginAdditions(event), isEmpty);
+      }
+    });
+
     test("the controller's own access", () {
       expect(permissionReason('allowed', 'camera'), isNull);
       expect(permissionReason('not-determined', 'camera'), isNull);
@@ -441,6 +478,22 @@ void main() {
       feed(n, state());
       feed(n, state(camera: 'asking'));
       expect(n.connected(2), isEmpty);
+    });
+
+    test("says once a session that the host won't take clicks and keys", () {
+      final control = controlReason('unavailable', host: 'Mac-mini')!;
+      final n = ForwardNotices();
+      expect(n.connected(1), isEmpty);
+      expect(n.connected(1, control: control), {'control': control});
+      // The next connection's picture: the drop is said, the host isn't again.
+      feed(n, state(camera: 'asking'));
+      feed(n, state(camera: 'on'));
+      feed(n, state());
+      expect(n.connected(2, control: control),
+          {'connection': 'The connection dropped, so the camera turned off'});
+      // Forward lines keep their own key, so the status line shows both.
+      expect(feed(n, state(camera: 'asking'), epoch: 2), isEmpty);
+      expect(feed(n, state(camera: 'on'), epoch: 2), {'camera': 'Camera on'});
     });
   });
 }

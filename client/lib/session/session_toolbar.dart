@@ -9,10 +9,13 @@ import 'package:flutter/services.dart'
 import 'package:flutter_hbb/common.dart'
     show
         closeConnection,
+        CustomAlertDialog,
+        dialogButton,
         isAndroid,
         isDesktop,
         isIOS,
         isMacOS,
+        msgboxContent,
         openMonitorInNewTabOrWindow,
         openMonitorInTheSameTab,
         translate,
@@ -139,10 +142,21 @@ class _SessionToolbarState extends State<SessionToolbar> {
             host: host,
             soundOn: _soundOn(_ffi, host)));
       }),
-      // A picture again, from a new connection if the last one dropped.
+      // A picture again, from a new connection if the last one dropped; and,
+      // the first time, a host that drops clicks and keys.
       ever<bool>(model.waitForFirstImage, (waiting) {
-        if (!waiting) _say(_notices.connected(model.peerInfoEpoch));
+        if (waiting) return;
+        _say(_notices.connected(model.peerInfoEpoch,
+            control: controlReason(
+                loginAdditions(
+                    model.cachedPeerData.peerInfo)['rd_host_control'],
+                host: hostName(model.pi.hostname))));
       }),
+      // The engine's boxes: its waiting box, when the host can't share its
+      // screen. After the engine's show, which counts the box before it puts
+      // it on screen.
+      ever<int>(_ffi.dialogManager.visibleDialogCount,
+          (_) => scheduleMicrotask(_replaceWaitingBox)),
     ]);
     if (!isDesktop) {
       _mobileFullscreen =
@@ -1034,6 +1048,33 @@ class _SessionToolbarState extends State<SessionToolbar> {
         ),
       ),
     );
+  }
+
+  /// The host can't share its screen (`rd_host_screen`, decision 0018): in place
+  /// of the engine's "Connected, waiting for image...", which would wait for
+  /// good, a box that says why and where to fix it, with Disconnect. It goes
+  /// through the engine's dialogs, so a picture, a reconnection or another box
+  /// dismisses it as it would the waiting box.
+  void _replaceWaitingBox() {
+    if (!mounted) return;
+    final ffi = _ffi;
+    final dialogs = ffi.dialogManager;
+    // The waiting box's tag (showConnectedWaitingForImage).
+    if (!dialogs.existing('${ffi.sessionId}-waiting-for-image')) return;
+    final model = ffi.ffiModel;
+    final why = screenReason(
+        loginAdditions(model.cachedPeerData.peerInfo)['rd_host_screen'],
+        host: hostName(model.pi.hostname));
+    if (why == null) return;
+    clearWaitingForImage(dialogs, ffi.sessionId);
+    final tag = '${ffi.sessionId}-rd-host-screen';
+    if (dialogs.existing(tag)) return;
+    dialogs.show((setState, close, context) => CustomAlertDialog(
+            content: msgboxContent('info', why.title, why.text),
+            // Not the waiting box's Cancel: its closeConnection() needs a tab
+            // controller that the desktop session window doesn't have.
+            actions: [dialogButton('Disconnect', onPressed: _disconnect)]),
+        tag: tag);
   }
 
   /// Turns this Mac's camera on (as [device]) or off for the host. The first
