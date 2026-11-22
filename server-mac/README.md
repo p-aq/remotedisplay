@@ -27,7 +27,8 @@ all the configuration and status:
   (decision 0019). Microphone shows Remote Display Microphone, the virtual mic's driver, which
   every build bundles: *Install…* copies it to `/Library/Audio/Plug-Ins/HAL` and restarts
   coreaudiod after one admin prompt, *Update…* when another version is installed, then
-  *Installed* (decision 0027).
+  *Installed* (decision 0027). While *Let controllers share their camera and microphone* is off,
+  an installed Camera or Microphone says to turn sharing on, with *Turn On*, and isn't ticked.
 - **Connect from another device**: LAN and Tailscale `ip:port` with copy.
 - **Active sessions**: connected peers (lsof on the engine, port 21118) + *Disconnect all*
   (restarts the engine).
@@ -36,7 +37,7 @@ all the configuration and status:
   state read back from `remotedisplay-perms.json`'s `device_forward`). Forwarding itself comes with
   the camera & audio forwarding spec's Phases 1 and 2. *Remove Camera and Microphone* shows while
   Remote Display Camera is installed or waiting for approval, or Remote Display Microphone is
-  installed, and removes whichever is there; the microphone with an admin prompt.
+  installed, and, once confirmed, removes whichever is there; the microphone with an admin prompt.
 - **About**: engine version, open logs, reveal configuration.
 
 Opens by itself on startup if setup or password is missing; also on double-click on the app

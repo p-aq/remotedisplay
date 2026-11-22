@@ -52,6 +52,10 @@
   - *Installed* when they match;
   - "Not available in this build" when none is bundled.
 
+  **Since 2026-11-21** *Installed* says *turn on sharing to use it*, with *Turn On*, while
+  the owner's switch is off, and is ticked only once it's on, as the Camera row is
+  (decision 0019).
+
   Install runs upstream's kind of AppleScript through `osascript`, in one admin prompt:
   remove any installed copy, `cp -RX` the bundled one to `/Library/Audio/Plug-Ins/HAL`,
   then `killall coreaudiod` (decision 0013). Cancelling the prompt isn't an error;
@@ -75,6 +79,7 @@
   that's running, not when Install is first clicked.
 - ***Remove Camera and Microphone*** removes whichever is there: it deactivates the camera
   extension and deletes the driver, with an admin prompt, then restarts coreaudiod.
+  **Since 2026-11-21** it asks first (decision 0019).
 - **The badge.** The menu-bar icon gains a mic badge, and the menu a *Microphone from …*
   line, from the file's `microphone`, as the camera's come from `camera`.
 

@@ -63,6 +63,45 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
         return (.notInstalled, false)
     }
 
+    /// What a request asks macOS to do.
+    enum Action { case install, update, remove }
+
+    /// What the Camera row says when macOS refuses a request: what to do, in a plain
+    /// sentence, for the errors an owner can act on. The log keeps macOS's own message.
+    static func failureMessage(_ error: Error, _ action: Action) -> String {
+        let verb = switch action {
+        case .install: "install"
+        case .update: "update"
+        case .remove: "remove"
+        }
+        let general = "macOS couldn't \(verb) Remote Display Camera. Restart this Mac and try again."
+        let e = error as NSError
+        guard e.domain == OSSystemExtensionError.errorDomain,
+              let code = OSSystemExtensionError.Code(rawValue: e.code) else { return general }
+        switch code {
+        case .missingEntitlement:
+            return "This copy of Remote Display Server isn't allowed to \(verb) Remote Display Camera. Download the app again."
+        case .unsupportedParentBundleLocation:
+            return "Move Remote Display Server to the Applications folder, open it from there and try again."
+        case .extensionNotFound where action == .remove:
+            return "macOS has no Remote Display Camera to remove."
+        case .extensionNotFound:
+            return "Remote Display Camera is missing from this copy of the app. Download Remote Display Server again."
+        case .codeSignatureInvalid:
+            return "This copy of Remote Display Server is damaged. Download the app again."
+        case .validationFailed:
+            return "macOS couldn't verify Remote Display Camera. Download Remote Display Server again."
+        case .forbiddenBySystemPolicy:
+            return "This Mac's settings don't allow Remote Display Camera. If an organization manages this Mac, ask its administrator."
+        case .requestCanceled:
+            return "Cancelled, so nothing changed. Try again when you're ready."
+        case .authorizationRequired:
+            return "This needs an admin's name and password. Try again and enter them when macOS asks."
+        default:
+            return general
+        }
+    }
+
     /// Each new state on the main queue, with a message when an install, update or removal
     /// fails.
     var onChange: (State, String?) -> Void = { _, _ in }
@@ -75,7 +114,7 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
     private var replacementAwaitingApproval = false
     /// The install, update or removal under way; state checks wait for it.
     private var pending: OSSystemExtensionRequest?
-    private var pendingRemoval = false
+    private var pendingAction = Action.install
     /// A state check is with macOS; the next waits for its answer.
     private var checking = false
     /// The state last reported, and the one before the request under way, which a failed
@@ -104,17 +143,17 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
     }
 
     func install() {
-        submit(.activationRequest(forExtensionWithIdentifier: Self.identifier, queue: .main), removal: false)
+        submit(.activationRequest(forExtensionWithIdentifier: Self.identifier, queue: .main), .install)
     }
 
     func remove() {
-        submit(.deactivationRequest(forExtensionWithIdentifier: Self.identifier, queue: .main), removal: true)
+        submit(.deactivationRequest(forExtensionWithIdentifier: Self.identifier, queue: .main), .remove)
     }
 
-    private func submit(_ request: OSSystemExtensionRequest, removal: Bool) {
+    private func submit(_ request: OSSystemExtensionRequest, _ action: Action) {
         guard Self.bundled, pending == nil else { return }
         pending = request
-        pendingRemoval = removal
+        pendingAction = action
         replacing = false
         request.delegate = self
         beforeRequest = last ?? .notInstalled
@@ -144,7 +183,7 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
             updateTried = true
             last = state  // what a refused update goes back to
             NSLog("[remotedisplay] camera extension: another version is installed; asking macOS to replace it")
-            submit(.activationRequest(forExtensionWithIdentifier: Self.identifier, queue: .main), removal: false)
+            submit(.activationRequest(forExtensionWithIdentifier: Self.identifier, queue: .main), .update)
         } else {
             report(state)
         }
@@ -172,7 +211,7 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
         pending = nil
         if replacing && result == .completed { onReplaced() }
         replacing = false
-        if result == .willCompleteAfterReboot && pendingRemoval {
+        if result == .willCompleteAfterReboot && pendingAction == .remove {
             report(.removing)
         } else {
             refresh()
@@ -184,8 +223,8 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
         pending = nil
         let e = error as NSError
         NSLog("[remotedisplay] camera extension request failed: %@ (%@ %ld)", e.localizedDescription, e.domain, e.code)
-        // Back to what it was, with the reason; the state check then says what macOS has.
-        report(beforeRequest, e.localizedDescription)
+        // Back to what it was, with what to do; the state check then says what macOS has.
+        report(beforeRequest, Self.failureMessage(e, pendingAction))
         refresh()
     }
 }

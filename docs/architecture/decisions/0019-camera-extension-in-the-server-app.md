@@ -75,10 +75,25 @@
   until the state next changes (decision 0032).
   Answers that arrive while the menu-bar menu is open wait until it closes (the menu
   guard).
+
+  **Since 2026-11-21** (a UX audit Paolo approved):
+  - a failed request says what to do instead, in a sentence for each common
+    `OSSystemExtensionError` (`CameraExtension.failureMessage`); the log keeps macOS's
+    message;
+  - while the owner's switch is off (decision 0009), an installed camera says *Installed ·
+    turn on sharing to use it*, with *Turn On* while the service runs, and isn't ticked
+    until the switch is on. A first install used to end ticked with sharing still off, its
+    default. The Microphone row does the same;
+  - the approval step says to turn on only Remote Display Camera: in the live session the
+    same approval also turned on OBS Virtual Camera, which was waiting in the same list;
+  - the warning about another feeder adds *quit it to free the camera* (decision 0033).
 - **Removal.** The spec names a *Remove camera and microphone* button but not where it
   goes. It goes in Settings, shown while the extension is installed or waiting for
   approval, so Setup stays a list of what to do. For now it removes the camera
   extension; the microphone's driver joins it in Phase 2.
+
+  **Since 2026-11-21** it asks first: apps that use the camera or microphone lose them, and
+  the camera finishes uninstalling when the Mac restarts.
 - **The harness stays** as the Phase 0 record and test bed, with its own identifiers
   (`app.remotedisplay.spike`). Its sink and codec code stayed there the same way when
   they moved into the engine.

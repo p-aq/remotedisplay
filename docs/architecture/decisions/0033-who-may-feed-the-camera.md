@@ -93,7 +93,7 @@ a release, if a review of the threat says it's needed.
   string, empty when none.
 - Once the camera is installed, the server app reads that property every 2 s. When the pid
   isn't the engine's, the Camera row and the menu say *"Another program, NAME, is feeding
-  Remote Display Camera"*.
+  Remote Display Camera"*. **Since 2026-11-21** both add *· quit it to free the camera*.
 - The spec's security table records the remaining risk.
 
 The test: hold the sink with the probe (`./p1 30`). The app should name it, and the

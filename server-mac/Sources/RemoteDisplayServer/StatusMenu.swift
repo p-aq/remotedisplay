@@ -27,7 +27,7 @@ struct StatusMenu: View {
             }
         }
         if let other = c.otherCameraFeeder {
-            Label("Another program, \(other), is feeding Remote Display Camera",
+            Label("Another program, \(other), is feeding Remote Display Camera · quit it to free the camera",
                   systemImage: "exclamationmark.triangle.fill")
         }
         if let sender = c.microphoneSender {

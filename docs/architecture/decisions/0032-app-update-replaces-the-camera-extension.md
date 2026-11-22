@@ -39,7 +39,9 @@ until they click OK. Running programs, the engine included, didn't get the new d
   wants an admin's approval again, it shows the approval step.
 - **A failed request goes back to the state before it,** with macOS's message, where it
   used to show *Install…* for a moment whatever was installed. The message clears when
-  the state next changes, as when an admin allows an earlier request.
+  the state next changes, as when an admin allows an earlier request. **Since 2026-11-21**
+  the row says what to do in a sentence of its own, and macOS's message goes to the log
+  (decision 0019).
 - **`CameraExtension.evaluate`** holds the comparison, apart from macOS's types, so it
   can be tested.
 
