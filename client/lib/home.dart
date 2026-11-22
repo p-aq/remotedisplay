@@ -1383,9 +1383,16 @@ class _ClientHomeState extends State<ClientHome>
             controller: _pw,
             obscureText: !_showPw,
             style: TextStyle(color: ui.fg, fontSize: 15),
-            decoration: ui.input('Password', Icons.lock_outline,
-                suffix: eyeButton(
-                    ui, _showPw, () => setState(() => _showPw = !_showPw))),
+            decoration: ui
+                .input('Password', Icons.lock_outline,
+                    suffix: eyeButton(
+                        ui, _showPw, () => setState(() => _showPw = !_showPw)))
+                .copyWith(
+                    // As in the connect sheet: the server app's Permanent
+                    // password (Setup, Settings).
+                    helperText:
+                        'The password set in Remote Display Server on the Mac.',
+                    helperStyle: TextStyle(color: ui.muted, fontSize: 12)),
             onSubmitted: (_) => go(),
           ),
           const SizedBox(height: 16),
