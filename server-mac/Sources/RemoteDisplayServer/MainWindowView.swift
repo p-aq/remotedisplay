@@ -121,11 +121,17 @@ struct MainWindowView: View {
         case .working: ("Waiting for macOS…", nil, {})
         case .awaitingApproval: ("An admin must allow it in System Settings › \(approval)",
                                  "Open Settings…", { Permissions.openCameraExtensionSettings() })
+        // Updated with the app: apps that were using it lost it (decision 0033, option A).
+        case .installed where c.cameraUpdated:
+            ("Updated · reopen apps that were using Remote Display Camera, such as FaceTime, Zoom or Photo Booth",
+             "OK", { c.dismissCameraUpdated() })
         case .installed: ("Installed · choose Remote Display Camera in FaceTime, Zoom or any app", nil, {})
         case .removing: ("Removed · finishes when this Mac restarts", nil, {})
         }
-        return optionalRow(title: "Camera", detail: c.cameraError ?? row.detail, ok: c.cameraState == .installed,
-                           failed: c.cameraError != nil, cta: row.cta, action: row.action)
+        let other = c.otherCameraFeeder.map { "Another program, \($0), is feeding Remote Display Camera" }
+        return optionalRow(title: "Camera", detail: c.cameraError ?? other ?? row.detail,
+                           ok: c.cameraState == .installed && other == nil,
+                           failed: c.cameraError != nil || other != nil, cta: row.cta, action: row.action)
     }
 
     /// Remote Display Microphone's state, with what to do next (spec, User experience).

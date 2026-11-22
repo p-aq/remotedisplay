@@ -311,6 +311,7 @@ Forwarding a camera or mic into another computer is sensitive in both directions
 | Media is exposed on the network | Media rides the existing encrypted session; no new listener, port or relay |
 | A stale feed lingers after a disconnect | The host stops the sink and shows the placeholder within 1 second of the session ending; the extension shows it on its own after 500 ms without frames, even if remotedisplayd has crashed |
 | A second controller takes over a live device | One sender per device; later requests get busy |
+| Another program on the host feeds Remote Display Camera | The extension can't tell which program feeds it ([decision 0033](../architecture/decisions/0033-who-may-feed-the-camera.md)), so it takes one feeder at a time and publishes which; the server app's menu and Setup name a feeder that isn't the engine. Remaining risk: a program that starts feeding before the engine holds the camera until it stops, and is only shown, not stopped |
 | A controller plays audio into the host without a request | Controller audio is accepted only while a mic forward or voice call is active for that connection; anything else is dropped (today any controller can) |
 | Malformed frames crash the host engine | Validate every width, height and frame rate before use; decode on a guarded thread; drop bad frames; fuzz the new messages |
 
@@ -332,6 +333,8 @@ The camera extension is what changes how Remote Display Server is built and sign
 - Notarization. A Developer ID system extension loads only once notarized ([Apple DTS](https://developer.apple.com/forums/thread/710046)). The release flow already notarizes the DMG; the build now also has to embed the provisioning profiles.
 - Location. Only an app in /Applications can activate the extension; Setup says so when the app runs from elsewhere.
 - Updates. A new app version updates the extension. Apps such as Photo Booth may not see the new version until they relaunch ([report](https://developer.apple.com/forums/thread/734259)), so release notes should say so.
+
+As built ([decision 0033](../architecture/decisions/0033-who-may-feed-the-camera.md), option A): after replacing the extension, the app restarts the engine, which didn't see the new device either. Setup's Camera row and the menu then say to reopen apps that were using Remote Display Camera, until the owner clicks OK.
 - Virtual mic (Option A). Ship the driver inside the app and install it with an admin prompt, or as a signed .pkg.
 - Removal. A Remove camera and microphone button deactivates the extension (OSSystemExtensionRequest.deactivationRequest) and deletes the driver.
 - Forks. Anyone building their own copy needs their own Apple Developer team and profiles. Apple's camera extension guide links to development-mode steps for testing builds that aren't notarized.
