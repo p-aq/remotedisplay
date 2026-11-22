@@ -29,8 +29,10 @@ all the configuration and status:
   coreaudiod after one admin prompt, *Update…* when another version is installed, then
   *Installed* (decision 0027).
 - **Connect from another device**: LAN and Tailscale `ip:port` with copy.
-- **Active sessions**: connected peers (lsof on the engine, port 21118) + *Disconnect all*
-  (restarts the engine).
+- **Active sessions**: connected peers (lsof on the engine, port 21118), each shown by its
+  controller's name with the address under it once it has logged in
+  (`remotedisplay-sessions.json`; a peer still at the password shows only its address) +
+  *Disconnect all* (restarts the engine).
 - **Settings**: Open at Login, password (Set…/Change…), access mode, *Let controllers share their
   camera and microphone* (off by default; `remotedisplayd --set-device-forward on|off` over IPC,
   state read back from `remotedisplay-perms.json`'s `device_forward`). Forwarding itself comes with
