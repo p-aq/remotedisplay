@@ -36,6 +36,8 @@
   - otherwise off, with why the last forward stopped.
   A picker lists the inputs when there's more than one, and the choice is kept for next
   time, like the camera's.
+  **Since 2026-11-21** picking a camera or an input while it's off opens the menu again
+  with the pick, so turning it on is the next tap; the menu used to close.
 - **Access.** Turning the microphone on asks macOS first, if it hasn't been asked. The
   forward starts only once allowed (the capture refuses otherwise).
 - **The hint.** While the microphone is on and *Play the Mac's sound here* is on, the row

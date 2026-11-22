@@ -864,6 +864,9 @@ class _SessionToolbarState extends State<SessionToolbar> {
         ? null
         : permissionReason(permission, 'camera');
     if (!mounted) return;
+    // Picking a camera or a microphone while it's off opens the menu again with
+    // the pick, so turning it on is the next tap.
+    var reopen = false;
 
     final items = <PopupMenuEntry<void>>[_header('CAMERA')];
     final sending = camera.on || camera.asking;
@@ -892,7 +895,11 @@ class _SessionToolbarState extends State<SessionToolbar> {
       for (final c in cameras) {
         items.add(_radio(c.id == picked?.id, Text(c.name), () {
           bind.mainSetLocalOption(key: _optCamera, value: c.id);
-          if (sending && c.id != camera.device) _setCamera(true, c.id);
+          if (!sending) {
+            reopen = true;
+          } else if (c.id != camera.device) {
+            _setCamera(true, c.id);
+          }
         }, onIcon: Icons.videocam_rounded, offIcon: Icons.videocam_outlined));
       }
     }
@@ -952,7 +959,11 @@ class _SessionToolbarState extends State<SessionToolbar> {
       for (final m in mics) {
         items.add(_radio(m.id == pickedMic?.id, Text(m.name), () {
           bind.mainSetLocalOption(key: _optMicrophone, value: m.id);
-          if (micSending && m.id != mic.device) _setMicrophone(true, m.id);
+          if (!micSending) {
+            reopen = true;
+          } else if (m.id != mic.device) {
+            _setMicrophone(true, m.id);
+          }
         }, onIcon: Icons.mic_rounded, offIcon: Icons.mic_none_rounded));
       }
     }
@@ -973,6 +984,7 @@ class _SessionToolbarState extends State<SessionToolbar> {
               }
             : null));
     await _showItemsMenu(anchor, items);
+    if (reopen && anchor.mounted) await _showDevicesMenu(anchor);
   }
 
   /// Whether the host's sound plays here: the host shares it, and Devices'
