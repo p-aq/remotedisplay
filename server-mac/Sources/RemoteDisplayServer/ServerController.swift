@@ -70,9 +70,10 @@ final class ServerController {
     var engineVersion = "—"
     /// Newer release published on GitHub (e.g. "1.0.3"), or nil. Checked at launch and
     /// every 6 hours; the update itself stays manual (the link opens the releases page).
+    /// This fork's releases: the original project's don't have the camera and microphone.
     var updateAvailable: String?
-    static let releasesPage = URL(string: "https://github.com/SamuelRioTz/remotedisplay/releases/latest")!
-    private static let releasesAPI = URL(string: "https://api.github.com/repos/SamuelRioTz/remotedisplay/releases/latest")!
+    static let releasesPage = URL(string: "https://github.com/p-aq/remotedisplay/releases/latest")!
+    private static let releasesAPI = URL(string: "https://api.github.com/repos/p-aq/remotedisplay/releases/latest")!
     private var updateTimer: Timer?
     var appVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0" }
     var appBuild: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "" }
