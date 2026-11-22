@@ -50,6 +50,11 @@ final class ServerController {
     /// The program feeding Remote Display Camera when it isn't the engine: the extension
     /// lets any program feed it, one at a time (decision 0033, option 2). Nil otherwise.
     var otherCameraFeeder: String?
+    /// When Remote Display Camera last became installed in this launch. The app leaves
+    /// CoreMediaIO alone until it has been for a few seconds, so its first lookup sees the
+    /// device: a process already using CoreMediaIO may never get one that appears later
+    /// (camera session, 2026-11-21).
+    @ObservationIgnored private var cameraInstalledAt: Date?
     @ObservationIgnored private let cameraExtension = CameraExtension()
     /// Remote Display Microphone, the virtual mic's driver, which every build bundles
     /// (decision 0027). Setup's Microphone row shows its state.
@@ -170,6 +175,8 @@ final class ServerController {
                     // macOS moved on from the failure, as when an admin allows it later.
                     self.cameraError = nil
                 }
+                if state == .installed, self.cameraState != .installed { self.cameraInstalledAt = Date() }
+                if state != .installed { self.cameraInstalledAt = nil }
                 if self.cameraState != state { self.cameraState = state }
             }
         }
@@ -282,11 +289,13 @@ final class ServerController {
         firstRefresh = false
     }
 
-    /// Asks Remote Display Camera who feeds it, once it's installed (CoreMediaIO is left
-    /// alone before that), and names the program when it isn't the engine.
+    /// Asks Remote Display Camera who feeds it, once it has been installed for 5 s
+    /// (CoreMediaIO is left alone before that, see `cameraInstalledAt`), and names the
+    /// program when it isn't the engine.
     private func refreshCameraFeeder() {
         var other: String?
-        if cameraState == .installed, let pid = CameraFeeder.pid(), pid != enginePid() {
+        if cameraState == .installed, let since = cameraInstalledAt, Date().timeIntervalSince(since) >= 5,
+           let pid = CameraFeeder.pid(), pid != enginePid() {
             other = CameraFeeder.programName(pid)
         }
         if other != otherCameraFeeder {
