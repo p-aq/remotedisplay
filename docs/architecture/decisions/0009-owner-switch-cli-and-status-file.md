@@ -88,8 +88,8 @@ and editing the TOML doesn't reach a running engine.
 - **The app** reads the file only while the service runs, and lsof stays the list of
   sessions: the file only names its peers, so a missing or stale file changes nothing.
   Active sessions shows the name with the address under it; a peer not in the file (still
-  at the password, or an older engine) shows its address alone. The menu says *Paolo is
-  connected* or *Paolo and Sam are connected*, adds *· 3 sessions* when the names don't
+  at the password, or an older engine) shows its address alone. The menu says *Alex is
+  connected* or *Alex and Sam are connected*, adds *· 3 sessions* when the names don't
   account for every session, and keeps *N active sessions* while no one is named. Both
   follow the existing guard: nothing changes while the menu is open.
 - **Tested:** unit tests for the file's shape and the name's cut; the engine's tests and the

@@ -100,13 +100,13 @@ mod tests {
         let fe80 = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
         let link_local = session(3, SocketAddrV6::new(fe80, 50419, 0, 4).into());
         let at_the_password = session(4, "192.168.1.9:50000".parse().unwrap());
-        mapped.logged_in("Paolo");
+        mapped.logged_in("Alex");
         tailscale.logged_in("Sam");
         link_local.logged_in("Sam");
         assert_eq!(
             json(&names),
             serde_json::json!({
-                "192.168.1.245:37911": "Paolo",
+                "192.168.1.245:37911": "Alex",
                 "[fd7a:115c:a1e0::5]:41000": "Sam",
                 "[fe80::1]:50419": "Sam",
             })
