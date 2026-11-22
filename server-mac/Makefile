@@ -1,7 +1,10 @@
 APP_NAME    = RemoteDisplayServer
 BUNDLE_NAME = Remote Display Server
 OUT_DIR     = .build
-BUILD_DIR   = .build/apple/Products/Release
+# Where `swift build` puts the universal binary: .build/apple/Products/Release up to
+# Xcode 26, .build/out/Products/Release since Xcode 27. Ask SwiftPM rather than assume,
+# or a stale binary from the old place gets bundled.
+BUILD_DIR   = $(shell swift build -c release --arch arm64 --arch x86_64 --show-bin-path)
 BINARY      = $(BUILD_DIR)/$(APP_NAME)
 APP_BUNDLE  = $(OUT_DIR)/$(BUNDLE_NAME).app
 CONTENTS    = $(APP_BUNDLE)/Contents
@@ -110,6 +113,7 @@ driver:
 bundle: build driver $(if $(filter yes,$(CAMERA)),camera)
 	@rm -rf "$(APP_BUNDLE)"
 	@mkdir -p "$(MACOS_DIR)" "$(HELPERS_DIR)" "$(RES_DIR)"
+	@test -n "$(BUILD_DIR)" || { echo "ERROR: swift build gave no binary path"; exit 1; }
 	@cp "$(BINARY)" "$(MACOS_DIR)/$(APP_NAME)"
 	@test -x "$(ENGINE_BIN)" || { echo "ERROR: ENGINE_BIN=$(ENGINE_BIN) does not exist (build the engine first)"; exit 1; }
 	@cp "$(ENGINE_BIN)" "$(HELPERS_DIR)/remotedisplayd"

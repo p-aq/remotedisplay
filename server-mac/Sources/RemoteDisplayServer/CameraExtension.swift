@@ -70,6 +70,9 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
     var onReplaced: () -> Void = {}
     /// The request under way replaces another version.
     private var replacing = false
+    /// A replacement that macOS asked an admin to allow: `onReplaced` waits for the state
+    /// check that shows the bundled version enabled.
+    private var replacementAwaitingApproval = false
     /// The install, update or removal under way; state checks wait for it.
     private var pending: OSSystemExtensionRequest?
     private var pendingRemoval = false
@@ -130,6 +133,13 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
                  awaitingApproval: $0.isAwaitingUserApproval, uninstalling: $0.isUninstalling)
         }
         let (state, outdated) = Self.evaluate(held, bundled: Self.bundledVersion)
+        if replacementAwaitingApproval {
+            // The old version still runs until an admin allows the new one.
+            guard state == .installed, !outdated else { return report(state == .installed ? .awaitingApproval : state) }
+            replacementAwaitingApproval = false
+            onReplaced()
+            return report(state)
+        }
         if outdated && !updateTried {
             updateTried = true
             last = state  // what a refused update goes back to
@@ -152,6 +162,8 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
     func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
         guard request === pending else { return }
         pending = nil
+        if replacing { replacementAwaitingApproval = true }
+        replacing = false
         report(.awaitingApproval)
     }
 
