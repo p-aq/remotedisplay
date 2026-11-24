@@ -20,10 +20,13 @@ already appears under Input › Session, and would duplicate "Play the Mac's sou
   label (*"Mac-mini hasn't turned on camera sharing"*), or *"the computer you're
   controlling"* when it reports none. They said *"This Mac"*, which, read on the
   controller, sounded like the controller itself (camera session, 2026-11-19).
+  The engine sends the name in lower case, so a sentence that starts with it
+  capitalizes its first letter; `localhost` (the engine's fallback) and an address
+  count as no name (review, 2026-11-24).
   **Since 2026-11-21** they say where to fix it: *"Turn on camera sharing in Remote
-  Display Server's Settings on Mac-mini"*, *"Install Remote Display Camera from Setup
-  in Remote Display Server on Mac-mini"*, *"An admin needs to allow Remote Display
-  Camera in System Settings on Mac-mini"*, and the same for the microphone (UX audit,
+  Display Server's Settings on mac-mini"*, *"Install Remote Display Camera from Setup
+  in Remote Display Server on mac-mini"*, *"An admin needs to allow Remote Display
+  Camera in System Settings on mac-mini"*, and the same for the microphone (UX audit,
   2026-11-21).
 - `rd_camera_sink` and `rd_mic_sink` are status strings: `ready`, `not-installed`,
   `not-approved`, `not-allowed`.

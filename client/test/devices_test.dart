@@ -67,6 +67,20 @@ void main() {
       expect(hostName('Mac-mini'), 'Mac-mini');
       expect(hostName(''), "the computer you're controlling");
       expect(hostName(null), "the computer you're controlling");
+      // What hosts send: the engine lowercases the name. Not a machine's name.
+      expect(hostName('mac-mini.local'), 'mac-mini');
+      expect(hostName('localhost'), "the computer you're controlling");
+      expect(hostName('192.168.1.20'), "the computer you're controlling");
+      expect(hostName('fe80::1'), "the computer you're controlling");
+      expect(
+          hostReason('not-allowed', 'camera',
+              hostIsMac: true, host: 'mac-mini'),
+          "Turn on camera sharing in Remote Display Server's Settings on mac-mini");
+      expect(
+          stopReason('no-answer', 'camera', hostIsMac: true, host: 'mac-mini'),
+          "Mac-mini didn't answer");
+      expect(hostReason(null, 'camera', hostIsMac: true, host: 'mac-mini'),
+          'Update Remote Display Server on mac-mini');
       final fallback = hostName(null);
       expect(
           hostReason('not-allowed', 'camera', hostIsMac: true, host: fallback),
