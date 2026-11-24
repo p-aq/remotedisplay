@@ -71,9 +71,11 @@ void main() {
       expect(hostName('192.168.1.20'), "the computer you're controlling");
       expect(hostName('fe80::1'), "the computer you're controlling");
       expect(
-          hostReason('not-allowed', 'camera', hostIsMac: true, host: 'mac-mini'),
+          hostReason('not-allowed', 'camera',
+              hostIsMac: true, host: 'mac-mini'),
           "Mac-mini hasn't turned on camera sharing");
-      expect(stopReason('no-answer', 'camera', hostIsMac: true, host: 'mac-mini'),
+      expect(
+          stopReason('no-answer', 'camera', hostIsMac: true, host: 'mac-mini'),
           "Mac-mini didn't answer");
       expect(hostReason(null, 'camera', hostIsMac: true, host: 'mac-mini'),
           'Update Remote Display Server on mac-mini');
