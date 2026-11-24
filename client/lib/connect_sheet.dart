@@ -177,7 +177,8 @@ class _ConnectSheetState extends State<ConnectSheet> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.swap_horiz_rounded, size: 16, color: ui.accentSoft),
+                  Icon(Icons.swap_horiz_rounded,
+                      size: 16, color: ui.accentSoft),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(widget.note!,
@@ -243,9 +244,12 @@ class _ConnectSheetState extends State<ConnectSheet> {
                       suffix: eyeButton(ui, _showPw,
                           () => setState(() => _showPw = !_showPw)))
                   .copyWith(
-                      // The server app's Permanent password (Setup, Settings).
-                      helperText:
-                          'The password set in Remote Display Server on the Mac.',
+                      // The server app's Permanent password (Setup, Settings);
+                      // other hosts are RustDesk's, with their own password.
+                      helperText: widget.machine.platform.isEmpty ||
+                              widget.machine.platform == kPeerPlatformMacOS
+                          ? 'The password set in Remote Display Server on the Mac.'
+                          : null,
                       helperStyle: TextStyle(color: ui.muted, fontSize: 12)),
               onChanged: (_) => setState(() {}),
               onSubmitted: (_) => _go(),
@@ -447,8 +451,8 @@ class _MachineSettingsSheetState extends State<MachineSettingsSheet> {
                 child: TextField(
                   controller: _name,
                   style: TextStyle(color: ui.fg, fontSize: 14),
-                  decoration: ui.input(
-                      'Name shown on the card', Icons.badge_outlined),
+                  decoration:
+                      ui.input('Name shown on the card', Icons.badge_outlined),
                   onSubmitted: (_) => _saveName(),
                 ),
               ),
@@ -468,8 +472,7 @@ class _MachineSettingsSheetState extends State<MachineSettingsSheet> {
                     child: TextField(
                       controller: _addr,
                       style: TextStyle(color: ui.fg, fontSize: 14),
-                      decoration: ui.input(
-                          'Add address (IP or Tailscale IP)',
+                      decoration: ui.input('Add address (IP or Tailscale IP)',
                           Icons.add_link_rounded),
                       onSubmitted: (_) => _add(),
                     ),

@@ -88,7 +88,7 @@ void main() {
       expect(
           hostReason('not-installed', 'camera',
               hostIsMac: true, host: fallback),
-          "Install Remote Display Camera from Setup in Remote Display Server on the computer you're controlling");
+          "Finish setting up Remote Display Camera in Remote Display Server's Setup on the computer you're controlling");
       // At the start of a sentence, capitalized.
       expect(
           hostReason('something-new', 'camera',
@@ -110,11 +110,11 @@ void main() {
       expect(
           hostReason('not-installed', 'camera',
               hostIsMac: true, host: 'Mac-mini'),
-          'Install Remote Display Camera from Setup in Remote Display Server on Mac-mini');
+          "Finish setting up Remote Display Camera in Remote Display Server's Setup on Mac-mini");
       expect(
           hostReason('not-installed', 'microphone',
               hostIsMac: true, host: 'Mac-mini'),
-          'Install Remote Display Microphone from Setup in Remote Display Server on Mac-mini');
+          "Finish setting up Remote Display Microphone in Remote Display Server's Setup on Mac-mini");
       expect(
           hostReason('not-approved', 'camera',
               hostIsMac: true, host: 'Mac-mini'),

@@ -103,9 +103,11 @@ String? hostReason(String? status, String kind,
       // The owner's switch in the server app's Settings.
       return "Turn on ${_noun(kind)} sharing in Remote Display Server's Settings on $host";
     case 'not-installed':
-      // Setup's Camera and Microphone rows install them.
-      return 'Install ${_device(kind)} from Setup in Remote Display Server on $host';
-    case 'not-approved':
+      // What hosts send for any camera or microphone that isn't working yet:
+      // not installed, or installed and waiting for an admin. Setup's row says
+      // which and offers the step (Install…, or Open Settings…).
+      return "Finish setting up ${_device(kind)} in Remote Display Server's Setup on $host";
+    case 'not-approved': // not sent by hosts yet
       return 'An admin needs to allow ${_device(kind)} in System Settings on $host';
     default:
       return "${_start(host)} can't receive a ${_noun(kind)} right now";

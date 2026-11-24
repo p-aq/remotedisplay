@@ -24,10 +24,12 @@ already appears under Input › Session, and would duplicate "Play the Mac's sou
   capitalizes its first letter; `localhost` (the engine's fallback) and an address
   count as no name (review, 2026-11-24).
   **Since 2026-11-21** they say where to fix it: *"Turn on camera sharing in Remote
-  Display Server's Settings on mac-mini"*, *"Install Remote Display Camera from Setup
-  in Remote Display Server on mac-mini"*, *"An admin needs to allow Remote Display
-  Camera in System Settings on mac-mini"*, and the same for the microphone (UX audit,
-  2026-11-21).
+  Display Server's Settings on mac-mini"*, *"Finish setting up Remote Display Camera in
+  Remote Display Server's Setup on mac-mini"*, and the same for the microphone (UX audit,
+  2026-11-21). Hosts send `not-installed` also for a camera or microphone that is
+  installed but waiting for an admin, so the text points at Setup, whose row says which;
+  *"An admin needs to allow …"* waits for hosts that send `not-approved` (review,
+  2026-11-24).
 - `rd_camera_sink` and `rd_mic_sink` are status strings: `ready`, `not-installed`,
   `not-approved`, `not-allowed`.
   **Since 2026-11-20** a refusing `DeviceForwardResponse` can also say `sink-failed`: the
