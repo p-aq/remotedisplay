@@ -66,17 +66,24 @@ String _device(String kind) =>
     kind == 'camera' ? 'Remote Display Camera' : 'Remote Display Microphone';
 
 /// What the menu calls the host: the first label of the hostname it reports
-/// ("Mac-mini.local" → "Mac-mini"), or "the computer you're controlling" when
-/// it reports none. "This Mac", read on the controller, sounded like the
-/// controller itself (decision 0012).
+/// ("mac-mini.local" → "mac-mini"), or "the computer you're controlling" when
+/// it reports none, or a name that would point at no machine in particular:
+/// "localhost" (the engine's fallback) or an address. "This Mac", read on the
+/// controller, sounded like the controller itself (decision 0012).
 String hostName(String? hostname) {
-  final label = (hostname ?? '').split('.').first.trim();
-  return label.isEmpty ? "the computer you're controlling" : label;
+  final name = (hostname ?? '').trim();
+  final label = name.split('.').first.trim();
+  final unusable = label.isEmpty ||
+      label.toLowerCase() == 'localhost' ||
+      RegExp(r'^[0-9]+$').hasMatch(label) ||
+      name.contains(':');
+  return unusable ? "the computer you're controlling" : label;
 }
 
-/// [host] at the start of a sentence: the fallback capitalized, a hostname as is.
+/// [host] at the start of a sentence. The host's engine sends its name in
+/// lower case ("mac-mini"), so the first letter is capitalized here.
 String _start(String host) =>
-    host.startsWith('the ') ? 'T${host.substring(1)}' : host;
+    host.isEmpty ? host : '${host[0].toUpperCase()}${host.substring(1)}';
 
 /// Why the host can't receive [kind], or null when it can. [status] is
 /// [hostStatus]; [hostIsMac] tells a 1.0.x Mac host from a host that isn't a
