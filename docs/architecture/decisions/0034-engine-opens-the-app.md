@@ -96,6 +96,12 @@ it is opened was the real harm, and option 2 fixes it.
 - a scripted quit ends the engine, which the app starts again, without showing the window;
 - Login Items lists the LaunchAgent under Allow in the Background as Remote Display Server.
 
+**Not tried yet:** a real login with Open at Login on. The LaunchAgent may start the engine
+before macOS opens the login item, and Launch Services may then hand that open to the engine:
+as a reopen, the engine starts the app without the login-item flag, so its window would show
+at every login; as an open, the engine ignores it and the app wouldn't start. App.log's
+`launch:` line says which (`loginItem=`, `event=`).
+
 ## Consequences
 
 - The owner can always get the app back by opening it.

@@ -6,12 +6,24 @@
 # identifier_type=Path, MacOS → identifier_type=Bundle ID.
 #
 # Asking leaves a switched-off Accessibility entry per run. The script resets the bundle-ID
-# ones (tccutil only finds apps in /Applications, so the bundles move there for a moment).
+# ones (tccutil only finds apps in /Applications, so the bundles move there for a moment, as
+# zz-app.example.axprobe.*.app; an interrupted run removes them too).
 # The Helpers run's entry is keyed by a path that is gone by then, which tccutil can't
 # reset: remove it in System Settings › Privacy & Security › Accessibility ("engine", "−").
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; T=$(mktemp -d)
 LSREG=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+IDS="app.example.axprobe.helpers app.example.axprobe.macos"
+cleanup() {
+  for id in $IDS; do
+    launchctl remove "$id.engine" 2>/dev/null
+    for b in "$T/$id.app" "/Applications/zz-$id.app"; do
+      [ -d "$b" ] && { "$LSREG" -u "$b"; rm -rf "$b"; }
+    done
+  done
+  rm -rf "$T"
+}
+trap cleanup EXIT
 xcrun clang -fobjc-arc -framework AppKit -framework ApplicationServices "$HERE/ax-engine.m" -o "$T/engine" || exit 1
 printf 'int main(void){return 0;}' | xcrun clang -x c - -o "$T/app" || exit 1
 bundle() { # bundle <identifier>: builds $T/<identifier>.app, ad-hoc signed
@@ -42,13 +54,11 @@ probe() { # probe <identifier> <MacOS|Helpers>
 }
 probe app.example.axprobe.helpers Helpers
 probe app.example.axprobe.macos MacOS
-for id in app.example.axprobe.helpers app.example.axprobe.macos; do
+for id in $IDS; do
   "$LSREG" -u "$T/$id.app"; mv "$T/$id.app" "/Applications/zz-$id.app" && "$LSREG" -f "/Applications/zz-$id.app"
 done
 sleep 2
-for id in app.example.axprobe.helpers app.example.axprobe.macos; do
+for id in $IDS; do
   tccutil reset All "$id" >/dev/null 2>&1 || echo "Couldn't reset $id's entries (tccutil reset All $id)."
-  "$LSREG" -u "/Applications/zz-$id.app"; rm -rf "/Applications/zz-$id.app"
 done
-rm -rf "$T"
 echo "Remove the Helpers run's \"engine\" entry by hand: System Settings › Privacy & Security › Accessibility."
