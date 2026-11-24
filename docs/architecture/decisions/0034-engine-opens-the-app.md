@@ -66,27 +66,35 @@ it is opened was the real harm, and option 2 fixes it.
 ## As built
 
 - `src/platform/macos.mm`, `MacRunHeadlessAppLoop` (ours): after AppKit's launch, which
-  installs its own handlers, the engine handles the open and reopen events.
+  installs its own handlers, the engine handles the reopen, which Launch Services sends to
+  it when the app is opened while the engine runs. Not the open: that is the engine's own
+  launch, and handling it started the app at every engine start and login (found at the
+  Mac mini, 2026-11-23).
   - If Remote Display Server's own program is running, the engine posts the distributed
     notification `app.remotedisplay.server.showWindow`; the app shows its window. A
     notification, not an Apple event to the app, which would need Automation permission.
   - Otherwise it starts the app as a new instance, or Launch Services would hand the open
-    back to the engine. It starts it at most once in 10 s, for an open and a reopen together.
+    back to the engine. It starts it at most once in 10 s, so a second open before the app
+    is up doesn't start a second app.
   - Only when the bundle's program is another binary than the engine, so a bare `rustdesk` or
     an app that is the engine itself doesn't change.
 - `AppDelegate.swift` listens for that notification and shows the main window, as on reopen.
-- The LaunchAgent's plist names the app in `AssociatedBundleIdentifiers`, so macOS's
-  background-item notification and Login Items should name Remote Display Server, not
-  "remotedisplayd".
+- The LaunchAgent's plist names the app in `AssociatedBundleIdentifiers`, so Login Items
+  names Remote Display Server, not "remotedisplayd" (macOS's background-item notification
+  should too).
 - The live-session `host.sh` kills leftovers matching the whole bundle's `Contents/`.
 - `ls-probe/accessibility.sh` records the Accessibility identity check.
 
-**To verify** with a signed build on the Mac mini:
-- with the engine running and the app quit, opening the app starts it once and shows its
-  window;
-- with both running and the window closed, opening the app shows the window;
-- Screen Recording and Accessibility, granted once, still cover the engine, with no restarts;
-- a scripted quit ends the engine, which comes back, as before.
+**Verified** on the Mac mini, 2026-11-23 and 24, team-signed, without the camera extension:
+- Screen Recording and Accessibility, granted once, cover the engine, with no restarts;
+- the engine started alone by launchd, as at login with Open at Login off (a `launchctl
+  bootstrap`, not a real login): the app doesn't start;
+- with the engine alone, opening the app starts it once and shows its window; two opens in
+  a row still start one app;
+- with both running and the window closed, opening the app shows the window; closing it
+  again leaves the app in the menu bar;
+- a scripted quit ends the engine, which the app starts again, without showing the window;
+- Login Items lists the LaunchAgent under Allow in the Background as Remote Display Server.
 
 ## Consequences
 
