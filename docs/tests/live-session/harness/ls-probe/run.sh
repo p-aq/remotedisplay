@@ -1,5 +1,5 @@
 #!/bin/bash
-# ls-probe (decision 0034): does Launch Services count a headless engine inside an app bundle
+# ls-probe (decision 0034; Accessibility: accessibility.sh): does Launch Services count a headless engine inside an app bundle
 # as the app? Builds a throwaway bundle (identifier app.example.lsprobe, ad-hoc signed) in a
 # temporary folder, with an accessory "app" and a headless "engine" like remotedisplayd. It
 # starts the engine through launchd, as the LaunchAgent does, then opens the bundle and sends a
