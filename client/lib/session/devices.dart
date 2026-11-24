@@ -67,17 +67,24 @@ String _device(String kind) =>
     kind == 'camera' ? 'Remote Display Camera' : 'Remote Display Microphone';
 
 /// What the menu calls the host: the first label of the hostname it reports
-/// ("Mac-mini.local" → "Mac-mini"), or "the computer you're controlling" when
-/// it reports none. "This Mac", read on the controller, sounded like the
-/// controller itself (decision 0012).
+/// ("mac-mini.local" → "mac-mini"), or "the computer you're controlling" when
+/// it reports none, or a name that would point at no machine in particular:
+/// "localhost" (the engine's fallback) or an address. "This Mac", read on the
+/// controller, sounded like the controller itself (decision 0012).
 String hostName(String? hostname) {
-  final label = (hostname ?? '').split('.').first.trim();
-  return label.isEmpty ? "the computer you're controlling" : label;
+  final name = (hostname ?? '').trim();
+  final label = name.split('.').first.trim();
+  final unusable = label.isEmpty ||
+      label.toLowerCase() == 'localhost' ||
+      RegExp(r'^[0-9]+$').hasMatch(label) ||
+      name.contains(':');
+  return unusable ? "the computer you're controlling" : label;
 }
 
-/// [host] at the start of a sentence: the fallback capitalized, a hostname as is.
+/// [host] at the start of a sentence. The host's engine sends its name in
+/// lower case ("mac-mini"), so the first letter is capitalized here.
 String _start(String host) =>
-    host.startsWith('the ') ? 'T${host.substring(1)}' : host;
+    host.isEmpty ? host : '${host[0].toUpperCase()}${host.substring(1)}';
 
 /// Why the host can't receive [kind], or null when it can, said as where to fix
 /// it. [status] is [hostStatus]; [hostIsMac] tells a 1.0.x Mac host from a host
@@ -96,9 +103,11 @@ String? hostReason(String? status, String kind,
       // The owner's switch in the server app's Settings.
       return "Turn on ${_noun(kind)} sharing in Remote Display Server's Settings on $host";
     case 'not-installed':
-      // Setup's Camera and Microphone rows install them.
-      return 'Install ${_device(kind)} from Setup in Remote Display Server on $host';
-    case 'not-approved':
+      // What hosts send for any camera or microphone that isn't working yet:
+      // not installed, or installed and waiting for an admin. Setup's row says
+      // which and offers the step (Install…, or Open Settings…).
+      return "Finish setting up ${_device(kind)} in Remote Display Server's Setup on $host";
+    case 'not-approved': // not sent by hosts yet
       return 'An admin needs to allow ${_device(kind)} in System Settings on $host';
     default:
       return "${_start(host)} can't receive a ${_noun(kind)} right now";
