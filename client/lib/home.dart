@@ -190,6 +190,12 @@ class _ClientHomeState extends State<ClientHome>
     _refresh();
     _probeTimer = Timer.periodic(_probeEvery, (_) {
       if (!_connecting) _probeAll();
+      // macOS's own prompt may still be waiting, which reads as "denied": ask
+      // again until it's allowed, as the server app does.
+      if (_localNetwork == LocalNetworkAccess.denied) {
+        _localNetworkCheck.newRound();
+        _checkLocalNetwork();
+      }
     });
     // Deep links on mobile (remotedisplay://connection/new/<host>?password=…):
     // they connect with OUR mobile session. On desktop the engine resolves
@@ -265,12 +271,17 @@ class _ClientHomeState extends State<ClientHome>
   /// Back from another app / the network may have changed (iPad leaving home):
   /// refresh everything, so stale routes are marked and new ones found. The
   /// user may also have just flipped the Local Network switch in System
-  /// Settings: ask again.
+  /// Settings: ask again, but only when that could change what the home
+  /// shows (each check briefly advertises a Bonjour service on the network).
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && !_connecting) {
       _refresh();
-      _checkLocalNetwork();
+      if (_localNetwork != LocalNetworkAccess.allowed ||
+          !_machines().any((m) => m.available)) {
+        _localNetworkCheck.newRound();
+        _checkLocalNetwork();
+      }
     }
   }
 
@@ -426,9 +437,9 @@ class _ClientHomeState extends State<ClientHome>
 
   /// Asks the macOS Runner whether System Settings › Privacy & Security ›
   /// Local Network lets the app on the local network ([LocalNetworkAccess]):
-  /// after a scan round with nothing to show or after a "denied", and when the
-  /// app comes back to the front. Never twice at once, at most once per scan
-  /// round. No answer, or another platform, is unknown and shows nothing.
+  /// after a scan round with nothing to show or after a "denied", every 20 s
+  /// while denied, and when the app comes back to the front. Never twice at
+  /// once. No answer, or another platform, is unknown and shows nothing.
   Future<void> _checkLocalNetwork() async {
     if (!isMacOS || !_localNetworkCheck.start()) return;
     var access = LocalNetworkAccess.unknown;

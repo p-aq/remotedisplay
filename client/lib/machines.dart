@@ -545,7 +545,7 @@ class LocalNetworkCheck {
 String emptyHomeText(LocalNetworkAccess access,
     {required bool settling, required bool unreachable}) {
   if (access == LocalNetworkAccess.denied) {
-    return "Remote Display isn't allowed on your local network, so it can't find your computers.";
+    return "Remote Display isn't allowed on your local network yet, so it can't find your computers.";
   }
   if (settling) return 'Looking for computers on your network…';
   if (unreachable) return 'No computers answer from this network right now.';
@@ -558,5 +558,5 @@ String emptyHomeText(LocalNetworkAccess access,
 String? localNetworkNote(LocalNetworkAccess access,
         {required bool computersShown}) =>
     access == LocalNetworkAccess.denied && computersShown
-        ? "Remote Display isn't allowed on your local network, so it can't find computers there."
+        ? "Remote Display isn't allowed on your local network yet, so it can't find computers there."
         : null;

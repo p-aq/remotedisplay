@@ -407,7 +407,7 @@ void main() {
     const allowed = LocalNetworkAccess.allowed;
     const unknown = LocalNetworkAccess.unknown;
     const noAccess =
-        "Remote Display isn't allowed on your local network, so it can't find your computers.";
+        "Remote Display isn't allowed on your local network yet, so it can't find your computers.";
 
     test("reads the Runner's answer; anything else is unknown", () {
       expect(LocalNetworkAccess.parse('allowed'), allowed);
@@ -441,7 +441,7 @@ void main() {
 
     test('with computers shown, a line under them says it instead', () {
       expect(localNetworkNote(denied, computersShown: true),
-          "Remote Display isn't allowed on your local network, so it can't find computers there.");
+          "Remote Display isn't allowed on your local network yet, so it can't find computers there.");
       expect(localNetworkNote(denied, computersShown: false), isNull);
       expect(localNetworkNote(allowed, computersShown: true), isNull);
       expect(localNetworkNote(unknown, computersShown: true), isNull);
