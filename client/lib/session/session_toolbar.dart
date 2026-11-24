@@ -1085,7 +1085,11 @@ class _SessionToolbarState extends State<SessionToolbar> {
     if (on && needsCameraAccess(device)) {
       final permission = bind.mainGetCapturePermission(kind: 'camera');
       if (permission == 'not-determined') {
-        if (!await bind.mainRequestCapturePermission(kind: 'camera')) return;
+        if (!await bind.mainRequestCapturePermission(kind: 'camera')) {
+          // Refused at macOS's prompt: the menu has closed, so say it here.
+          _say({'camera': permissionReason('denied', 'camera')!});
+          return;
+        }
       } else if (permission != 'allowed') {
         return;
       }
@@ -1113,6 +1117,7 @@ class _SessionToolbarState extends State<SessionToolbar> {
       final permission = bind.mainGetCapturePermission(kind: 'microphone');
       if (permission == 'not-determined') {
         if (!await bind.mainRequestCapturePermission(kind: 'microphone')) {
+          _say({'microphone': permissionReason('denied', 'microphone')!});
           return;
         }
       } else if (permission != 'allowed') {
