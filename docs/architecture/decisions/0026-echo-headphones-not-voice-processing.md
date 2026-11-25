@@ -37,6 +37,8 @@
   while the microphone and *Play the Mac's sound here* are both on, the row says "Use
   headphones, or the call hears its own echo". No longer "until voice processing is
   measured".
+  **Since 2026-11-21** it reads *"If the call hears itself, use headphones at a low
+  volume"*, and also shows once a session on the status line (decision 0024).
 
 ## Consequences
 

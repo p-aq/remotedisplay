@@ -617,6 +617,8 @@ final class ServerController {
         runLaunchctl(["bootstrap", guiDomain, agentPlistPath])
     }
 
+    /// AssociatedBundleIdentifiers: macOS's background-item notification and Login Items
+    /// name the app, Remote Display Server, instead of "remotedisplayd".
     private func writeAgentPlist() {
         try? FileManager.default.createDirectory(atPath: NSHomeDirectory() + "/Library/LaunchAgents", withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(atPath: logDir, withIntermediateDirectories: true)
@@ -626,6 +628,7 @@ final class ServerController {
         <plist version="1.0">
         <dict>
             <key>Label</key><string>\(Self.agentLabel)</string>
+            <key>AssociatedBundleIdentifiers</key><array><string>app.remotedisplay.server</string></array>
             <key>ProgramArguments</key>
             <array>
                 <string>\(enginePath)</string>

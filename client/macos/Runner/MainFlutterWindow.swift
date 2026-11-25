@@ -1,6 +1,7 @@
 import Cocoa
 import AVFoundation
 import FlutterMacOS
+import Network
 import desktop_multi_window
 // import bitsdojo_window_macos
 
@@ -55,6 +56,10 @@ class MainFlutterWindow: NSWindow {
         // register self method handler
         let registrar = flutterViewController.registrar(forPlugin: "RustDeskPlugin")
         setMethodHandler(registrar: registrar)
+        // remotedisplay: the home asks whether macOS lets the app on the local
+        // network. This window only: the home lives here, and sessions open in
+        // other windows with their own engines.
+        setLocalNetworkHandler(messenger: flutterViewController.engine.binaryMessenger)
 
         RegisterGeneratedPlugins(registry: flutterViewController)
 
@@ -89,6 +94,41 @@ class MainFlutterWindow: NSWindow {
     override public func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
         super.order(place, relativeTo: otherWin)
         hiddenWindowAtLaunch()
+    }
+
+    /// remotedisplay: the probe answering the home, while one runs. Each check
+    /// gets its own, so the timeout of one that answered early can't end the next.
+    private var localNetworkProbe: LocalNetworkProbe?
+
+    /// remotedisplay: `remotedisplay/localnetwork` answers `check` with "allowed"
+    /// or "denied": whether System Settings › Privacy & Security › Local Network
+    /// lets this app on the local network. Without it, discovery and the port
+    /// probes find nothing there, and the home would only say there are no
+    /// computers. The control exists on macOS 15 and later; before, the answer is
+    /// "allowed". nil while a check is already running (the home never asks twice
+    /// at once).
+    private func setLocalNetworkHandler(messenger: FlutterBinaryMessenger) {
+        let channel = FlutterMethodChannel(name: "remotedisplay/localnetwork", binaryMessenger: messenger)
+        channel.setMethodCallHandler { [weak self] call, result in
+            guard call.method == "check" else {
+                result(FlutterMethodNotImplemented)
+                return
+            }
+            guard #available(macOS 15, *) else {
+                result("allowed")
+                return
+            }
+            guard let self, self.localNetworkProbe == nil else {
+                result(nil)
+                return
+            }
+            let probe = LocalNetworkProbe()
+            self.localNetworkProbe = probe
+            probe.check { [weak self] allowed in
+                self?.localNetworkProbe = nil
+                result(allowed ? "allowed" : "denied")
+            }
+        }
     }
 
     /// Override window theme.
@@ -298,5 +338,72 @@ class MainFlutterWindow: NSWindow {
                     result(FlutterMethodNotImplemented)
                 }
         })
+    }
+}
+
+/// remotedisplay: the server app's probe (server-mac/Sources/RemoteDisplayServer/
+/// Permissions.swift), the same code; keep the two alike. Info.plist lists its
+/// service type under NSBonjourServices, as the server app's does.
+///
+/// Tells whether this app can actually use the local network — the macOS 15+ "Local
+/// Network" privacy control. There is no status API for it, so we advertise a throwaway
+/// Bonjour service and try to browse it back: it comes back only when access is allowed.
+/// When access is undetermined, starting this is what makes macOS show the prompt
+/// (attributed to the app); denied or pending → it times out. The engine's discovery uses
+/// UDP broadcast and a port scan, not Bonjour, but they need the same permission, so this
+/// is a faithful proxy that needs no computers on the network to test.
+final class LocalNetworkProbe {
+    private let type = "_rdprobe._udp"
+    private var listener: NWListener?
+    private var browser: NWBrowser?
+    private var completion: ((Bool) -> Void)?
+    private var done = false
+
+    /// `allowed` is delivered once, on the main thread.
+    func check(timeout: TimeInterval = 4, completion: @escaping (_ allowed: Bool) -> Void) {
+        self.completion = completion
+        self.done = false
+        let name = "rdprobe-\(UInt32.random(in: 0 ..< .max))"
+
+        do {
+            let l = try NWListener(using: .udp)
+            l.service = NWListener.Service(name: name, type: type)
+            l.newConnectionHandler = { $0.cancel() }
+            l.start(queue: .global(qos: .utility))
+            listener = l
+        } catch {
+            finish(false)
+            return
+        }
+
+        let b = NWBrowser(for: .bonjour(type: type, domain: nil), using: NWParameters())
+        b.browseResultsChangedHandler = { [weak self] results, _ in
+            guard let self else { return }
+            let seen = results.contains { r in
+                if case let .service(n, t, _, _) = r.endpoint { return n == name && t == self.type }
+                return false
+            }
+            if seen { self.finish(true) }
+        }
+        b.stateUpdateHandler = { [weak self] state in
+            if case .failed = state { self?.finish(false) }
+        }
+        b.start(queue: .global(qos: .utility))
+        browser = b
+
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) { [weak self] in
+            self?.finish(false)
+        }
+    }
+
+    private func finish(_ allowed: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.done else { return }
+            self.done = true
+            self.listener?.cancel(); self.listener = nil
+            self.browser?.cancel(); self.browser = nil
+            let c = self.completion; self.completion = nil
+            c?(allowed)
+        }
     }
 }
