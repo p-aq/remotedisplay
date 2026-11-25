@@ -108,8 +108,16 @@ final class ServerController {
     /// The name of the controller at `peer`, on one line; nil until it logs in, or when the
     /// engine doesn't write the sessions file.
     func controllerName(_ peer: String) -> String? {
-        let name = sessionNames[peer]?.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        return name?.isEmpty == false ? name : nil
+        // The controller chose it: no control or format characters (a right-to-left override
+        // would reorder the menu's line, zero-width ones would show nothing), except the
+        // joiner inside emoji; whitespace becomes single spaces.
+        let visible = sessionNames[peer]?.unicodeScalars.filter {
+            $0.properties.isWhitespace || $0 == "\u{200D}"
+                || ![.control, .format].contains($0.properties.generalCategory)
+        }
+        let name = visible.map { String(String.UnicodeScalarView($0)) }?
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return name?.unicodeScalars.contains(where: { $0 != "\u{200D}" && $0 != " " }) == true ? name : nil
     }
 
     /// The menu's line for the sessions: who is connected, plus the number of sessions when
@@ -621,6 +629,7 @@ final class ServerController {
             runLaunchctl(["bootout", "\(guiDomain)/\(Self.agentLabel)"])
             pkillEngine() // engine (if launchd did not have it) and its helpers
             try? FileManager.default.removeItem(atPath: agentPlistPath)
+            forgetSessions()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.refresh() }
     }
@@ -652,6 +661,13 @@ final class ServerController {
         }
         pkillHelpers()
         trace("quit: engine \(processRunning() ? "STILL RUNNING" : "stopped") after \(waited / 4) s")
+        if !processRunning() { forgetSessions() }
+    }
+
+    /// Who was connected stays in the engine's last remotedisplay-sessions.json once it
+    /// stops; a stopped engine has no sessions, so the file goes with it.
+    private func forgetSessions() {
+        try? FileManager.default.removeItem(atPath: sessionsPath)
     }
 
     private var quitting = false

@@ -92,6 +92,10 @@ and editing the TOML doesn't reach a running engine.
   connected* or *Alex and Sam are connected*, adds *· 3 sessions* when the names don't
   account for every session, and keeps *N active sessions* while no one is named. Both
   follow the existing guard: nothing changes while the menu is open.
+  The name is the controller's own choice, so the app drops control and format characters
+  (a right-to-left override would reorder the line; zero-width ones would show nothing),
+  keeping the joiner inside emoji. When the app stops the engine (the service off, or Quit),
+  it deletes the file, so who was connected isn't kept on disk (review, 2026-11-24).
 - **Tested:** unit tests for the file's shape and the name's cut; the engine's tests and the
   app's build; a one-off check, not committed, that the app's and the engine's code give the
   same key for real loopback, link-local and IPv4-mapped connections and for the IPv6 forms
