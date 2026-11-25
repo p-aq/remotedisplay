@@ -1112,7 +1112,8 @@ class _ClientHomeState extends State<ClientHome>
                           UpdateCheck.releasesPage,
                           color: ui.accentSoft),
                 ),
-                Text('Built on RustDesk · AGPL-3.0',
+                // AGPL-3.0 §5(a): a modified version says so, with a date.
+                Text('Modified since Oct 2026 · built on RustDesk · AGPL-3.0',
                     style: TextStyle(color: ui.muted, fontSize: 12)),
               ],
             ),
@@ -1124,8 +1125,9 @@ class _ClientHomeState extends State<ClientHome>
               runSpacing: 4,
               children: [
                 _aboutLink(ui, 'remotedisplay.app', 'https://remotedisplay.app'),
-                _aboutLink(ui, 'GitHub',
-                    'https://github.com/SamuelRioTz/remotedisplay'),
+                // This version's source (AGPL-3.0 §13), not the original's.
+                _aboutLink(
+                    ui, 'GitHub', 'https://github.com/p-aq/remotedisplay'),
                 _aboutLink(ui, 'info@remotedisplay.app',
                     'mailto:info@remotedisplay.app'),
                 Row(
