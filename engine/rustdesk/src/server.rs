@@ -37,6 +37,8 @@ use crate::ipc::Data;
 pub mod audio_service;
 // remotedisplay: camera and microphone forwarding on the host (device_forward.rs).
 pub mod device_forward;
+// remotedisplay: who is connected, by name, for the server app (session_names.rs).
+pub mod session_names;
 #[cfg(target_os = "windows")]
 pub mod terminal_helper;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

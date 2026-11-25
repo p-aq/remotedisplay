@@ -14,8 +14,8 @@ struct StatusMenu: View {
         if c.serviceRunning, let ts = c.tailscaleIP {
             Text("Tailscale  \(ts):\(String(ServerController.port))")
         }
-        if c.serviceRunning && !c.sessions.isEmpty {
-            Text("\(c.sessions.count) active session\(c.sessions.count == 1 ? "" : "s")")
+        if c.serviceRunning, let line = c.sessionsLine {
+            Text(line)
         }
         if let sender = c.cameraSender {
             Label("Camera from \(sender)", systemImage: "video.fill")

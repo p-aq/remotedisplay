@@ -68,3 +68,36 @@ and editing the TOML doesn't reach a running engine.
   not counted as to-do. Each says *Not available in this build* until the camera
   extension and the virtual mic are bundled; the Camera row checks for the extension
   inside the app.
+
+## Sessions by name (2026-11-22)
+
+- **The file:** the `--server` writes `~/Library/Application Support/remotedisplay-sessions.json`
+  on the same 2 s loop, atomically in the same way: `{"192.168.1.245:37911": "<controller>"}`,
+  an entry for each logged-in connection, and `{}` when no one is connected. The UX audit of
+  2026-11-21 found that the owner couldn't tell who was connected: Active sessions listed
+  each controller as `ip:port`.
+- **The key** is the address in the form the app derives from lsof: IPv4, IPv4-mapped IPv6
+  reduced to IPv4 as the connection's own `try_into_v4` does, and other IPv6 in brackets
+  without a zone. The app now writes plain IPv6 peers that way too (it dropped only the
+  closing bracket), and clears the interface index macOS embeds in a link-local address
+  (lsof prints `fe80::1` on interface 4 as `fe80:4::1`).
+- **The name** is the controller's login name, cut to 64 characters as in the forwarding
+  file, added when the login succeeds. `session_names.rs` keeps it in a guard the
+  connection owns, so it goes when the connection is dropped, however it ends, the way
+  upstream's `AuthedConnID` leaves `AUTHED_CONNS`.
+- **The app** reads the file only while the service runs, and lsof stays the list of
+  sessions: the file only names its peers, so a missing or stale file changes nothing.
+  Active sessions shows the name with the address under it; a peer not in the file (still
+  at the password, or an older engine) shows its address alone. The menu says *Alex is
+  connected* or *Alex and Sam are connected*, adds *· 3 sessions* when the names don't
+  account for every session, and keeps *N active sessions* while no one is named. Both
+  follow the existing guard: nothing changes while the menu is open.
+  The name is the controller's own choice, so the app drops control and format characters
+  (a right-to-left override would reorder the line; zero-width ones would show nothing),
+  keeping the joiner inside emoji. When the app stops the engine (the service off, or Quit),
+  it deletes the file, so who was connected isn't kept on disk (review, 2026-11-24).
+- **Tested:** unit tests for the file's shape and the name's cut; the engine's tests and the
+  app's build; a one-off check, not committed, that the app's and the engine's code give the
+  same key for real loopback, link-local and IPv4-mapped connections and for the IPv6 forms
+  lsof showed on this Mac. Not tested here: a live session, which would put this Mac on the
+  LAN.

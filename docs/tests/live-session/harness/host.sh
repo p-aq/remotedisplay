@@ -28,6 +28,7 @@ OURS=(
   "$HOME/Library/Logs/RemoteDisplay"
   "$HOME/Library/Application Support/remotedisplay-forwarding.json"
   "$HOME/Library/Application Support/remotedisplay-perms.json"
+  "$HOME/Library/Application Support/remotedisplay-sessions.json"
   "$HOME/Library/Saved Application State/$ID.savedState"
   "$HOME/Library/Caches/$ID"
   "$HOME/Library/HTTPStorages/$ID"

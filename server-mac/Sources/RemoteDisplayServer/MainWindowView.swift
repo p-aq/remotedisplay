@@ -260,7 +260,16 @@ struct MainWindowView: View {
                 ForEach(c.sessions, id: \.self) { peer in
                     HStack {
                         Image(systemName: "laptopcomputer.and.arrow.down").foregroundStyle(.green)
-                        Text(peer).font(.system(size: 13, design: .monospaced))
+                        // A peer the engine hasn't named (still at the password, or an older
+                        // engine) shows its address alone.
+                        if let name = c.controllerName(peer) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(name).font(.system(size: 13, weight: .medium))
+                                Text(peer).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Text(peer).font(.system(size: 13, design: .monospaced))
+                        }
                         Spacer()
                         Text("connected").font(.system(size: 11.5)).foregroundStyle(.secondary)
                     }

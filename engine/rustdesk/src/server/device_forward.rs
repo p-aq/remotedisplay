@@ -283,7 +283,7 @@ lazy_static::lazy_static! {
 }
 
 /// The longest controller name shown in the server app's menu.
-const MAX_NAME: usize = 64;
+pub(super) const MAX_NAME: usize = 64;
 
 /// Who is sending what, for the server app (decision 0009): `{"camera": "<controller>"}`
 /// while a controller sends its camera, `{}` otherwise. The `--server` writes it next to

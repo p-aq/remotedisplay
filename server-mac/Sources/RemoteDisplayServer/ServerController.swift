@@ -29,6 +29,10 @@ final class ServerController {
     var lastError: String?
     /// Peers currently connected ("ip:port" remote), via the engine's lsof.
     var sessions: [String] = []
+    /// The controller's name for each peer that has logged in, from
+    /// remotedisplay-sessions.json, which the engine rewrites every 2 s (decision 0009).
+    /// Empty when the service is off. `sessions` stays the list: this only names its peers.
+    var sessionNames: [String: String] = [:]
     /// Whether a permanent password is set (RemoteDisplay.toml → password not empty).
     var passwordSet = false
     /// The owner's switch for camera and microphone forwarding, as the engine reports it
@@ -101,6 +105,38 @@ final class ServerController {
         return "Ready"
     }
 
+    /// The name of the controller at `peer`, on one line; nil until it logs in, or when the
+    /// engine doesn't write the sessions file.
+    func controllerName(_ peer: String) -> String? {
+        // The controller chose it: no control or format characters (a right-to-left override
+        // would reorder the menu's line, zero-width ones would show nothing), except the
+        // joiner inside emoji; whitespace becomes single spaces.
+        let visible = sessionNames[peer]?.unicodeScalars.filter {
+            $0.properties.isWhitespace || $0 == "\u{200D}"
+                || ![.control, .format].contains($0.properties.generalCategory)
+        }
+        let name = visible.map { String(String.UnicodeScalarView($0)) }?
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return name?.unicodeScalars.contains(where: { $0 != "\u{200D}" && $0 != " " }) == true ? name : nil
+    }
+
+    /// The menu's line for the sessions: who is connected, plus the number of sessions when
+    /// the names don't account for them all; only the number while no one is named.
+    var sessionsLine: String? {
+        guard !sessions.isEmpty else { return nil }
+        var names: [String] = []
+        for name in sessions.compactMap(controllerName) where !names.contains(name) { names.append(name) }
+        guard let first = names.first else {
+            return "\(sessions.count) active session\(sessions.count == 1 ? "" : "s")"
+        }
+        let who = switch names.count {
+        case 1: "\(first) is connected"
+        case 2: "\(first) and \(names[1]) are connected"
+        default: "\(first) and \(names.count - 1) others are connected"
+        }
+        return sessions.count > names.count ? "\(who) · \(sessions.count) sessions" : who
+    }
+
     private var timer: Timer?
     /// User-desired state (persisted): if the engine dies or fails to
     /// start (no KeepAlive on the LaunchAgent, on purpose), the app brings
@@ -140,6 +176,9 @@ final class ServerController {
     private var permsPath: String { NSHomeDirectory() + "/Library/Application Support/remotedisplay-perms.json" }
     private var forwardingPath: String {
         NSHomeDirectory() + "/Library/Application Support/remotedisplay-forwarding.json"
+    }
+    private var sessionsPath: String {
+        NSHomeDirectory() + "/Library/Application Support/remotedisplay-sessions.json"
     }
     private var mainConfigPath: String { configDir + "/RemoteDisplay.toml" }
     private var guiDomain: String { "gui/\(getuid())" }
@@ -289,6 +328,8 @@ final class ServerController {
         launchAtLogin = SMAppService.mainApp.status == .enabled
         passwordSet = readPasswordSet()
         sessions = serviceRunning ? readSessions() : []
+        // Like the forwarding file: a file left behind by a stopped engine names no one.
+        sessionNames = serviceRunning ? readSessionNames() : [:]
         cameraExtension.refresh()
         microphoneDriver.refresh()
         refreshCameraFeeder()
@@ -361,6 +402,15 @@ final class ServerController {
         return obj
     }
 
+    /// Who is connected: {"192.168.1.245:37911": "<controller>"}, keyed as `peerAddress`
+    /// writes lsof's peers.
+    private func readSessionNames() -> [String: String] {
+        guard let data = FileManager.default.contents(atPath: sessionsPath),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String]
+        else { return [:] }
+        return obj
+    }
+
     private func processRunning() -> Bool { enginePid() != nil }
 
     /// The engine as launchd runs it: the bundled binary with exactly `--server`.
@@ -383,11 +433,31 @@ final class ServerController {
             guard let arrow = s.range(of: "->") else { continue }
             let local = s[..<arrow.lowerBound]
             guard local.hasSuffix(":\(Self.port)") else { continue }
-            var peer = String(s[arrow.upperBound...])
-            peer = peer.replacingOccurrences(of: "[::ffff:", with: "").replacingOccurrences(of: "]", with: "")
+            let peer = Self.peerAddress(String(s[arrow.upperBound...]))
             if !peers.contains(peer) { peers.append(peer) }
         }
         return peers
+    }
+
+    /// A peer as lsof prints it, in the form the engine's remotedisplay-sessions.json names
+    /// it: "192.168.1.245:37911" for IPv4 and IPv4-mapped IPv6 (as the engine's
+    /// `try_into_v4`), "[fd7a:115c:a1e0::5]:41000" for other IPv6. Link-local addresses lose
+    /// the scope macOS embeds in them: lsof prints fe80::1 on interface 4 as fe80:4::1.
+    static func peerAddress(_ peer: String) -> String {
+        guard peer.hasPrefix("["), let close = peer.lastIndex(of: "]") else { return peer }
+        let port = peer[peer.index(after: close)...]
+        var raw = in6_addr()
+        guard inet_pton(AF_INET6, String(peer[peer.index(after: peer.startIndex)..<close]), &raw) == 1
+        else { return peer }
+        var b = withUnsafeBytes(of: raw) { Array($0) }
+        let loopback = b == [UInt8](repeating: 0, count: 15) + [1]
+        if !loopback, b[..<10].allSatisfy({ $0 == 0 }), b[10] == b[11], b[10] == 0 || b[10] == 0xff {
+            return "\(b[12]).\(b[13]).\(b[14]).\(b[15])\(port)"
+        }
+        if b[0] == 0xfe, b[1] & 0xc0 == 0x80 { b[2] = 0; b[3] = 0 }
+        var text = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+        guard inet_ntop(AF_INET6, b, &text, socklen_t(text.count)) != nil else { return peer }
+        return "[\(String(cString: text))]\(port)"
     }
 
     /// `password = '...'` non-empty in RemoteDisplay.toml (the engine stores it encrypted).
@@ -559,6 +629,7 @@ final class ServerController {
             runLaunchctl(["bootout", "\(guiDomain)/\(Self.agentLabel)"])
             pkillEngine() // engine (if launchd did not have it) and its helpers
             try? FileManager.default.removeItem(atPath: agentPlistPath)
+            forgetSessions()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.refresh() }
     }
@@ -590,6 +661,13 @@ final class ServerController {
         }
         pkillHelpers()
         trace("quit: engine \(processRunning() ? "STILL RUNNING" : "stopped") after \(waited / 4) s")
+        if !processRunning() { forgetSessions() }
+    }
+
+    /// Who was connected stays in the engine's last remotedisplay-sessions.json once it
+    /// stops; a stopped engine has no sessions, so the file goes with it.
+    private func forgetSessions() {
+        try? FileManager.default.removeItem(atPath: sessionsPath)
     }
 
     private var quitting = false

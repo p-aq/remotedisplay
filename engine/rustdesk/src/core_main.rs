@@ -454,6 +454,17 @@ pub fn core_main() -> Option<CoreMainAction> {
                     if std::fs::write(&tmp, &body).is_ok() {
                         let _ = std::fs::rename(&tmp, &path);
                     }
+                    // remotedisplay: who is connected, by name, for the app's Active
+                    // sessions and menu (decision 0009).
+                    let path = format!(
+                        "{}/Library/Application Support/remotedisplay-sessions.json",
+                        home
+                    );
+                    let tmp = format!("{}.tmp", path);
+                    let body = crate::server::session_names::sessions_json();
+                    if std::fs::write(&tmp, &body).is_ok() {
+                        let _ = std::fs::rename(&tmp, &path);
+                    }
                     std::thread::sleep(std::time::Duration::from_secs(2));
                 });
                 // remotedisplay: ALL input on macOS (mouse/keyboard) is dispatched to
