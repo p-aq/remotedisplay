@@ -327,9 +327,10 @@ struct MainWindowView: View {
             HStack {
                 Text("Modified")
                 Spacer()
-                Text("A modified Remote Display, changed since October 2026").foregroundStyle(.secondary)
+                Text("A modified Remote Display (p-aq), since October 2026").foregroundStyle(.secondary)
             }
-            // This version's source (AGPL-3.0 §13), not the original's.
+            // This version's source, not the original's (AGPL-3.0 §6 for the host's own user;
+            // controller users get it from the controller's About, #92).
             HStack {
                 Text("Source code")
                 Spacer()

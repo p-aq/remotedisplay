@@ -8,6 +8,11 @@
   Remote desktop for your Mac from Windows, iPad or another Mac — <b>direct, discovered, no accounts</b>.
 </p>
 
+<p align="center"><sub>
+  This repository is a modified version of Remote Display, changed since 23 October 2026 by the
+  p-aq/remotedisplay fork (camera and microphone forwarding); see <a href="NOTICE.md">NOTICE.md</a>.
+</sub></p>
+
 <p align="center">
   <a href="https://remotedisplay.app">remotedisplay.app</a> ·
   <a href="https://github.com/SamuelRioTz/remotedisplay/releases/latest">Downloads</a> ·
