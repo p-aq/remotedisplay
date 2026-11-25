@@ -18,6 +18,10 @@
 
 - The extension switches its source to the placeholder card, at a low frame rate, after
   500 ms without a sink buffer.
+
+  **Since 2026-11-21** the card says *Waiting for the camera* under the device's name, not
+  *No controller connected*: meeting guests see it, and it also shows while a controller is
+  connected with its camera off.
 - It consumes the sink whenever the sink is started, whether or not any app is reading,
   and discards what nobody reads.
 - Everything between feeder and extension travels through the sink stream (plus custom

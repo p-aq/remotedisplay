@@ -11,6 +11,7 @@ struct MainWindowView: View {
     @State private var passwordOK = false
     @State private var saving = false
     @State private var copied: String?
+    @State private var confirmRemove = false
 
     var body: some View {
         Form {
@@ -102,7 +103,7 @@ struct MainWindowView: View {
             }
         } footer: {
             if !c.screenOK || !c.accessibilityOK {
-                Text("Grant… asks macOS; choose “Open System Settings” in its dialog and turn on Remote Display Server. If no dialog appears, tap Grant… again to open the Settings panel. The engine restarts automatically once granted.")
+                Text("Grant… asks macOS; choose “Open System Settings” in its dialog and turn on Remote Display Server. If no dialog appears, click Grant… again to open the Settings panel. Once it's granted, the engine restarts: anyone connected drops for a moment and reconnects.")
             }
         }
     }
@@ -119,19 +120,27 @@ struct MainWindowView: View {
         case .notInstalled: ("Lets a controller's camera appear here as Remote Display Camera",
                              "Install…", { c.installCamera() })
         case .working: ("Waiting for macOS…", nil, {})
-        case .awaitingApproval: ("An admin must allow it in System Settings › \(approval)",
+        // In the live session the same approval also turned on OBS Virtual Camera, waiting in that list.
+        case .awaitingApproval: ("An admin must turn on only Remote Display Camera in System Settings › \(approval)",
                                  "Open Settings…", { Permissions.openCameraExtensionSettings() })
         // Updated with the app: apps that were using it lost it (decision 0033, option A).
         case .installed where c.cameraUpdated:
             ("Updated · reopen apps that were using Remote Display Camera, such as FaceTime, Zoom or Photo Booth",
              "OK", { c.dismissCameraUpdated() })
+        case .installed where !c.deviceForwardOn: sharingOffRow
         case .installed: ("Installed · choose Remote Display Camera in FaceTime, Zoom or any app", nil, {})
         case .removing: ("Removed · finishes when this Mac restarts", nil, {})
         }
-        let other = c.otherCameraFeeder.map { "Another program, \($0), is feeding Remote Display Camera" }
-        return optionalRow(title: "Camera", detail: c.cameraError ?? other ?? row.detail,
-                           ok: c.cameraState == .installed && other == nil,
-                           failed: c.cameraError != nil || other != nil, cta: row.cta, action: row.action)
+        let other = c.otherCameraFeeder.map {
+            "Another program, \($0), is feeding Remote Display Camera · quit it to free the camera"
+        }
+        let warning = c.cameraError ?? other
+        let button = Self.button(row, pastError: c.cameraError, clear: { c.cameraError = nil },
+                                 // Quitting the other program clears its warning; no button goes with it.
+                                 hidden: c.cameraState == .installed && c.cameraError == nil && other != nil)
+        return optionalRow(title: "Camera", detail: warning ?? row.detail,
+                           ok: c.cameraState == .installed && c.deviceForwardOn && warning == nil,
+                           failed: warning != nil, cta: button.cta, action: button.action)
     }
 
     /// Remote Display Microphone's state, with what to do next (spec, User experience).
@@ -142,11 +151,34 @@ struct MainWindowView: View {
                              "Install…", { c.installMicrophone() })
         case .outdated: ("Another version is installed", "Update…", { c.installMicrophone() })
         case .working: ("Waiting for an admin…", nil, {})
+        case .installed where !c.deviceForwardOn: sharingOffRow
         case .installed: ("Installed · choose Remote Display Microphone in FaceTime, Zoom or any app", nil, {})
         }
-        return optionalRow(title: "Microphone", detail: c.microphoneError ?? row.detail,
-                           ok: c.microphoneState == .installed, failed: c.microphoneError != nil,
-                           cta: row.cta, action: row.action)
+        let error = c.microphoneError
+        let button = Self.button(row, pastError: error, clear: { c.microphoneError = nil }, hidden: false)
+        return optionalRow(title: "Microphone", detail: error ?? row.detail,
+                           ok: c.microphoneState == .installed && c.deviceForwardOn && error == nil,
+                           failed: error != nil, cta: button.cta, action: button.action)
+    }
+
+    /// A row's button while it shows why a past request failed: the row's own button (OK,
+    /// Turn On, Install…), which also clears the message, or OK to clear it when the row has
+    /// none. The message would otherwise stay until the state changes, for the microphone
+    /// until the next Install or Remove.
+    private static func button(_ row: (detail: String, cta: String?, action: () -> Void),
+                               pastError: String?, clear: @escaping () -> Void,
+                               hidden: Bool) -> (cta: String?, action: () -> Void) {
+        if hidden { return (nil, {}) }
+        guard pastError != nil else { return (row.cta, row.action) }
+        guard let cta = row.cta else { return ("OK", clear) }
+        return (cta, { clear(); row.action() })
+    }
+
+    /// An installed camera or microphone gets nothing from controllers while the owner's
+    /// switch is off (decision 0009), so the row says so and turns it on as Settings' switch
+    /// does, which needs the service running.
+    private var sharingOffRow: (detail: String, cta: String?, action: () -> Void) {
+        ("Installed · turn on sharing to use it", c.serviceRunning ? "Turn On" : nil, { c.setDeviceForward(true) })
     }
 
     private func optionalRow(title: String, detail: String, ok: Bool = false, failed: Bool = false,
@@ -299,11 +331,26 @@ struct MainWindowView: View {
             let camera = [.installed, .awaitingApproval].contains(c.cameraState)
             let microphone = [.installed, .outdated].contains(c.microphoneState)
             if camera || microphone {
+                let devices = camera && microphone ? "Remote Display Camera and Microphone"
+                    : camera ? "Remote Display Camera" : "Remote Display Microphone"
                 HStack {
-                    Text(camera && microphone ? "Remote Display Camera and Microphone"
-                         : camera ? "Remote Display Camera" : "Remote Display Microphone")
+                    Text(devices)
                     Spacer()
-                    Button("Remove Camera and Microphone") { c.removeCameraAndMicrophone() }.controlSize(.small)
+                    Button("Remove Camera and Microphone") { confirmRemove = true }.controlSize(.small)
+                }
+                .confirmationDialog("Remove \(devices)?", isPresented: $confirmRemove, titleVisibility: .visible) {
+                    Button("Remove", role: .destructive) { c.removeCameraAndMicrophone() }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    // A camera still waiting for approval isn't in any app yet, and macOS may
+                    // remove it at once; an approved one may finish only at the next restart.
+                    let inUse = c.cameraState == .installed
+                    Text(camera && microphone
+                         ? (inUse ? "Apps that use them, such as FaceTime or Zoom, lose them. The camera may finish uninstalling only when this Mac restarts."
+                                  : "Apps that use the microphone, such as FaceTime or Zoom, lose it.")
+                         : camera ? (inUse ? "Apps that use it, such as FaceTime or Zoom, lose it. It may finish uninstalling only when this Mac restarts."
+                                           : "It's still waiting for approval, so no app uses it yet.")
+                         : "Apps that use it, such as FaceTime or Zoom, lose it.")
                 }
             }
             if let err = c.lastError {

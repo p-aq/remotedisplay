@@ -170,7 +170,8 @@ final class CameraDevice: NSObject, CMIOExtensionDeviceSource {
             ctx.setFillColor(gray: 40.0 / 255, alpha: 1)
             ctx.fill(CGRect(x: 0, y: 0, width: ctx.width, height: ctx.height))
             drawCentredText(ctx, kDeviceName, y: CGFloat(ctx.height) / 2 + 10, size: 56, gray: 230.0 / 255)
-            drawCentredText(ctx, "No controller connected", y: CGFloat(ctx.height) / 2 - 60, size: 32,
+            // Meeting guests see it, also while a controller is connected with its camera off.
+            drawCentredText(ctx, "Waiting for the camera", y: CGFloat(ctx.height) / 2 - 60, size: 32,
                             gray: 170.0 / 255)
         }
         canvas.fillChroma(cb: 128, cr: 128)
