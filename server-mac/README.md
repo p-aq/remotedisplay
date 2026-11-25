@@ -91,6 +91,8 @@ Remote Display Server.app/Contents/
 ├── MacOS/
 │   ├── RemoteDisplayServer   ← SwiftUI UI (MenuBarExtra)
 │   └── remotedisplayd        ← Rust engine (cargo, no flutter) = the `rustdesk` binary
+│                               here, so the app's Accessibility grant covers it; it opens the
+│                               app when macOS sends the app's open to it (decision 0034)
 └── Library/
     ├── SystemExtensions/
     │   └── app.remotedisplay.server.camera.systemextension

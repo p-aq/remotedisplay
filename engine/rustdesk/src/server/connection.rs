@@ -187,6 +187,10 @@ async fn login_deadline(authorized: bool, started: Instant) {
 
 // remotedisplay: the host plays a controller's audio only during an accepted call.
 mod audio_gate;
+// remotedisplay: whether a Mac host can share its screen and be controlled, for the
+// login response (decision 0028).
+#[cfg(any(test, target_os = "macos"))]
+mod host_setup;
 
 lazy_static::lazy_static! {
     // remotedisplay: last accepted video refresh per display (-1 = all), see refresh_video_display.
@@ -2093,6 +2097,10 @@ impl Connection {
             "rd_host_sound".into(),
             json!(super::audio_service::host_sound_status()),
         );
+        // remotedisplay: and whether it can share its screen and be controlled, so the
+        // controller can say why no picture comes or its input goes nowhere.
+        #[cfg(target_os = "macos")]
+        platform_additions.extend(host_setup::status());
 
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         if !platform_additions.is_empty() {

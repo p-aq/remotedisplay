@@ -492,3 +492,71 @@ class DiscoveryTally {
   }
   return (silentScans: t.silent ? silentScans + 1 : 0, lastRun: t.run);
 }
+
+// ── macOS's Local Network control ───────────────────────────────────────────
+
+/// Whether System Settings › Privacy & Security › Local Network (macOS 15 and
+/// later) lets this app on the local network. Without it, discovery and the
+/// port probes find nothing there, and the home would only say there are no
+/// computers (UX audit of 2026-11-21, item 5). The macOS Runner tells by
+/// advertising a throwaway Bonjour service and browsing it back, as the server
+/// app does (`client/macos/Runner/MainFlutterWindow.swift`).
+enum LocalNetworkAccess {
+  /// No answer: not macOS, no channel, an error. Changes nothing.
+  unknown,
+  allowed,
+  denied;
+
+  /// The Runner's answer, "allowed" or "denied"; anything else is unknown.
+  static LocalNetworkAccess parse(Object? answer) => switch (answer) {
+        'allowed' => allowed,
+        'denied' => denied,
+        _ => unknown,
+      };
+}
+
+/// When the home asks the Runner: never twice at once, and at most once per
+/// scan round.
+class LocalNetworkCheck {
+  bool _asked = false;
+  bool _running = false;
+
+  /// A scan round began: it may ask once.
+  void newRound() => _asked = false;
+
+  /// Whether to ask now; if so, this round has asked.
+  bool start() {
+    if (_running || _asked) return false;
+    _running = _asked = true;
+    return true;
+  }
+
+  /// The answer came, or none will.
+  void done() => _running = false;
+}
+
+/// What the home's card says while no computer answers from this network:
+/// - the app isn't allowed on the local network ([access] denied): that, scan
+///   or no scan, since nothing can be found there;
+/// - [settling], a scan running or an address without a first verdict: the
+///   list is still filling up;
+/// - [unreachable], known computers that don't answer: that;
+/// - else where the first one comes from.
+String emptyHomeText(LocalNetworkAccess access,
+    {required bool settling, required bool unreachable}) {
+  if (access == LocalNetworkAccess.denied) {
+    return "Remote Display isn't allowed on your local network yet, so it can't find your computers.";
+  }
+  if (settling) return 'Looking for computers on your network…';
+  if (unreachable) return 'No computers answer from this network right now.';
+  return 'No computers yet. Start Remote Display Server on the Mac (same network, or Tailscale on both) or enter its address below.';
+}
+
+/// The muted line under the cards when some computers do show, over Tailscale
+/// say, while the app isn't allowed on the local network; null otherwise (with
+/// nothing to show, the card says it).
+String? localNetworkNote(LocalNetworkAccess access,
+        {required bool computersShown}) =>
+    access == LocalNetworkAccess.denied && computersShown
+        ? "Remote Display isn't allowed on your local network yet, so it can't find computers there."
+        : null;

@@ -47,6 +47,9 @@
   menu asks first, as it does for the camera. `macos_mic_capture.mm` reads and requests
   the access. The menu's existing `main_get_capture_permission` and
   `main_request_capture_permission` now answer for the microphone too.
+  **Since 2026-11-21** macOS's prompt says what it's for, as the camera's does: *"Send
+  your microphone to the Mac you control, as Remote Display Microphone, when you turn
+  it on in the Devices menu."* It still had upstream RustDesk's text.
 - **The forward follows the camera's rules.**
   - It sends `DeviceForwardRequest{MICROPHONE}` naming the input, and waits up to 10 s
     for the answer.

@@ -36,12 +36,19 @@
   - otherwise off, with why the last forward stopped.
   A picker lists the inputs when there's more than one, and the choice is kept for next
   time, like the camera's.
+  **Since 2026-11-21** picking a camera or an input while it's off opens the menu again
+  with the pick, so turning it on is the next tap; the menu used to close.
 - **Access.** Turning the microphone on asks macOS first, if it hasn't been asked. The
   forward starts only once allowed (the capture refuses otherwise).
 - **The hint.** While the microphone is on and *Play the Mac's sound here* is on, the row
   says "Use headphones, or the call hears its own echo". It stays until voice processing
   is measured and either replaces it or isn't enough.
+  **Since 2026-11-21** it reads *"If the call hears itself, use headphones at a low
+  volume"*, and the status line over the session shows it once a session, when the
+  microphone and the host's sound are both on (decision 0018).
 - **The Devices button** is filled while the camera or the microphone goes to the host.
+  **Since 2026-11-22** a badge beside the pill says so too, at full opacity while the
+  pill is dimmed or collapsed (decision 0018).
 
 ## Consequences
 

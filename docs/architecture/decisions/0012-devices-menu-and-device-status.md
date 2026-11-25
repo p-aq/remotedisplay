@@ -16,12 +16,36 @@ already appears under Input › Session, and would duplicate "Play the Mac's sou
 
 - The Devices menu is always shown; its sound switch works with 1.0.x hosts. Camera and
   mic rows are disabled with a reason when unavailable.
+  **Since 2026-11-20** the reasons name the host by the hostname it reports, its first
+  label (*"Mac-mini hasn't turned on camera sharing"*), or *"the computer you're
+  controlling"* when it reports none. They said *"This Mac"*, which, read on the
+  controller, sounded like the controller itself (camera session, 2026-11-19).
+  The engine sends the name in lower case, so a sentence that starts with it
+  capitalizes its first letter; `localhost` (the engine's fallback) and an address
+  count as no name (review, 2026-11-24).
+  **Since 2026-11-21** they say where to fix it: *"Turn on camera sharing in Remote
+  Display Server's Settings on mac-mini"*, *"Finish setting up Remote Display Camera in
+  Remote Display Server's Setup on mac-mini"*, and the same for the microphone (UX audit,
+  2026-11-21). Hosts send `not-installed` also for a camera or microphone that is
+  installed but waiting for an admin, so the text points at Setup, whose row says which;
+  *"An admin needs to allow …"* waits for hosts that send `not-approved` (review,
+  2026-11-24).
 - `rd_camera_sink` and `rd_mic_sink` are status strings: `ready`, `not-installed`,
   `not-approved`, `not-allowed`.
   **Since 2026-11-20** a refusing `DeviceForwardResponse` can also say `sink-failed`: the
   device is there, but its sink didn't start (the camera extension or the microphone driver
   refused it). Before, the host said `not-installed`, and the controller told the user to
   install a device that was installed (camera session, 2026-11-19).
+- **Since 2026-11-22** the controller also shows two status strings a Mac host's login
+  response carries since PR #77, `rd_host_screen` and `rd_host_control`, "ready" or
+  "unavailable" like `rd_host_sound` ([decision 0028](0028-host-sound-status.md)).
+  Without Screen Recording, a box takes the place of *Connected, waiting for image...*:
+  *"Mac-mini can't share its screen"*, *"Turn on Screen Recording for Remote Display
+  Server on Mac-mini"*, and Disconnect. Without Accessibility, the status line says
+  *"Clicks and keys won't reach Mac-mini · turn on Accessibility for Remote Display
+  Server there"* once a session, when the picture shows (decision 0018). They come at
+  login only, with no `DeviceStatus`; a host without them changes nothing (UX audit of
+  2026-11-21, item 1).
 - A new `DeviceStatus` message (field 104, now 204: [decision 0017](0017-reserved-message-range-200.md)) updates a status mid-session.
 - Input › Session stops showing the engine's Mute toggle.
 - FFI adds device lists with hot-plug events and the controller's own permission state;
