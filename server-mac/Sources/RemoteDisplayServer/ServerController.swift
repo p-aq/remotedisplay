@@ -190,6 +190,9 @@ final class ServerController {
                 if self.cameraState != state { self.cameraState = state }
             }
         }
+        cameraExtension.onFailure = { [weak self] line in
+            DispatchQueue.main.async { self?.trace(line) }
+        }
         cameraExtension.onReplaced = { [weak self] in
             self?.whenMenuClosed {
                 guard let self else { return }

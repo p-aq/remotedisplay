@@ -74,7 +74,12 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
         case .update: "update"
         case .remove: "remove"
         }
-        let general = "macOS couldn't \(verb) Remote Display Camera. Restart this Mac and try again."
+        // The app asks for an update by itself, once a launch: reopening it asks again.
+        let again = action == .update
+            ? "Quit and reopen Remote Display Server to try again" : "Try again"
+        let general = action == .update
+            ? "macOS couldn't update Remote Display Camera. Quit and reopen Remote Display Server to try again, or restart this Mac."
+            : "macOS couldn't \(verb) Remote Display Camera. Restart this Mac and try again."
         let e = error as NSError
         guard e.domain == OSSystemExtensionError.errorDomain,
               let code = OSSystemExtensionError.Code(rawValue: e.code) else { return general }
@@ -94,9 +99,11 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
         case .forbiddenBySystemPolicy:
             return "This Mac's settings don't allow Remote Display Camera. If an organization manages this Mac, ask its administrator."
         case .requestCanceled:
-            return "Cancelled, so nothing changed. Try again when you're ready."
+            return action == .update
+                ? "The update was cancelled, so nothing changed. \(again)."
+                : "Cancelled, so nothing changed. Try again when you're ready."
         case .authorizationRequired:
-            return "This needs an admin's name and password. Try again and enter them when macOS asks."
+            return "This needs an admin's name and password. \(again) and enter them when macOS asks."
         default:
             return general
         }
@@ -105,6 +112,9 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
     /// Each new state on the main queue, with a message when an install, update or removal
     /// fails.
     var onChange: (State, String?) -> Void = { _, _ in }
+    /// macOS's own reason for a refused request, for the app's log (`trace`), which the
+    /// window's plain sentence leaves out.
+    var onFailure: (String) -> Void = { _ in }
     /// On the main queue once macOS has replaced another version with the bundled one.
     var onReplaced: () -> Void = {}
     /// The request under way replaces another version.
@@ -222,7 +232,9 @@ final class CameraExtension: NSObject, OSSystemExtensionRequestDelegate {
         guard request === pending else { checking = false; return }
         pending = nil
         let e = error as NSError
-        NSLog("[remotedisplay] camera extension request failed: %@ (%@ %ld)", e.localizedDescription, e.domain, e.code)
+        let line = "camera extension request failed: \(e.localizedDescription) (\(e.domain) \(e.code))"
+        NSLog("[remotedisplay] %@", line)
+        onFailure(line)
         // Back to what it was, with what to do; the state check then says what macOS has.
         report(beforeRequest, Self.failureMessage(e, pendingAction))
         refresh()

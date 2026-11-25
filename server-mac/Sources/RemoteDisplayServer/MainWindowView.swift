@@ -135,11 +135,12 @@ struct MainWindowView: View {
             "Another program, \($0), is feeding Remote Display Camera · quit it to free the camera"
         }
         let warning = c.cameraError ?? other
-        // Once installed, a button goes with the row's own words (OK, Turn On), so not with a warning.
+        let button = Self.button(row, pastError: c.cameraError, clear: { c.cameraError = nil },
+                                 // Quitting the other program clears its warning; no button goes with it.
+                                 hidden: c.cameraState == .installed && c.cameraError == nil && other != nil)
         return optionalRow(title: "Camera", detail: warning ?? row.detail,
-                           ok: c.cameraState == .installed && c.deviceForwardOn && other == nil,
-                           failed: warning != nil,
-                           cta: c.cameraState == .installed && warning != nil ? nil : row.cta, action: row.action)
+                           ok: c.cameraState == .installed && c.deviceForwardOn && warning == nil,
+                           failed: warning != nil, cta: button.cta, action: button.action)
     }
 
     /// Remote Display Microphone's state, with what to do next (spec, User experience).
@@ -154,9 +155,23 @@ struct MainWindowView: View {
         case .installed: ("Installed · choose Remote Display Microphone in FaceTime, Zoom or any app", nil, {})
         }
         let error = c.microphoneError
+        let button = Self.button(row, pastError: error, clear: { c.microphoneError = nil }, hidden: false)
         return optionalRow(title: "Microphone", detail: error ?? row.detail,
-                           ok: c.microphoneState == .installed && c.deviceForwardOn, failed: error != nil,
-                           cta: c.microphoneState == .installed && error != nil ? nil : row.cta, action: row.action)
+                           ok: c.microphoneState == .installed && c.deviceForwardOn && error == nil,
+                           failed: error != nil, cta: button.cta, action: button.action)
+    }
+
+    /// A row's button while it shows why a past request failed: the row's own button (OK,
+    /// Turn On, Install…), which also clears the message, or OK to clear it when the row has
+    /// none. The message would otherwise stay until the state changes, for the microphone
+    /// until the next Install or Remove.
+    private static func button(_ row: (detail: String, cta: String?, action: () -> Void),
+                               pastError: String?, clear: @escaping () -> Void,
+                               hidden: Bool) -> (cta: String?, action: () -> Void) {
+        if hidden { return (nil, {}) }
+        guard pastError != nil else { return (row.cta, row.action) }
+        guard let cta = row.cta else { return ("OK", clear) }
+        return (cta, { clear(); row.action() })
     }
 
     /// An installed camera or microphone gets nothing from controllers while the owner's
@@ -327,9 +342,14 @@ struct MainWindowView: View {
                     Button("Remove", role: .destructive) { c.removeCameraAndMicrophone() }
                     Button("Cancel", role: .cancel) {}
                 } message: {
+                    // A camera still waiting for approval isn't in any app yet, and macOS may
+                    // remove it at once; an approved one may finish only at the next restart.
+                    let inUse = c.cameraState == .installed
                     Text(camera && microphone
-                         ? "Apps that use them, such as FaceTime or Zoom, lose them. The camera finishes uninstalling when this Mac restarts."
-                         : camera ? "Apps that use it, such as FaceTime or Zoom, lose it. It finishes uninstalling when this Mac restarts."
+                         ? (inUse ? "Apps that use them, such as FaceTime or Zoom, lose them. The camera may finish uninstalling only when this Mac restarts."
+                                  : "Apps that use the microphone, such as FaceTime or Zoom, lose it.")
+                         : camera ? (inUse ? "Apps that use it, such as FaceTime or Zoom, lose it. It may finish uninstalling only when this Mac restarts."
+                                           : "It's still waiting for approval, so no app uses it yet.")
                          : "Apps that use it, such as FaceTime or Zoom, lose it.")
                 }
             }
