@@ -31,12 +31,49 @@ final class ServerController {
     var sessions: [String] = []
     /// Whether a permanent password is set (RemoteDisplay.toml → password not empty).
     var passwordSet = false
+    /// The owner's switch for camera and microphone forwarding, as the engine reports it
+    /// in remotedisplay-perms.json (decision 0009). Off by default.
+    var deviceForwardOn = false
+    /// What the owner just chose, shown until the engine's file (rewritten every 2 s)
+    /// agrees, so the toggle doesn't flick back. After `until` the engine's value wins.
+    private var pendingDeviceForward: (value: Bool, until: Date)?
+    /// The controller sending its camera, from remotedisplay-forwarding.json, which the
+    /// engine rewrites every 2 s (decision 0009). Nil when no one is, or the service is off.
+    var cameraSender: String?
+    /// The same for the microphone.
+    var microphoneSender: String?
+    /// Remote Display Camera, the camera extension: bundled only in builds signed with its
+    /// provisioning profiles (decision 0019). Setup's Camera row shows its state.
+    var cameraState: CameraExtension.State = CameraExtension.bundled ? .notInstalled : .notBundled
+    /// Why the last install or removal failed, until the next one.
+    var cameraError: String?
+    /// The app replaced the camera extension with its own version (an app update): apps that
+    /// were using Remote Display Camera have to be reopened to see it again, so Setup's Camera
+    /// row and the menu say so until the owner dismisses it. Kept across launches.
+    var cameraUpdated = UserDefaults.standard.bool(forKey: ServerController.cameraUpdatedKey)
+    static let cameraUpdatedKey = "cameraExtensionUpdated"
+    /// The program feeding Remote Display Camera when it isn't the engine: the extension
+    /// lets any program feed it, one at a time (decision 0033, option 2). Nil otherwise.
+    var otherCameraFeeder: String?
+    /// When Remote Display Camera last became installed in this launch. The app leaves
+    /// CoreMediaIO alone until it has been for a few seconds, so its first lookup sees the
+    /// device: a process already using CoreMediaIO may never get one that appears later
+    /// (camera session, 2026-11-21).
+    @ObservationIgnored private var cameraInstalledAt: Date?
+    @ObservationIgnored private let cameraExtension = CameraExtension()
+    /// Remote Display Microphone, the virtual mic's driver, which every build bundles
+    /// (decision 0027). Setup's Microphone row shows its state.
+    var microphoneState: MicrophoneDriver.State = .notInstalled
+    /// Why the last install or removal failed, until the next one.
+    var microphoneError: String?
+    @ObservationIgnored private let microphoneDriver = MicrophoneDriver()
     var engineVersion = "—"
     /// Newer release published on GitHub (e.g. "1.0.3"), or nil. Checked at launch and
     /// every 6 hours; the update itself stays manual (the link opens the releases page).
+    /// This fork's releases: the original project's don't have the camera and microphone.
     var updateAvailable: String?
-    static let releasesPage = URL(string: "https://github.com/SamuelRioTz/remotedisplay/releases/latest")!
-    private static let releasesAPI = URL(string: "https://api.github.com/repos/SamuelRioTz/remotedisplay/releases/latest")!
+    static let releasesPage = URL(string: "https://github.com/p-aq/remotedisplay/releases/latest")!
+    private static let releasesAPI = URL(string: "https://api.github.com/repos/p-aq/remotedisplay/releases/latest")!
     private var updateTimer: Timer?
     var appVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0" }
     var appBuild: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "" }
@@ -101,6 +138,9 @@ final class ServerController {
     private var configDir: String { NSHomeDirectory() + "/Library/Preferences/RemoteDisplay" }
     private var configPath: String { configDir + "/RemoteDisplay2.toml" }
     private var permsPath: String { NSHomeDirectory() + "/Library/Application Support/remotedisplay-perms.json" }
+    private var forwardingPath: String {
+        NSHomeDirectory() + "/Library/Application Support/remotedisplay-forwarding.json"
+    }
     private var mainConfigPath: String { configDir + "/RemoteDisplay.toml" }
     private var guiDomain: String { "gui/\(getuid())" }
 
@@ -126,9 +166,45 @@ final class ServerController {
     // MARK: - Lifecycle
 
     func start() {
+        // Read at launch, while the file on disk is still the one running: root's driver check pins this team.
+        NSLog("[remotedisplay] own team: %@", DriverInstallCommand.ownTeam ?? "none (ad hoc)")
         engineProblem = Self.checkEngine(at: enginePath)
         if let problem = engineProblem { NSLog("[remotedisplay] engine problem: %@", problem) }
         engineVersion = readEngineVersion()
+        cameraExtension.onChange = { [weak self] state, error in
+            // macOS answers whenever it likes, possibly while the menu is open (menuOpenSince).
+            self?.whenMenuClosed {
+                guard let self else { return }
+                if let error {
+                    self.cameraError = error
+                } else if self.cameraState != state, state != .working {
+                    // macOS moved on from the failure, as when an admin allows it later.
+                    self.cameraError = nil
+                }
+                // Allowed by an admin while the engine ran: a new device, as after an update.
+                if self.cameraState == .awaitingApproval && state == .installed {
+                    self.restartEngineForNewCamera("allowed")
+                }
+                if state == .installed, self.cameraState != .installed { self.cameraInstalledAt = Date() }
+                if state != .installed { self.cameraInstalledAt = nil }
+                if self.cameraState != state { self.cameraState = state }
+            }
+        }
+        cameraExtension.onReplaced = { [weak self] in
+            self?.whenMenuClosed {
+                guard let self else { return }
+                self.cameraUpdated = true
+                UserDefaults.standard.set(true, forKey: Self.cameraUpdatedKey)
+                self.restartEngineForNewCamera("updated")
+            }
+        }
+        microphoneDriver.onChange = { [weak self] state, error in
+            self?.whenMenuClosed {
+                guard let self else { return }
+                if self.microphoneState != state { self.microphoneState = state }
+                if let error { self.microphoneError = error }
+            }
+        }
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.refresh()
@@ -178,13 +254,23 @@ final class ServerController {
         // so a 2s connect-probe kept the Mac awake forever and churned the engine's
         // connection handler (`Input thread exited` every 2s).
         serviceRunning = processRunning()
-        if let (s, a) = readEnginePerms() {
+        if let (s, a, f) = readEnginePerms() {
             screenOK = s
             accessibilityOK = a
+            if let p = pendingDeviceForward, p.value != f, Date() < p.until {
+                deviceForwardOn = p.value
+            } else {
+                pendingDeviceForward = nil
+                deviceForwardOn = f
+            }
         } else {
             screenOK = Permissions.screenRecording()
             accessibilityOK = Permissions.accessibility()
         }
+        // A file left behind by a stopped engine names no one.
+        let forwarding = serviceRunning ? readForwarding() : [:]
+        cameraSender = forwarding["camera"]
+        microphoneSender = forwarding["microphone"]
         // TCC caches Screen Recording per process: neither the already-running engine
         // nor this app sees a permission just granted. While something's missing, ask a
         // FRESH process (`remotedisplayd --check-perms`); if it's already granted,
@@ -203,6 +289,9 @@ final class ServerController {
         launchAtLogin = SMAppService.mainApp.status == .enabled
         passwordSet = readPasswordSet()
         sessions = serviceRunning ? readSessions() : []
+        cameraExtension.refresh()
+        microphoneDriver.refresh()
+        refreshCameraFeeder()
 
         // If a permission flipped from NO to YES, restart the engine so it starts with
         // the permission already in effect.
@@ -216,6 +305,21 @@ final class ServerController {
         checkLocalNetwork()
         ensureDesiredState()
         firstRefresh = false
+    }
+
+    /// Asks Remote Display Camera who feeds it, once it has been installed for 5 s
+    /// (CoreMediaIO is left alone before that, see `cameraInstalledAt`), and names the
+    /// program when it isn't the engine.
+    private func refreshCameraFeeder() {
+        var other: String?
+        if cameraState == .installed, let since = cameraInstalledAt, Date().timeIntervalSince(since) >= 5,
+           let pid = CameraFeeder.pid(), pid != enginePid() {
+            other = CameraFeeder.programName(pid)
+        }
+        if other != otherCameraFeeder {
+            NSLog("[remotedisplay] camera feeder other than the engine: %@", other ?? "none")
+            otherCameraFeeder = other
+        }
     }
 
     /// Local-network access is only meaningful while the engine is up (it does the
@@ -241,11 +345,20 @@ final class ServerController {
         }
     }
 
-    private func readEnginePerms() -> (screen: Bool, accessibility: Bool)? {
+    private func readEnginePerms() -> (screen: Bool, accessibility: Bool, deviceForward: Bool)? {
         guard let data = FileManager.default.contents(atPath: permsPath),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Bool]
         else { return nil }
-        return (obj["screen"] ?? false, obj["accessibility"] ?? false)
+        return (obj["screen"] ?? false, obj["accessibility"] ?? false, obj["device_forward"] ?? false)
+    }
+
+    /// Who sends which device: {"camera": "<controller>", "microphone": "<controller>"};
+    /// strings, unlike the perms file.
+    private func readForwarding() -> [String: String] {
+        guard let data = FileManager.default.contents(atPath: forwardingPath),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String]
+        else { return [:] }
+        return obj
     }
 
     private func processRunning() -> Bool { enginePid() != nil }
@@ -504,6 +617,8 @@ final class ServerController {
         runLaunchctl(["bootstrap", guiDomain, agentPlistPath])
     }
 
+    /// AssociatedBundleIdentifiers: macOS's background-item notification and Login Items
+    /// name the app, Remote Display Server, instead of "remotedisplayd".
     private func writeAgentPlist() {
         try? FileManager.default.createDirectory(atPath: NSHomeDirectory() + "/Library/LaunchAgents", withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(atPath: logDir, withIntermediateDirectories: true)
@@ -513,6 +628,7 @@ final class ServerController {
         <plist version="1.0">
         <dict>
             <key>Label</key><string>\(Self.agentLabel)</string>
+            <key>AssociatedBundleIdentifiers</key><array><string>app.remotedisplay.server</string></array>
             <key>ProgramArguments</key>
             <array>
                 <string>\(enginePath)</string>
@@ -692,6 +808,92 @@ final class ServerController {
                 self.refresh()
                 completion(ok, msg)
             }
+        }
+    }
+
+    // MARK: - Camera and microphone sharing
+
+    /// The owner's switch (decision 0009). `--set-device-forward` talks IPC to the
+    /// running engine, like the password; the engine reports the result back through
+    /// remotedisplay-perms.json.
+    func setDeviceForward(_ on: Bool) {
+        if let problem = engineProblem {
+            lastError = problem
+            return
+        }
+        guard serviceRunning else {
+            lastError = "Turn the service on first: the running engine keeps this setting."
+            return
+        }
+        pendingDeviceForward = (on, Date().addingTimeInterval(10))
+        deviceForwardOn = on
+        let path = enginePath
+        DispatchQueue.global().async {
+            let r = Self.runProcess(path, ["--set-device-forward", on ? "on" : "off"], timeout: 15, mergeStderr: true)
+            DispatchQueue.main.async {
+                if !r.output.contains("Done!") {
+                    self.pendingDeviceForward = nil
+                    self.lastError = r.failure ?? "Could not change camera and microphone sharing."
+                }
+                self.refresh()
+            }
+        }
+    }
+
+    /// Setup's Install… for Camera. macOS then wants an admin to allow it in System Settings.
+    func installCamera() {
+        cameraError = nil
+        cameraExtension.install()
+    }
+
+    /// The owner has read that the camera was updated (Setup's OK).
+    func dismissCameraUpdated() {
+        cameraUpdated = false
+        UserDefaults.standard.removeObject(forKey: Self.cameraUpdatedKey)
+    }
+
+    /// CoreMediaIO doesn't reliably tell a process that already uses it about a camera that
+    /// appears later: after an extension update the running engine, Photo Booth and Safari
+    /// all lost Remote Display Camera, while a fresh process saw it (camera session,
+    /// 2026-11-21; decision 0033, option A). So once the device is new, the engine starts
+    /// over, a few seconds later, when macOS has published it. A controller reconnects by
+    /// itself; any camera forward had already stopped with the old device.
+    private func restartEngineForNewCamera(_ why: String) {
+        // One restart for an update that an admin also allowed.
+        guard !cameraRestartScheduled else { return }
+        cameraRestartScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            // restartEngine() blocks the main thread while the engine puts the displays
+            // back, so not while the menu is open; and asks for the engine afresh, as
+            // `serviceRunning` isn't updated while the menu is open.
+            self?.whenMenuClosed {
+                guard let self else { return }
+                self.cameraRestartScheduled = false
+                guard !self.quitting, self.processRunning() else { return }
+                self.trace("camera extension \(why): restarting the engine")
+                self.restartEngine()
+            }
+        }
+    }
+    @ObservationIgnored private var cameraRestartScheduled = false
+
+    /// Setup's Install… for Microphone: one admin prompt, then the device is there.
+    func installMicrophone() {
+        microphoneError = nil
+        microphoneDriver.install()
+    }
+
+    /// Remove camera and microphone (spec, Packaging): deactivates the camera extension
+    /// and deletes the microphone's driver, whichever of them is there.
+    func removeCameraAndMicrophone() {
+        if [.installed, .awaitingApproval].contains(cameraState) {
+            cameraError = nil
+            dismissCameraUpdated()  // a later install isn't an update
+            cameraExtension.remove()
+        }
+        if [.installed, .outdated].contains(microphoneState) {
+            microphoneError = nil
+            microphoneDriver.remove()
         }
     }
 
