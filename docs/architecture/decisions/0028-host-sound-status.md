@@ -29,6 +29,14 @@
   - otherwise "unavailable".
 
   Only a Mac host built with `screencapturekit` sends it, which is every release build.
+
+  **Since 2026-11-22** the login keys cover the screen and control too: `rd_host_screen`
+  is "ready" with Screen Recording and `rd_host_control` with Accessibility, otherwise
+  "unavailable", from the engine's checks that don't prompt (`connection/host_setup.rs`,
+  `HOOKS.md` E15). Every Mac host sends them, at login only. Without them a controller
+  can't tell a missing permission from a slow network, or why its clicks and keys do
+  nothing (UX audit of 2026-11-21, item 1). A host without them is older, and the
+  controller then changes nothing; the controller's side comes in a later change.
 - **The menu** (`soundReason` in `devices.dart`) shows the sound row off and disabled when
   the host doesn't allow audio, as before ("This computer doesn't share its sound"), or
   says "unavailable". The latter reads "This Mac can't share its sound until Screen

@@ -185,6 +185,8 @@ Capabilities. The host advertises what it can receive in PeerInfo.platform_addit
 
 platform_additions is sent once, with the login response, and never updates during a session. So the host also sends DeviceStatus whenever a status changes mid-session, for example when the owner flips the switch or finishes approving the extension. A host without rd_device_forward is 1.0.x: the controller shows the camera and mic rows disabled with "Update Remote Display Server on this Mac" (as built, with the host's name in place of "this Mac": [decision 0012](../architecture/decisions/0012-devices-menu-and-device-status.md)).
 
+As built ([decision 0028](../architecture/decisions/0028-host-sound-status.md)): a Mac host's login response also says whether it can share its sound, rd_host_sound (Speakers, below), and since 2026-11-22 whether it can share its screen and be controlled, rd_host_screen and rd_host_control. Each is "ready" or "unavailable". The screen needs Screen Recording and control needs Accessibility, which the host checks without prompting; without them the controller waits for a picture that never comes, as on a slow network, or the host drops its clicks and keys. A host without these keys is older, and the controller changes nothing.
+
 Flow.
 
 - Turning the camera on sends DeviceForwardRequest{CAMERA, on: true} with the format the controller will send.
@@ -284,7 +286,7 @@ Speakers: turn on the existing ScreenCaptureKit path. RustDesk captures system s
 
 As built ([decision 0022](../architecture/decisions/0022-vendored-cpal-excludes-own-audio.md)): the capture leaves out remotedisplayd's own audio. ScreenCaptureKit captures by process, so without that the microphone remotedisplayd plays into Remote Display Microphone went back to the controller. cpal is vendored into the engine to carry the change.
 
-As built ([decision 0028](../architecture/decisions/0028-host-sound-status.md)): "reports itself unavailable" is a login key, rd_host_sound, "ready" or "unavailable". ScreenCaptureKit counts as ready only with Screen Recording, and an owner's named input counts as ready. Play the Mac's sound here is shown off and disabled when it says unavailable, with "This Mac can't share its sound until Screen Recording is on there" (as built, with the host's name in place of "This Mac": [decision 0012](../architecture/decisions/0012-devices-menu-and-device-status.md)). There's no DeviceStatus for sound, since granting Screen Recording restarts the engine.
+As built ([decision 0028](../architecture/decisions/0028-host-sound-status.md)): "reports itself unavailable" is a login key, rd_host_sound, "ready" or "unavailable". ScreenCaptureKit counts as ready only with Screen Recording, and an owner's named input counts as ready. Play the Mac's sound here is shown off and disabled when it says unavailable, with "This Mac can't share its sound until Screen Recording is on there" (as built, with the host's name in place of "This Mac": [decision 0012](../architecture/decisions/0012-devices-menu-and-device-status.md)). There's no DeviceStatus for sound, since granting Screen Recording restarts the engine. Since 2026-11-22 the screen and control have login keys of the same kind, rd_host_screen and rd_host_control (Capabilities).
 
 Accepting requests. src/server/connection.rs handles the new messages:
 
@@ -392,16 +394,21 @@ v1, as defined in Goals, is Phases 0–3: camera, microphone and the host's soun
 
 There are no dates yet; they depend on who picks up each phase.
 
+Where the gates stand (2026-11-21):
+- **Phase 0 is met.** FaceTime and Zoom showed frames from a background process, and the microphone option was chosen.
+- **Phase 2 is met:** Zoom's test meeting and Dictation both passed (live session, tests 12 and 13).
+- **Phase 1, for v1, is met on the local network.** Paolo accepted that on 2026-11-21: a Zoom call on the host used the controller's camera and microphone, with a phone as the far end (tests 16 and 17). The run over Tailscale waits for a controller that can use it.
+
 ## Open questions
 
-- Does a process that only feeds a sink stream need the Camera permission? (Phase 0)
-- ~~Microphone: a driver (Option A) or Core Audio taps (Option B)?~~ Answered by Phase 0: Option A ([decision 0013](../architecture/decisions/0013-virtual-mic-input-only-driver.md)). Still to confirm in Zoom and Teams.
+- ~~Does a process that only feeds a sink stream need the Camera permission?~~ Answered by the camera sessions: no. Camera permission doesn't make a running process see a camera that appears later either, so the app restarts the engine when Remote Display Camera is new ([decision 0033](../architecture/decisions/0033-who-may-feed-the-camera.md), #7).
+- ~~Microphone: a driver (Option A) or Core Audio taps (Option B)?~~ Answered by Phase 0: Option A ([decision 0013](../architecture/decisions/0013-virtual-mic-input-only-driver.md)). Confirmed in Zoom, Teams and Dictation on 2026-11-21 (live session, tests 12, 13 and 18).
 - ~~Can the driver hide its output side, so it never appears under Sound › Output?~~ Answered by Phase 0: yes. The visible device has no output channels and can't become a default device; its output-only twin is hidden.
 - ~~Should Remote Display Microphone be the Mac's default input when the owner picks it?~~ Answered: yes ([decision 0031](../architecture/decisions/0031-virtual-mic-can-be-the-default-input.md)). The live session found it missing from Sound › Input, since "can't become a default device" hid it there too.
-- Camera formats: 720p only, or 720p and 1080p from the start?
-- Should the host delay mic audio to match video, or is unsynced good enough for calls?
-- One forwarded camera per host, or one per connected controller?
-- Does ScreenCaptureKit sound capture interfere with a call running on the host (echo, ducking)?
+- ~~Camera formats: 720p only, or 720p and 1080p from the start?~~ Answered (Paolo, 2026-11-21): 720p in v1, 1080p in Phase 5. The host already accepts up to 1920×1080 ([decision 0016](../architecture/decisions/0016-camera-encoder-and-decoder-contract.md), #10).
+- Should the host delay mic audio to match video, or is unsynced good enough for calls? Measured on 2026-11-21: the sound arrives 58 ms after the picture, so delaying the microphone would make it worse (#11).
+- ~~One forwarded camera per host, or one per connected controller?~~ Answered (Paolo, 2026-11-21): one per host; a second controller is told it's busy (#12).
+- Does ScreenCaptureKit sound capture interfere with a call running on the host (echo, ducking)? None seen in a Zoom call on 2026-11-21 with the host's sound on, with and without headphones; the only echo came from the room (#13).
 - ~~Is 100–119 acceptable to the maintainer as Remote Display's reserved range of message numbers?~~ Answered: this fork reserves 200–219 for its own messages without waiting on upstream ([decision 0017](../architecture/decisions/0017-reserved-message-range-200.md)).
 - Should any of this go upstream to RustDesk, for example macOS camera capture for "View camera"?
 
