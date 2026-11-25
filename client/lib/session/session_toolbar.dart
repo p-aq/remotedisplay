@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:bot_toast/bot_toast.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
@@ -7,10 +9,13 @@ import 'package:flutter/services.dart'
 import 'package:flutter_hbb/common.dart'
     show
         closeConnection,
+        CustomAlertDialog,
+        dialogButton,
         isAndroid,
         isDesktop,
         isIOS,
         isMacOS,
+        msgboxContent,
         openMonitorInNewTabOrWindow,
         openMonitorInTheSameTab,
         translate,
@@ -47,6 +52,7 @@ import 'win_events.dart';
 ///   codec and image (true color, monitor quality, multi-monitor).
 /// - **Devices**: what I lend the host — this Mac's camera (and later its
 ///   microphone) — and whether its sound plays here (decisions 0012 and 0018).
+///   While either is sent, a badge beside the pill says so.
 /// Local option: hide the trackpad/mouse pointer over the remote canvas
 /// (mobile). Default: hidden.
 const kOptHideLocalPointer = 'remotedisplay-hide-local-pointer';
@@ -112,10 +118,47 @@ class _SessionToolbarState extends State<SessionToolbar> {
   // The camera picked in Devices last time (its unique ID).
   static const _optCamera = 'remotedisplay-camera';
   static const _optMicrophone = 'remotedisplay-microphone';
+  // The session toggle the engine's Mute uses (toolbarDisplayToggle).
+  static const _mute = 'disable-audio';
+
+  // The status line over the session (decision 0018): Devices' menu closes when
+  // tapped, so what a tap, the host or the connection did to a forward shows here.
+  late final ForwardNotices _notices;
+  final _workers = <Worker>[];
+  final _status = <String, String>{};
+  Timer? _statusTimer;
+  static const _statusTime = Duration(seconds: 5);
 
   @override
   void initState() {
     super.initState();
+    final model = _ffi.ffiModel;
+    _notices = ForwardNotices(model.deviceForward.value);
+    _workers.addAll([
+      ever<String>(model.deviceForward, (forwards) {
+        final host = hostName(model.pi.hostname);
+        _say(_notices.forwards(forwards,
+            epoch: model.peerInfoEpoch,
+            hostIsMac: model.pi.platform == kPeerPlatformMacOS,
+            host: host,
+            soundOn: _soundOn(_ffi, host)));
+      }),
+      // A picture again, from a new connection if the last one dropped; and,
+      // the first time, a host that drops clicks and keys.
+      ever<bool>(model.waitForFirstImage, (waiting) {
+        if (waiting) return;
+        _say(_notices.connected(model.peerInfoEpoch,
+            control: controlReason(
+                loginAdditions(
+                    model.cachedPeerData.peerInfo)['rd_host_control'],
+                host: hostName(model.pi.hostname))));
+      }),
+      // The engine's boxes: its waiting box, when the host can't share its
+      // screen. After the engine's show, which counts the box before it puts
+      // it on screen.
+      ever<int>(_ffi.dialogManager.visibleDialogCount,
+          (_) => scheduleMicrotask(_replaceWaitingBox)),
+    ]);
     if (!isDesktop) {
       _mobileFullscreen =
           bind.mainGetLocalOption(key: _optMobileFullscreen) != 'N';
@@ -134,10 +177,23 @@ class _SessionToolbarState extends State<SessionToolbar> {
     }
   }
 
+  @override
+  void dispose() {
+    for (final worker in _workers) {
+      worker.dispose();
+    }
+    _statusTimer?.cancel();
+    super.dispose();
+  }
+
   static const _bg = Color(0xE61A1D24); // translucent graphite
   static const _fg = Color(0xFFB8BDC7);
   static const _fgDim = Color(0xFF6A7280);
   static const _danger = Color(0xFFE5484D);
+  // macOS's own indicators: green for the camera, orange for the microphone
+  // (their dark-mode shades, on the pill's graphite).
+  static const _cameraSent = Color(0xFF30D158);
+  static const _micSent = Color(0xFFFF9F0A);
 
   FFI get _ffi => widget.getFfi();
 
@@ -174,36 +230,45 @@ class _SessionToolbarState extends State<SessionToolbar> {
         alignment: Alignment.bottomLeft,
         child: Padding(
           padding: const EdgeInsets.only(left: 16, bottom: 16),
-          child: MouseRegion(
-            onEnter: (_) => setState(() => _hover = true),
-            onExit: (_) => setState(() => _hover = false),
-            child: AnimatedOpacity(
-              opacity: opacity,
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOut,
-              child: Container(
-                key: _pillKey,
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _bg,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: const Color(0x14FFFFFF)),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x66000000),
-                      blurRadius: 24,
-                      offset: Offset(0, 8),
-                    ),
-                  ],
-                ),
-                child: AnimatedSize(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              MouseRegion(
+                onEnter: (_) => setState(() => _hover = true),
+                onExit: (_) => setState(() => _hover = false),
+                child: AnimatedOpacity(
+                  opacity: opacity,
                   duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeOutCubic,
-                  alignment: Alignment.centerLeft,
-                  child: _collapsed ? _collapsedContent() : _expandedContent(),
+                  curve: Curves.easeOut,
+                  child: Container(
+                    key: _pillKey,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _bg,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0x14FFFFFF)),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x66000000),
+                          blurRadius: 24,
+                          offset: Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: AnimatedSize(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOutCubic,
+                      alignment: Alignment.centerLeft,
+                      child:
+                          _collapsed ? _collapsedContent() : _expandedContent(),
+                    ),
+                  ),
                 ),
               ),
-            ),
+              // Beside the pill, outside its fade.
+              _sendingBadge(),
+            ],
           ),
         ),
       ),
@@ -773,6 +838,49 @@ class _SessionToolbarState extends State<SessionToolbar> {
             color: sending ? Colors.white : _fg);
       });
 
+  /// While this Mac's camera or microphone goes to the host (asking counts, as
+  /// for the Devices button), a small badge beside the pill: a green camera, an
+  /// orange microphone, and a tooltip that says what goes where (UX audit of
+  /// 2026-11-21, item 3). Outside the pill's fade, it stays at full opacity
+  /// while the pill is dimmed or collapsed, and on touch devices.
+  Widget _sendingBadge() => Obx(() {
+        final forwards = _ffi.ffiModel.deviceForward.value;
+        final camera = ForwardState.parse(forwards, 'camera');
+        final mic = ForwardState.parse(forwards, 'microphone');
+        final tooltip = sendingTooltip(camera, mic,
+            host: hostName(_ffi.ffiModel.pi.hostname));
+        if (tooltip == null) return const SizedBox.shrink();
+        final cameraOn = camera.on || camera.asking;
+        final micOn = mic.on || mic.asking;
+        // The gap outside the tooltip, so a click there reaches the session.
+        return Padding(
+          padding: const EdgeInsets.only(left: 8),
+          child: Tooltip(
+            message: tooltip,
+            waitDuration: const Duration(milliseconds: 400),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 5),
+              decoration: BoxDecoration(
+                color: _bg,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0x14FFFFFF)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (cameraOn)
+                    const Icon(Icons.videocam_rounded,
+                        size: 14, color: _cameraSent),
+                  if (cameraOn && micOn) const SizedBox(width: 4),
+                  if (micOn)
+                    const Icon(Icons.mic_rounded, size: 14, color: _micSent),
+                ],
+              ),
+            ),
+          ),
+        );
+      });
+
   /// A device switch with a note under its label: why it can't be used, why it
   /// stopped, or which camera is on. Shown dimmed and disabled without [onTap].
   PopupMenuEntry<void> _deviceRow(bool value, String label,
@@ -827,6 +935,9 @@ class _SessionToolbarState extends State<SessionToolbar> {
         ? null
         : permissionReason(permission, 'camera');
     if (!mounted) return;
+    // Picking a camera or a microphone while it's off opens the menu again with
+    // the pick, so turning it on is the next tap.
+    var reopen = false;
 
     final items = <PopupMenuEntry<void>>[_header('CAMERA')];
     final sending = camera.on || camera.asking;
@@ -855,7 +966,11 @@ class _SessionToolbarState extends State<SessionToolbar> {
       for (final c in cameras) {
         items.add(_radio(c.id == picked?.id, Text(c.name), () {
           bind.mainSetLocalOption(key: _optCamera, value: c.id);
-          if (sending && c.id != camera.device) _setCamera(true, c.id);
+          if (!sending) {
+            reopen = true;
+          } else if (c.id != camera.device) {
+            _setCamera(true, c.id);
+          }
         }, onIcon: Icons.videocam_rounded, offIcon: Icons.videocam_outlined));
       }
     }
@@ -866,10 +981,8 @@ class _SessionToolbarState extends State<SessionToolbar> {
         audioAllowed: ffi.ffiModel.permissions['audio'] != false,
         hostSound: pi.platformAdditions['rd_host_sound'],
         host: host);
-    // The session toggle the engine's Mute uses (toolbarDisplayToggle).
-    const mute = 'disable-audio';
     final muted =
-        bind.sessionGetToggleOptionSync(sessionId: sessionId, arg: mute);
+        bind.sessionGetToggleOptionSync(sessionId: sessionId, arg: _mute);
 
     items.add(_sep());
     items.add(_header('MICROPHONE'));
@@ -917,7 +1030,11 @@ class _SessionToolbarState extends State<SessionToolbar> {
       for (final m in mics) {
         items.add(_radio(m.id == pickedMic?.id, Text(m.name), () {
           bind.mainSetLocalOption(key: _optMicrophone, value: m.id);
-          if (micSending && m.id != mic.device) _setMicrophone(true, m.id);
+          if (!micSending) {
+            reopen = true;
+          } else if (m.id != mic.device) {
+            _setMicrophone(true, m.id);
+          }
         }, onIcon: Icons.mic_rounded, offIcon: Icons.mic_none_rounded));
       }
     }
@@ -931,9 +1048,90 @@ class _SessionToolbarState extends State<SessionToolbar> {
             : "Play the computer's sound here",
         note: soundWhy,
         onTap: soundWhy == null
-            ? () => bind.sessionToggleOption(sessionId: sessionId, value: mute)
+            ? () {
+                bind.sessionToggleOption(sessionId: sessionId, value: _mute);
+                // Turned on: the echo hint, if the microphone is on too.
+                if (muted) _say(_notices.soundTurnedOn());
+              }
             : null));
     await _showItemsMenu(anchor, items);
+    if (reopen && anchor.mounted) await _showDevicesMenu(anchor);
+  }
+
+  /// Whether the host's sound plays here: the host shares it, and Devices'
+  /// sound switch is on (the engine's Mute off).
+  bool _soundOn(FFI ffi, String host) =>
+      soundReason(
+              audioAllowed: ffi.ffiModel.permissions['audio'] != false,
+              hostSound: ffi.ffiModel.pi.platformAdditions['rd_host_sound'],
+              host: host) ==
+          null &&
+      !bind.sessionGetToggleOptionSync(sessionId: ffi.sessionId, arg: _mute);
+
+  /// The status line, just above the pill: [lines] for a few seconds, each
+  /// replacing an earlier line about the same thing. On BotToast's layer, as
+  /// the engine's own session toasts, so it shows over a menu too.
+  void _say(Map<String, String> lines) {
+    if (lines.isEmpty || !mounted) return;
+    for (final line in lines.entries) {
+      _status.remove(line.key);
+      _status[line.key] = line.value;
+    }
+    _statusTimer?.cancel();
+    _statusTimer = Timer(_statusTime, _status.clear);
+    final text = _status.values.join('\n');
+    BotToast.showCustomText(
+      onlyOne: true,
+      duration: _statusTime,
+      align: Alignment.bottomLeft,
+      ignoreContentClick: true,
+      toastBuilder: (_) => Padding(
+        // The pill's 16 px, plus its 44 px height and a gap.
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 68),
+        child: Material(
+          type: MaterialType.transparency,
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 420),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: _bg,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0x14FFFFFF)),
+            ),
+            child: Text(text,
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 13, height: 1.35)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The host can't share its screen (`rd_host_screen`, decision 0018): in place
+  /// of the engine's "Connected, waiting for image...", which would wait for
+  /// good, a box that says why and where to fix it, with Disconnect. It goes
+  /// through the engine's dialogs, so a picture, a reconnection or another box
+  /// dismisses it as it would the waiting box.
+  void _replaceWaitingBox() {
+    if (!mounted) return;
+    final ffi = _ffi;
+    final dialogs = ffi.dialogManager;
+    // The waiting box's tag (showConnectedWaitingForImage).
+    if (!dialogs.existing('${ffi.sessionId}-waiting-for-image')) return;
+    final model = ffi.ffiModel;
+    final why = screenReason(
+        loginAdditions(model.cachedPeerData.peerInfo)['rd_host_screen'],
+        host: hostName(model.pi.hostname));
+    if (why == null) return;
+    clearWaitingForImage(dialogs, ffi.sessionId);
+    final tag = '${ffi.sessionId}-rd-host-screen';
+    if (dialogs.existing(tag)) return;
+    dialogs.show((setState, close, context) => CustomAlertDialog(
+            content: msgboxContent('info', why.title, why.text),
+            // Not the waiting box's Cancel: its closeConnection() needs a tab
+            // controller that the desktop session window doesn't have.
+            actions: [dialogButton('Disconnect', onPressed: _disconnect)]),
+        tag: tag);
   }
 
   /// Turns this Mac's camera on (as [device]) or off for the host. The first
@@ -944,12 +1142,21 @@ class _SessionToolbarState extends State<SessionToolbar> {
     if (on && needsCameraAccess(device)) {
       final permission = bind.mainGetCapturePermission(kind: 'camera');
       if (permission == 'not-determined') {
-        if (!await bind.mainRequestCapturePermission(kind: 'camera')) return;
+        if (!await bind.mainRequestCapturePermission(kind: 'camera')) {
+          // Refused at macOS's prompt: the menu has closed, so say it here.
+          _say({'camera': permissionReason('denied', 'camera')!});
+          return;
+        }
       } else if (permission != 'allowed') {
         return;
       }
     }
-    if (on) bind.mainSetLocalOption(key: _optCamera, value: device);
+    if (on) {
+      bind.mainSetLocalOption(key: _optCamera, value: device);
+    } else {
+      // For the status line: this off is the user's, not the connection's.
+      _notices.switchingOff('camera');
+    }
     await bind.sessionSetDeviceForward(
         sessionId: sessionId, kind: 'camera', on: on, device: device);
   }
@@ -967,12 +1174,15 @@ class _SessionToolbarState extends State<SessionToolbar> {
       final permission = bind.mainGetCapturePermission(kind: 'microphone');
       if (permission == 'not-determined') {
         if (!await bind.mainRequestCapturePermission(kind: 'microphone')) {
+          _say({'microphone': permissionReason('denied', 'microphone')!});
           return;
         }
       } else if (permission != 'allowed') {
         return;
       }
       bind.mainSetLocalOption(key: _optMicrophone, value: device);
+    } else {
+      _notices.switchingOff('microphone');
     }
     await bind.sessionSetDeviceForward(
         sessionId: sessionId, kind: 'microphone', on: on, device: device);

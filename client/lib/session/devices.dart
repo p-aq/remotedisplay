@@ -62,6 +62,7 @@ String? hostStatus(
 }
 
 String _noun(String kind) => kind == 'camera' ? 'camera' : 'microphone';
+String _capitalNoun(String kind) => kind == 'camera' ? 'Camera' : 'Microphone';
 String _device(String kind) =>
     kind == 'camera' ? 'Remote Display Camera' : 'Remote Display Microphone';
 
@@ -85,9 +86,9 @@ String hostName(String? hostname) {
 String _start(String host) =>
     host.isEmpty ? host : '${host[0].toUpperCase()}${host.substring(1)}';
 
-/// Why the host can't receive [kind], or null when it can. [status] is
-/// [hostStatus]; [hostIsMac] tells a 1.0.x Mac host from a host that isn't a
-/// Mac; [host] is [hostName].
+/// Why the host can't receive [kind], or null when it can, said as where to fix
+/// it. [status] is [hostStatus]; [hostIsMac] tells a 1.0.x Mac host from a host
+/// that isn't a Mac; [host] is [hostName].
 String? hostReason(String? status, String kind,
     {required bool hostIsMac, required String host}) {
   if (status == null) {
@@ -99,11 +100,15 @@ String? hostReason(String? status, String kind,
     case 'ready':
       return null;
     case 'not-allowed':
-      return "${_start(host)} hasn't turned on ${_noun(kind)} sharing";
+      // The owner's switch in the server app's Settings.
+      return "Turn on ${_noun(kind)} sharing in Remote Display Server's Settings on $host";
     case 'not-installed':
-      return "${_device(kind)} isn't installed on $host";
-    case 'not-approved':
-      return '${_device(kind)} is waiting for approval on $host';
+      // What hosts send for any camera or microphone that isn't working yet:
+      // not installed, or installed and waiting for an admin. Setup's row says
+      // which and offers the step (Install…, or Open Settings…).
+      return "Finish setting up ${_device(kind)} in Remote Display Server's Setup on $host";
+    case 'not-approved': // not sent by hosts yet
+      return 'An admin needs to allow ${_device(kind)} in System Settings on $host';
     default:
       return "${_start(host)} can't receive a ${_noun(kind)} right now";
   }
@@ -148,7 +153,7 @@ String? permissionReason(String permission, String kind) {
     case 'denied':
       return 'Allow ${_noun(kind)} access in System Settings';
     case 'restricted':
-      return '${_noun(kind)[0].toUpperCase()}${_noun(kind).substring(1)} access is restricted on this device';
+      return '${_capitalNoun(kind)} access is restricted on this device';
     default:
       return 'Not available on this device yet';
   }
@@ -209,7 +214,9 @@ CaptureDevice? _pick(
 /// the host and the host's sound playing here, the speakers would reach the
 /// microphone and the call would hear itself.
 String? echoHint({required bool micOn, required bool soundOn}) =>
-    micOn && soundOn ? 'Use headphones, or the call hears its own echo' : null;
+    micOn && soundOn
+        ? 'If the call hears itself, use headphones at a low volume'
+        : null;
 
 /// Why the host's sound can't play here, or null when it can (decision 0028).
 /// [audioAllowed] is the host's audio permission for this session; [hostSound]
@@ -222,4 +229,220 @@ String? soundReason(
     return "${_start(host)} can't share its sound until Screen Recording is on there";
   }
   return null;
+}
+
+/// The login response's platform additions as the engine's latest `peer_info`
+/// event carried them (`FfiModel.cachedPeerData.peerInfo`), or empty. The
+/// engine keeps the event as soon as it arrives; `PeerInfo.platformAdditions`
+/// follows only after its handler has waited on other calls, so on a
+/// reconnection it can still hold the last connection's when the waiting box
+/// shows.
+Map<String, dynamic> loginAdditions(Map<String, dynamic> peerInfo) {
+  try {
+    final additions = jsonDecode(peerInfo['platform_additions'] as String);
+    return additions is Map<String, dynamic> ? additions : const {};
+  } catch (_) {
+    return const {};
+  }
+}
+
+/// What the session shows in place of the engine's "Connected, waiting for
+/// image..." when the host can't share its screen, or null when it can
+/// (decision 0018). [hostScreen] is its `rd_host_screen` from the login
+/// response, "unavailable" without Screen Recording; a host older than the key
+/// doesn't send it, and nothing changes. [host] is [hostName].
+({String title, String text})? screenReason(Object? hostScreen,
+        {required String host}) =>
+    hostScreen == 'unavailable'
+        ? (
+            title: "${_start(host)} can't share its screen",
+            text: 'Turn on Screen Recording for Remote Display Server on $host'
+          )
+        : null;
+
+/// What the status line says, once the picture shows, when the host drops
+/// clicks and keys, or null (decision 0018). [hostControl] is its
+/// `rd_host_control` from the login response, "unavailable" without
+/// Accessibility; a host older than the key doesn't send it. [host] is
+/// [hostName].
+String? controlReason(Object? hostControl, {required String host}) =>
+    hostControl == 'unavailable'
+        ? "Clicks and keys won't reach $host · turn on Accessibility for Remote Display Server there"
+        : null;
+
+/// What the status line over the session says when a forward of [kind] goes from
+/// [before] to [after], or null when the change needs no line (decision 0018).
+/// The menu closes when tapped, so this is where the result of a tap shows:
+///
+/// - on: "Camera on", and while [tip] (the first time in a session) which
+///   device to choose in the call on [host];
+/// - refused, or stopped on its own: [stopReason];
+/// - the host's status changed while it was on or starting: [hostReason].
+///
+/// Starting, switching off and the host's status while off say nothing: the
+/// Devices button and the menu show those. Whether a forward that went off
+/// without a reason was switched off or went with its connection is for
+/// [ForwardNotices] to tell.
+String? forwardNotice(ForwardState before, ForwardState after, String kind,
+    {required bool hostIsMac, required String host, bool tip = false}) {
+  if (after.on && !before.on) {
+    final on = '${_capitalNoun(kind)} on';
+    return tip ? '$on · choose ${_device(kind)} in the call on $host' : on;
+  }
+  if (after.reason.isNotEmpty && after.reason != before.reason) {
+    return stopReason(after.reason, kind, hostIsMac: hostIsMac, host: host);
+  }
+  final sending = (before.on || before.asking) && (after.on || after.asking);
+  if (sending && after.host.isNotEmpty && after.host != before.host) {
+    return hostReason(after.host, kind, hostIsMac: hostIsMac, host: host);
+  }
+  return null;
+}
+
+/// What the status line says once the session is back from a connection that
+/// dropped while [kinds] were on (issue #70): the engine ends every forward with
+/// its connection and reports them off without a reason, so the menu alone
+/// can't say why.
+String? droppedNotice(Set<String> kinds) {
+  final nouns = [
+    for (final kind in const ['camera', 'microphone'])
+      if (kinds.contains(kind)) _noun(kind)
+  ];
+  return nouns.isEmpty
+      ? null
+      : 'The connection dropped, so the ${nouns.join(' and ')} turned off';
+}
+
+/// What the badge beside the pill says while this Mac's [camera] or
+/// [microphone] goes to [host] ([hostName]), or null while neither does and
+/// the badge is hidden (UX audit of 2026-11-21, item 3). Asking counts, as for
+/// the Devices button.
+String? sendingTooltip(ForwardState camera, ForwardState microphone,
+    {required String host}) {
+  final nouns = [
+    if (camera.on || camera.asking) _noun('camera'),
+    if (microphone.on || microphone.asking) _noun('microphone'),
+  ];
+  return nouns.isEmpty ? null : 'Sending your ${nouns.join(' and ')} to $host';
+}
+
+/// The status line's memory for one session (decision 0018). The toolbar feeds
+/// it the engine's forward state and the session's events, and shows what it
+/// returns: lines keyed by what they are about ("camera", "microphone", "echo",
+/// "connection", "control"), so a newer line replaces an older one about the
+/// same thing. It says each change once, gives the device tip, the echo hint
+/// and a host's missing Accessibility once a session, and keeps a forward that
+/// went off with its connection until the session is back.
+class ForwardNotices {
+  ForwardNotices([this._forwards = '']);
+
+  /// The engine's state as last heard (`FfiModel.deviceForward`).
+  String _forwards;
+  final _tipped = <String>{};
+  bool _echoed = false;
+  bool _controlSaid = false;
+
+  /// The line last said per kind. A new try clears it, so a refusal that
+  /// follows the host's status saying the same thing isn't said twice, but the
+  /// same refusal on the next try is.
+  final _said = <String, String>{};
+
+  /// Kinds switched off from this toolbar, until the engine reports them off.
+  final _switchingOff = <String>{};
+
+  /// The connection (`FfiModel.peerInfoEpoch`) each kind was last on or
+  /// starting in.
+  final _onEpoch = <String, int>{};
+
+  /// Kinds that went off without a reason and without a switch-off from here,
+  /// with the connection they were on.
+  final _dropped = <String, int>{};
+
+  /// The user switched [kind] off from this toolbar: its going off isn't the
+  /// connection's doing.
+  void switchingOff(String kind) => _switchingOff.add(kind);
+
+  /// The engine's new state [json], heard during connection [epoch]. [soundOn]
+  /// is whether the host's sound plays here, for the echo hint.
+  Map<String, String> forwards(String json,
+      {required int epoch,
+      required bool hostIsMac,
+      required String host,
+      required bool soundOn}) {
+    final micWasOn = ForwardState.parse(_forwards, 'microphone').on;
+    final lines = <String, String>{};
+    for (final kind in const ['camera', 'microphone']) {
+      final line = _change(kind, ForwardState.parse(_forwards, kind),
+          ForwardState.parse(json, kind),
+          epoch: epoch, hostIsMac: hostIsMac, host: host);
+      if (line != null) lines[kind] = line;
+    }
+    _forwards = json;
+    if (!micWasOn) lines.addAll(_echo(soundOn: soundOn));
+    // The old connection's end can be heard after the next one began.
+    return lines..addAll(_back(epoch));
+  }
+
+  /// The user turned the host's sound on.
+  Map<String, String> soundTurnedOn() => _echo(soundOn: true);
+
+  /// The session shows a picture from connection [epoch]. [control] is
+  /// [controlReason] for that connection, said the first time it comes.
+  Map<String, String> connected(int epoch, {String? control}) {
+    final lines = {..._back(epoch)};
+    if (control != null && !_controlSaid) {
+      _controlSaid = true;
+      lines['control'] = control;
+    }
+    return lines;
+  }
+
+  /// The line for the forwards an earlier connection than [epoch] took with
+  /// it, once.
+  Map<String, String> _back(int epoch) {
+    final gone = {
+      for (final e in _dropped.entries)
+        if (epoch > e.value) e.key
+    };
+    _dropped.removeWhere((kind, _) => gone.contains(kind));
+    final line = droppedNotice(gone);
+    return line == null ? const {} : {'connection': line};
+  }
+
+  String? _change(String kind, ForwardState before, ForwardState after,
+      {required int epoch, required bool hostIsMac, required String host}) {
+    final wasSending = before.on || before.asking;
+    final sending = after.on || after.asking;
+    if (sending) _onEpoch[kind] = epoch;
+    if (after.asking && !before.asking) {
+      // A new try, or another camera: its result is said whatever came before.
+      _said.remove(kind);
+      _switchingOff.remove(kind);
+      _dropped.remove(kind);
+    }
+    if (wasSending && !sending && after.reason.isEmpty) {
+      // Off without a reason: switched off from here, or its connection ended
+      // (decision 0018). A switch-off from another window of the same session
+      // reads as the latter.
+      if (!_switchingOff.remove(kind)) _dropped[kind] = _onEpoch[kind] ?? epoch;
+      return null;
+    }
+    final line = forwardNotice(before, after, kind,
+        hostIsMac: hostIsMac, host: host, tip: !_tipped.contains(kind));
+    if (line == null || _said[kind] == line) return null;
+    if (after.on && !before.on) _tipped.add(kind);
+    _said[kind] = line;
+    return line;
+  }
+
+  /// The echo hint, once a session, when the microphone is on and the host's
+  /// sound plays here.
+  Map<String, String> _echo({required bool soundOn}) {
+    final hint = echoHint(
+        micOn: ForwardState.parse(_forwards, 'microphone').on,
+        soundOn: soundOn);
+    if (_echoed || hint == null) return const {};
+    _echoed = true;
+    return {'echo': hint};
+  }
 }
