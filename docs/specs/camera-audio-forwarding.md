@@ -185,6 +185,8 @@ Capabilities. The host advertises what it can receive in PeerInfo.platform_addit
 
 platform_additions is sent once, with the login response, and never updates during a session. So the host also sends DeviceStatus whenever a status changes mid-session, for example when the owner flips the switch or finishes approving the extension. A host without rd_device_forward is 1.0.x: the controller shows the camera and mic rows disabled with "Update Remote Display Server on this Mac".
 
+As built ([decision 0028](../architecture/decisions/0028-host-sound-status.md)): a Mac host's login response also says whether it can share its sound, rd_host_sound (Speakers, below), and since 2026-11-22 whether it can share its screen and be controlled, rd_host_screen and rd_host_control. Each is "ready" or "unavailable". The screen needs Screen Recording and control needs Accessibility, which the host checks without prompting; without them the controller waits for a picture that never comes, as on a slow network, or the host drops its clicks and keys. A host without these keys is older, and the controller changes nothing.
+
 Flow.
 
 - Turning the camera on sends DeviceForwardRequest{CAMERA, on: true} with the format the controller will send.
@@ -284,7 +286,7 @@ Speakers: turn on the existing ScreenCaptureKit path. RustDesk captures system s
 
 As built ([decision 0022](../architecture/decisions/0022-vendored-cpal-excludes-own-audio.md)): the capture leaves out remotedisplayd's own audio. ScreenCaptureKit captures by process, so without that the microphone remotedisplayd plays into Remote Display Microphone went back to the controller. cpal is vendored into the engine to carry the change.
 
-As built ([decision 0028](../architecture/decisions/0028-host-sound-status.md)): "reports itself unavailable" is a login key, rd_host_sound, "ready" or "unavailable". ScreenCaptureKit counts as ready only with Screen Recording, and an owner's named input counts as ready. Play the Mac's sound here is shown off and disabled when it says unavailable, with "This Mac can't share its sound until Screen Recording is on there". There's no DeviceStatus for sound, since granting Screen Recording restarts the engine.
+As built ([decision 0028](../architecture/decisions/0028-host-sound-status.md)): "reports itself unavailable" is a login key, rd_host_sound, "ready" or "unavailable". ScreenCaptureKit counts as ready only with Screen Recording, and an owner's named input counts as ready. Play the Mac's sound here is shown off and disabled when it says unavailable, with "This Mac can't share its sound until Screen Recording is on there". There's no DeviceStatus for sound, since granting Screen Recording restarts the engine. Since 2026-11-22 the screen and control have login keys of the same kind, rd_host_screen and rd_host_control (Capabilities).
 
 Accepting requests. src/server/connection.rs handles the new messages:
 
