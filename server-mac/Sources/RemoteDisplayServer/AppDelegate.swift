@@ -17,6 +17,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu bar app: no Dock icon while there's no window.
         NSApp.setActivationPolicy(.accessory)
+        // Launch Services takes the engine for this app (it runs from Contents/MacOS with the
+        // app's identity, decision 0034), so opening the app while it runs can reach the
+        // engine instead; the engine passes it on with this notification.
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(showWindowRequested(_:)), name: Self.showWindowRequest,
+            object: nil, suspensionBehavior: .deliverImmediately)
         controller.start()
         // Launched by the user (Finder, Dock, Spotlight, `open`): show the window — that is
         // what opening an app means. Launched as a login item: stay in the menu bar, unless
@@ -73,6 +79,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showMainWindow()
         return true
+    }
+
+    /// Posted by the engine (`MacRunHeadlessAppLoop` in the engine's `platform/macos.mm`).
+    static let showWindowRequest = Notification.Name("app.remotedisplay.server.showWindow")
+
+    @objc private func showWindowRequested(_ note: Notification) {
+        showMainWindow()
     }
 
     // Closing the window does NOT close the app: it stays in the menu bar.

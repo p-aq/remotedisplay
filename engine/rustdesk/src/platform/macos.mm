@@ -922,12 +922,84 @@ extern "C" bool MacSetPrivacyMode(bool on) {
 // CGGetOnlineDisplayList stops seeing new displays (verified with
 // harness/mirror_enum_test2.mm: only NSApp's event loop refreshes them; CFRunLoopRunInMode
 // does not). [NSApp run] also drains the GCD main queue, which input injection uses.
+//
+// Opening the app reaches the engine: the engine runs from Remote Display Server's
+// Contents/MacOS with the app's identifier, so the Accessibility and Screen Recording macOS
+// grants the app cover it (from Contents/Helpers, Accessibility is keyed by the engine's
+// own path), and Launch Services takes it for the app. Opening the app while the engine
+// runs sends a reopen here (decision 0034). The engine starts the app, or, when the app
+// already runs, asks it to show its window. Only the reopen: the open is the engine's own
+// launch. A scripted quit still ends the engine; the app or launchd starts it again.
+
+// The app's own program, from Info.plist: for the engine, NSBundle's executablePath is the
+// engine itself.
+static NSString *RDAppProgram() {
+    NSBundle *bundle = [NSBundle mainBundle];
+    NSString *name = [bundle objectForInfoDictionaryKey:@"CFBundleExecutable"];
+    if (!bundle.bundleIdentifier || !name) return nil;
+    return [bundle.bundleURL URLByAppendingPathComponent:[@"Contents/MacOS" stringByAppendingPathComponent:name]].path;
+}
+
+@interface RDOpenTheApp : NSObject
+@end
+
+@implementation RDOpenTheApp {
+    CFAbsoluteTime _started;
+}
+- (void)reopen:(NSAppleEventDescriptor *)event reply:(NSAppleEventDescriptor *)reply {
+    NSBundle *bundle = [NSBundle mainBundle];
+    NSString *program = RDAppProgram();
+    for (NSRunningApplication *app in
+         [NSRunningApplication runningApplicationsWithBundleIdentifier:bundle.bundleIdentifier]) {
+        if ([app.executableURL.path isEqualToString:program]) {
+            NSLog(@"remotedisplay: reopen: the app runs, asking it to show its window");
+            // A notification, not an Apple event: that would need Automation permission.
+            [[NSDistributedNotificationCenter defaultCenter]
+                postNotificationName:@"app.remotedisplay.server.showWindow"
+                              object:nil
+                            userInfo:nil
+                  deliverImmediately:YES];
+            return;
+        }
+    }
+    // Opened twice in a row: start the app once.
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (now - _started < 10) return;
+    _started = now;
+    NSLog(@"remotedisplay: reopen: starting the app");
+    NSWorkspaceOpenConfiguration *config = [NSWorkspaceOpenConfiguration configuration];
+    // Otherwise Launch Services hands the open back to this engine.
+    config.createsNewApplicationInstance = YES;
+    [[NSWorkspace sharedWorkspace]
+        openApplicationAtURL:bundle.bundleURL
+               configuration:config
+           completionHandler:^(NSRunningApplication *, NSError *error) {
+               if (error) NSLog(@"remotedisplay: couldn't open the app: %@", error);
+           }];
+}
+@end
+
+// Only inside an app bundle whose own program is another binary (Remote Display Server's),
+// not for a bare `rustdesk` or an app that is this binary.
+static void RDOpenTheAppOnOpen() {
+    NSString *program = RDAppProgram();
+    NSString *me = [NSRunningApplication currentApplication].executableURL.path;
+    if (!program || !me || [program isEqualToString:me]) return;
+    static RDOpenTheApp *handler = [RDOpenTheApp new];
+    [[NSAppleEventManager sharedAppleEventManager] setEventHandler:handler
+                                                       andSelector:@selector(reopen:reply:)
+                                                     forEventClass:kCoreEventClass
+                                                        andEventID:kAEReopenApplication];
+}
+
 extern "C" void MacRunHeadlessAppLoop() {
     @autoreleasepool {
         NSApplication *app = [NSApplication sharedApplication];
         [app setActivationPolicy:NSApplicationActivationPolicyProhibited];
         [app finishLaunching];
     }
+    // After AppKit's launch, which installs its own handlers over any set before.
+    dispatch_async(dispatch_get_main_queue(), ^{ RDOpenTheAppOnOpen(); });
     [NSApp run];
 }
 
