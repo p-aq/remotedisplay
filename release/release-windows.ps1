@@ -66,10 +66,12 @@ Write-Host "installer: $setup"
 if ($Upload) {
   Push-Location $root
   $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  # The tag goes on the commit this was built from (see release-mac.sh): it has to be pushed.
+  $sha = (git rev-parse HEAD).Trim()
   gh release view $Tag --repo $Repo *> $null; $exists = ($LASTEXITCODE -eq 0)
   $ErrorActionPreference = $prev
   if (-not $exists) {
-    gh release create $Tag --repo $Repo --title "Remote Display $version" --notes "Build $version. Windows: installer + portable. Mac/Android/iOS: see assets." | Out-Null
+    gh release create $Tag --repo $Repo --target $sha --title "Remote Display $version" --notes "Build $version. Windows: installer + portable. Mac/Android/iOS: see assets." | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
     Write-Host "release $Tag created"
   }

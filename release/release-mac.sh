@@ -152,8 +152,16 @@ echo "OK -> $OUT"; ls -la "$OUT" | grep -E "RemoteDisplay-"
 # 5) Upload to GitHub Releases in $RELEASE_REPO (gh authenticated as an account that can publish there).
 if [ "$UPLOAD" = 1 ]; then
   TAG="v$VER"
+  # The release's source archives come from its tag, so the tag goes on the commit these files
+  # were built from; without --target GitHub tags the default branch's head (AGPL: the source
+  # offered has to match the binaries). The commit has to be on GitHub already.
+  SHA="$(git -C "$ROOT" rev-parse HEAD)"
+  git -C "$ROOT" branch -r --contains "$SHA" | grep -q . \
+    || { echo "ERROR: $SHA isn't pushed; push it, then run with --upload again"; exit 1; }
+  [ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ] \
+    || echo "WARNING: uncommitted changes: these files may not match $SHA"
   if ! gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
-    gh release create "$TAG" --repo "$RELEASE_REPO" --title "Remote Display $VER" --notes "Build $VER."
+    gh release create "$TAG" --repo "$RELEASE_REPO" --target "$SHA" --title "Remote Display $VER" --notes "Build $VER."
   fi
   # Upload only THIS version's artifacts (don't overwrite Windows's if they're already there).
   FILES=("$OUT"/RemoteDisplay-*"$VER"*)

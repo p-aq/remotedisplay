@@ -15,10 +15,13 @@ $remote = "$($cfg.sshUser)@$($cfg.macHost)"
 $files = ssh -o BatchMode=yes $remote "ls ~/workspace/remotedisplay/release/out/RemoteDisplay-*$version* 2>/dev/null"
 if (-not $files) { throw "No $version artifacts on the Mac (run tools/release-mac.sh there)" }
 foreach ($f in $files) { scp -o BatchMode=yes "${remote}:$f" $out; Write-Host "fetched: $(Split-Path $f -Leaf)" }
+# The tag goes on the commit the Mac built these from (see release-mac.sh).
+$sha = (ssh -o BatchMode=yes $remote "git -C ~/workspace/remotedisplay rev-parse HEAD").Trim()
+if (-not $sha) { throw "Couldn't read the Mac's commit" }
 Push-Location $root
 $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
 gh release view $Tag --repo $Repo *> $null; $exists = ($LASTEXITCODE -eq 0); $ErrorActionPreference = $prev
-if (-not $exists) { gh release create $Tag --repo $Repo --title "Remote Display $version" --notes "Build $version." | Out-Null }
+if (-not $exists) { gh release create $Tag --repo $Repo --target $sha --title "Remote Display $version" --notes "Build $version." | Out-Null }
 $local = $files | ForEach-Object { Join-Path $out (Split-Path $_ -Leaf) }
 gh release upload $Tag @local --repo $Repo --clobber
 Pop-Location

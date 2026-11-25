@@ -43,7 +43,10 @@ binaries in git (`release/out/` is in .gitignore).
    Xcode's `strip -x` (rustc's strip mis-aligns the LINKEDIT string pool and Xcode 27's `ld` refuses it).
    The Mac's `gh` must be authenticated as an account that can publish to the release repo
    (`RD_RELEASE_REPO`, by default `p-aq/remotedisplay`); then it uploads directly — step 4 (fetch
-   from Windows) is only an alternative if it can't. All three scripts publish to the same repo.
+   from Windows) is only an alternative if it can't. All three scripts publish to the same repo,
+   and the one that creates the `v<ver>` release tags the commit it built (`--target`), so the
+   release's source archives match its binaries: build from a pushed commit, and from the same
+   commit on both machines.
    With the Developer ID identity present the two DMGs come out notarized and stapled
    (about 2–5 minutes per submission; `--skip-notarize` for a quick local build).
    - Server's `ENGINE_BIN`: defaults to `engine/rustdesk/target/release/rustdesk` (the monorepo's
