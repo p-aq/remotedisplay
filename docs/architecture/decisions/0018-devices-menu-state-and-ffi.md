@@ -74,8 +74,9 @@ from outside.
   the engine's dialog count (`visibleDialogCount`) and acts after the engine's show,
   which counts the box before putting it on screen. A picture, a reconnection or
   another box dismisses it as it would the waiting box. Its Disconnect is the
-  toolbar's: the waiting box's only button, Cancel, calls `closeConnection()`, which
-  needs a tab controller the desktop session window doesn't register. The keys come from the `peer_info` event the engine keeps
+  toolbar's. (The waiting box's only button, Cancel, calls `closeConnection()`, which
+  needed a tab controller the desktop session window doesn't register; since #82 it
+  closes the window too, HOOKS.md #5.) The keys come from the `peer_info` event the engine keeps
   (`cachedPeerData.peerInfo`): `pi.platformAdditions` can still hold the last
   connection's when the box shows. Without Accessibility, the status line says once a
   session, when the picture shows, *"Clicks and keys won't reach Mac-mini · turn on
