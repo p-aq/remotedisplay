@@ -27,7 +27,8 @@ binaries in git (`release/out/` is in .gitignore).
 2. **Windows PC**: `powershell -ExecutionPolicy Bypass -File release/release-windows.ps1 -Upload`
    (builds, validates, creates the `v<ver>` Release and uploads zip+installer). Over a
    non-interactive SSH session `gh` on the PC may be unauthenticated (401): then fetch the
-   two files from `release\out` with `scp` and upload them from the Mac (`gh release upload`).
+   two files from `release\out` with `scp` and upload them from the Mac
+   (`gh release upload v<ver> <files> --repo p-aq/remotedisplay`).
    Requires an up-to-date engine DLL (`engine/rustdesk/target/release/librustdesk.dll`,
    recipe in `tools/README.md`).
 3. **Mac** (run by the Mac's Claude or Sam; codesign needs the graphical session):
@@ -40,8 +41,13 @@ binaries in git (`release/out/` is in .gitignore).
    the server DMG. Xcode 27 notes (2026-10-06): deployment targets must be ≥ 12.0 (macOS) / 15.0 (iOS),
    set in the two Podfiles and Runner projects; the client dylib is linked unstripped and stripped with
    Xcode's `strip -x` (rustc's strip mis-aligns the LINKEDIT string pool and Xcode 27's `ld` refuses it).
-   The Mac ALREADY has `gh` authenticated (`SamuelRioTz`), so it uploads directly — step 4 (fetch
-   from Windows) is only an alternative if the Mac didn't have `gh`.
+   The Mac's `gh` must be authenticated as an account that can publish to the release repo
+   (`RD_RELEASE_REPO`, by default `p-aq/remotedisplay`); then it uploads directly — step 4 (fetch
+   from Windows) is only an alternative if it can't. All three scripts publish to the same repo,
+   and the one that creates the `v<ver>` release tags the commit it built (`--target`), so the
+   release's source archives match its binaries: build from a pushed commit, and from the same
+   commit on both machines. They stop when `v<ver>` already names another commit: this fork
+   inherited the original's tags up to `v1.0.16`, so its releases need versions of their own.
    With the Developer ID identity present the two DMGs come out notarized and stapled
    (about 2–5 minutes per submission; `--skip-notarize` for a quick local build).
    - Server's `ENGINE_BIN`: defaults to `engine/rustdesk/target/release/rustdesk` (the monorepo's
@@ -51,9 +57,30 @@ binaries in git (`release/out/` is in .gitignore).
 
 ## Signing and notarization (Mac)
 
-- Identity: `server-mac/sign-identity.sh` picks the personal team's (K45698KZ4W)
-  *Developer ID Application* certificate, else its *Apple Development* one. Never another
-  team's certificate.
+- Team: `server-mac/team-id.sh` says which Apple team signs:
+  - `RD_TEAM_ID` from the environment (also inside `release-mac.sh`, which sources `signing.env`);
+  - else from `~/.config/remotedisplay/signing.env`;
+  - else the original project's team, K45698KZ4W.
+
+  A fork sets its own team in `signing.env` and never commits it. The Makefile and
+  `release-mac.sh` pass it on: it goes into the server's designated requirement and its
+  entitlements. A `SIGN_ID=` override with another team's certificate would break that
+  requirement: `make sign` then fails at its `codesign --verify -v`.
+  iOS keeps the Xcode project's team (`DEVELOPMENT_TEAM` in `client/ios/Runner.xcodeproj`, used by
+  `tools/build-ios.sh`): a fork with another team changes it there, or runs `--skip-ios`.
+- Identity: `server-mac/sign-identity.sh` picks that team's *Developer ID Application*
+  certificate, else its *Apple Development* one. Never another team's certificate.
+- `signing.env` (mode 600, sourced by `release-mac.sh`) holds:
+  - `RD_TEAM_ID`;
+  - `RD_SIGNING_KEYCHAIN` and `RD_SIGNING_KEYCHAIN_PASSWORD`, for a dedicated keychain;
+  - `RD_NOTARY_PROFILE`, by default `remotedisplay-notary`;
+  - `RD_SERVER_PROFILE` and `RD_CAMERA_PROFILE`: the Developer ID provisioning profiles for
+    `app.remotedisplay.server` and `app.remotedisplay.server.camera`. Without both, the
+    server ships without the camera extension;
+  - `RD_RELEASE_REPO`, by default `p-aq/remotedisplay`, where `--upload` publishes (the Windows
+    scripts take the same variable, or `-Repo`). The apps' update checks are compiled in
+    (`client/lib/update_check.dart`, `server-mac/.../ServerController.swift`): publishing
+    elsewhere means changing those too.
 - The Developer ID identity is kept in a dedicated keychain,
   `~/Library/Keychains/remotedisplay-signing.keychain-db`, unlocked for `codesign` without
   prompts (`security set-key-partition-list`) and listed in the user search list. Its
@@ -91,6 +118,6 @@ The development signature expires: reinstall when the profile lapses.
 - The Windows portable ZIP runs from any folder without installing; the config
   lives in `%APPDATA%\RemoteDisplay` (older 0.x builds used `%APPDATA%\RustDesk`; that folder can be deleted).
 - Installer validated with silent install/uninstall (`/VERYSILENT`).
-- `gh` must point at THIS repo: the repo is a fork of rustdesk/rustdesk and unconfigured
-  `gh` resolves to the parent. It's already fixed with `gh repo set-default
-  SamuelRioTz/remotedisplay` (if it gets recloned, run it again).
+- The release scripts pass `--repo` to every `gh release` call. For other `gh` commands, point
+  `gh` at this repo: it's a fork, and unconfigured `gh` resolves to the parent
+  (`gh repo set-default p-aq/remotedisplay`; run it again after a reclone).

@@ -1,13 +1,14 @@
 #!/bin/bash
 # Prints the code-signing identity to use for Remote Display, chosen by TEAM, never by
-# name: this Mac has two "Apple Development: Samuel Rioja" certificates, one issued to
-# Trufi Association e.V. (team NNB9PHQ49J) and one to Sam's personal account (team
-# K45698KZ4W). Only the personal team may sign this project. A "Developer ID
+# name: a Mac can hold certificates of several teams, and only the one team-id.sh names
+# (RD_TEAM_ID, else signing.env, else the original project's K45698KZ4W) may sign this
+# project; never the first match in the keychain. A "Developer ID
 # Application" certificate of that team wins (distribution outside the App Store);
 # otherwise its "Apple Development" one. Exit 0 with the name on stdout, 1 if the team
 # has no identity (callers under `set -e` rely on that).
-# Usage: sign-identity.sh [TEAM_ID]   (default K45698KZ4W)
-TEAM="${1:-K45698KZ4W}"
+# Usage: sign-identity.sh [TEAM_ID]   (default: team-id.sh's answer, the original project's
+# team K45698KZ4W unless RD_TEAM_ID is set in the environment or the private signing.env)
+TEAM="${1:-$("$(dirname "$0")/team-id.sh")}"
 pick() { # $1 = certificate kind; no pipe into `while` (a `return` there only leaves the subshell)
   local name ou
   while IFS= read -r name; do

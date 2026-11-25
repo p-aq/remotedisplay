@@ -126,7 +126,7 @@ as the UI, they share TCC permission attribution.
    # → .build/Remote Display Server.app
    ```
 
-`make sign` signs with the personal-team identity chosen by `sign-identity.sh` (see
+`make sign` signs with the team's identity chosen by `sign-identity.sh` (see
 *Signing* below), so TCC permissions survive rebuilds; without one it signs ad-hoc and the
 permissions have to be granted again after every rebuild.
 
@@ -218,8 +218,9 @@ on their home screen.
 
 ## Signing
 
-`make sign` picks the identity through `sign-identity.sh`: only Sam's personal team
-(K45698KZ4W), preferring a *Developer ID Application* certificate and falling back to
+`make sign` picks the identity through `sign-identity.sh`: only the team `team-id.sh`
+names (`RD_TEAM_ID`, else `~/.config/remotedisplay/signing.env`, else the original project's
+K45698KZ4W; see `release/README.md`), preferring a *Developer ID Application* certificate and falling back to
 *Apple Development*. Never the first "Apple Development" match in the keychain — on the
 build Mac that one belongs to another organisation.
 

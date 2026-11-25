@@ -7,10 +7,13 @@
 #   -Upload     creates (if it doesn't exist) the GitHub Release and uploads the artifacts
 #   -SkipBuild  doesn't rebuild the Flutter client (uses the existing Release)
 # Requirements: Flutter 3.24.5 (via fvm: C:\Users\sam\fvm\versions\3.24.5), Inno Setup 6, gh authenticated
-# and pointed at THIS repo (the repo is a fork: `gh repo set-default SamuelRioTz/remotedisplay`).
+# as an account that can publish to the release repo: -Repo, else $env:RD_RELEASE_REPO, else
+# p-aq/remotedisplay, the same as release-mac.sh, so one release isn't split across two repos.
 # The engine DLL (engine/rustdesk/target/release/librustdesk.dll) is built separately
 # (recipe and gotchas in tools/README.md, "Building the Windows CLIENT").
-param([string]$Tag = '', [switch]$Upload, [switch]$SkipBuild)
+param([string]$Tag = '', [switch]$Upload, [switch]$SkipBuild, [string]$Repo = '')
+if (-not $Repo) { $Repo = $env:RD_RELEASE_REPO }
+if (-not $Repo) { $Repo = 'p-aq/remotedisplay' }
 $ErrorActionPreference = 'Stop'
 $root = Resolve-Path (Join-Path (Split-Path -Parent $PSCommandPath) '..')
 $client = Join-Path $root 'client'
@@ -63,14 +66,19 @@ Write-Host "installer: $setup"
 if ($Upload) {
   Push-Location $root
   $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-  gh release view $Tag *> $null; $exists = ($LASTEXITCODE -eq 0)
+  # The tag goes on the commit this was built from (see release-mac.sh): it has to be pushed.
+  $sha = (git rev-parse HEAD).Trim()
+  # A tag that already names another commit (inherited from the original): bump the version.
+  $tagSha = (gh api "repos/$Repo/commits/$Tag" --jq .sha 2>$null | Out-String).Trim()
+  if ($tagSha -match '^[0-9a-f]{40}$' -and $tagSha -ne $sha) { throw "$Tag in $Repo is commit $tagSha, not $sha; bump the version" }
+  gh release view $Tag --repo $Repo *> $null; $exists = ($LASTEXITCODE -eq 0)
   $ErrorActionPreference = $prev
   if (-not $exists) {
-    gh release create $Tag --title "Remote Display $version" --notes "Build $version. Windows: installer + portable. Mac/Android/iOS: see assets." | Out-Null
+    gh release create $Tag --repo $Repo --target $sha --title "Remote Display $version" --notes "Build $version. Windows: installer + portable. Mac/Android/iOS: see assets." | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
     Write-Host "release $Tag created"
   }
-  gh release upload $Tag $zip $setup --clobber
+  gh release upload $Tag $zip $setup --repo $Repo --clobber
   if ($LASTEXITCODE -ne 0) { throw 'gh release upload failed' }
   Write-Host "uploaded to GitHub Releases ($Tag)"
   Pop-Location
