@@ -425,6 +425,13 @@ Future<void> _runSessionWindow(
   // Note: unlike the engine we do NOT hide the native title bar nor set
   // preventClose — moving/closing the window works natively (V1).
 
+  // The engine's boxes whose Cancel calls closeConnection() (waiting for
+  // image, logging in...) look for a tab controller this window doesn't
+  // register: they close the window instead, as the toolbar's Disconnect
+  // does (HOOKS.md #5).
+  closeConnectionFallback =
+      (_) => WindowController.fromWindowId(stateGlobal.windowId).close();
+
   _runClientApp(home: ClientRemoteScreen(params: argument));
 
   if (argument['screen_rect'] == null) {

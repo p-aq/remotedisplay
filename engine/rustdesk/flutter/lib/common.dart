@@ -699,6 +699,11 @@ String formatDurationToTime(Duration duration) {
   return "${totalTime.toString().padLeft(2, "0")}:${mins.toString().padLeft(2, "0")}:${secs.toString().padLeft(2, "0")}";
 }
 
+/// remotedisplay: what closeConnection() does on desktop when no
+/// DesktopTabController is registered. The controller's session window has no
+/// tabs and sets it to close itself.
+void Function(String? id)? closeConnectionFallback;
+
 closeConnection({String? id}) {
   if (isAndroid || isIOS) {
     () async {
@@ -713,6 +718,12 @@ closeConnection({String? id}) {
       Navigator.popUntil(globalKey.currentContext!, ModalRoute.withName("/"));
       stateGlobal.isInMainPage = true;
     } else {
+      // remotedisplay: see closeConnectionFallback.
+      final fallback = closeConnectionFallback;
+      if (fallback != null && !Get.isRegistered<DesktopTabController>()) {
+        fallback(id);
+        return;
+      }
       final controller = Get.find<DesktopTabController>();
       if (controller.tabType == DesktopTabType.terminal &&
           controller.onCloseWindow != null) {

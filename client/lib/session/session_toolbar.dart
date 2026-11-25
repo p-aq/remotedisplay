@@ -1128,8 +1128,7 @@ class _SessionToolbarState extends State<SessionToolbar> {
     if (dialogs.existing(tag)) return;
     dialogs.show((setState, close, context) => CustomAlertDialog(
             content: msgboxContent('info', why.title, why.text),
-            // Not the waiting box's Cancel: its closeConnection() needs a tab
-            // controller that the desktop session window doesn't have.
+            // Disconnect, not Cancel: there is no picture to wait for.
             actions: [dialogButton('Disconnect', onPressed: _disconnect)]),
         tag: tag);
   }
