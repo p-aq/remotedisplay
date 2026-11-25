@@ -313,6 +313,19 @@ String? droppedNotice(Set<String> kinds) {
       : 'The connection dropped, so the ${nouns.join(' and ')} turned off';
 }
 
+/// What the badge beside the pill says while this Mac's [camera] or
+/// [microphone] goes to [host] ([hostName]), or null while neither does and
+/// the badge is hidden (UX audit of 2026-11-21, item 3). Asking counts, as for
+/// the Devices button.
+String? sendingTooltip(ForwardState camera, ForwardState microphone,
+    {required String host}) {
+  final nouns = [
+    if (camera.on || camera.asking) _noun('camera'),
+    if (microphone.on || microphone.asking) _noun('microphone'),
+  ];
+  return nouns.isEmpty ? null : 'Sending your ${nouns.join(' and ')} to $host';
+}
+
 /// The status line's memory for one session (decision 0018). The toolbar feeds
 /// it the engine's forward state and the session's events, and shows what it
 /// returns: lines keyed by what they are about ("camera", "microphone", "echo",

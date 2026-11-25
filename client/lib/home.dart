@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart' show mapEquals, setEquals;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show MethodChannel;
 import 'package:flutter_hbb/common.dart' hide Dialog;
 import 'package:get/get.dart';
 import 'package:flutter_hbb/consts.dart';
@@ -44,7 +45,9 @@ import 'session/mobile_session.dart';
 /// computers that answer on some address from the current network are listed
 /// (a route that does not answer shows as such and a tap uses the one that
 /// does); the others — old leases, machines that are off, another network —
-/// stay behind a one-line note the user can expand.
+/// stay behind a one-line note the user can expand. On macOS 15 and later,
+/// when System Settings keeps the app off the local network, the home says so
+/// rather than that there are no computers (`_checkLocalNetwork`).
 class ClientHome extends StatefulWidget {
   const ClientHome({super.key});
 
@@ -67,6 +70,16 @@ class _ClientHomeState extends State<ClientHome>
   // How long a probe waits for the host's first frame once connected.
   static const _frameTimeout = Duration(milliseconds: 1000);
   static const _probeEvery = Duration(seconds: 20);
+  // The macOS Runner's Local Network check (MainFlutterWindow.swift).
+  static const _localNetworkChannel =
+      MethodChannel('remotedisplay/localnetwork');
+  // System Settings › Privacy & Security › Local Network. The anchor moved
+  // between macOS releases: the newer one first, then the classic, as the
+  // server app opens it (server-mac Permissions.swift).
+  static const _localNetworkSettings = [
+    'x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_LocalNetwork',
+    'x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork',
+  ];
 
   final _ip = TextEditingController();
   final _pw = TextEditingController();
@@ -115,6 +128,10 @@ class _ClientHomeState extends State<ClientHome>
   int _silentScans = 0;
   int _lastDiscoveryRun = -1;
   bool _discoveryBlocked = false;
+  // Whether macOS lets the app on the local network, as last answered (see
+  // _checkLocalNetwork), and when it may be asked again.
+  LocalNetworkAccess _localNetwork = LocalNetworkAccess.unknown;
+  final _localNetworkCheck = LocalNetworkCheck();
   bool _migrationQueued = false;
   // The user asked to see the computers that do not answer from this network
   // (hidden by default; not persisted, every launch starts clean).
@@ -173,6 +190,12 @@ class _ClientHomeState extends State<ClientHome>
     _refresh();
     _probeTimer = Timer.periodic(_probeEvery, (_) {
       if (!_connecting) _probeAll();
+      // macOS's own prompt may still be waiting, which reads as "denied": ask
+      // again until it's allowed, as the server app does.
+      if (_localNetwork == LocalNetworkAccess.denied) {
+        _localNetworkCheck.newRound();
+        _checkLocalNetwork();
+      }
     });
     // Deep links on mobile (remotedisplay://connection/new/<host>?password=…):
     // they connect with OUR mobile session. On desktop the engine resolves
@@ -246,10 +269,20 @@ class _ClientHomeState extends State<ClientHome>
   }
 
   /// Back from another app / the network may have changed (iPad leaving home):
-  /// refresh everything, so stale routes are marked and new ones found.
+  /// refresh everything, so stale routes are marked and new ones found. The
+  /// user may also have just flipped the Local Network switch in System
+  /// Settings: ask again, but only when that could change what the home
+  /// shows (each check briefly advertises a Bonjour service on the network).
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && !_connecting) _refresh();
+    if (state == AppLifecycleState.resumed && !_connecting) {
+      _refresh();
+      if (_localNetwork != LocalNetworkAccess.allowed ||
+          !_machines().any((m) => m.available)) {
+        _localNetworkCheck.newRound();
+        _checkLocalNetwork();
+      }
+    }
   }
 
   void _onPeersChanged() {
@@ -383,6 +416,7 @@ class _ClientHomeState extends State<ClientHome>
   void _discover() {
     if (_scanning) return;
     setState(() => _scanning = true);
+    _localNetworkCheck.newRound();
     bind.mainDiscover();
     bind.mainLoadRecentPeers();
     _loadTailscale();
@@ -390,8 +424,43 @@ class _ClientHomeState extends State<ClientHome>
     // the spinner only covers the typical scan window (~5s).
     _scanTimer?.cancel();
     _scanTimer = Timer(const Duration(seconds: 5), () {
-      if (mounted) setState(() => _scanning = false);
+      if (!mounted) return;
+      setState(() => _scanning = false);
+      // Nothing to show after the scan, or no access last time: ask macOS
+      // whether the app may use the local network at all.
+      if (_localNetwork == LocalNetworkAccess.denied ||
+          !_machines().any((m) => m.available)) {
+        _checkLocalNetwork();
+      }
     });
+  }
+
+  /// Asks the macOS Runner whether System Settings › Privacy & Security ›
+  /// Local Network lets the app on the local network ([LocalNetworkAccess]):
+  /// after a scan round with nothing to show or after a "denied", every 20 s
+  /// while denied, and when the app comes back to the front. Never twice at
+  /// once. No answer, or another platform, is unknown and shows nothing.
+  Future<void> _checkLocalNetwork() async {
+    if (!isMacOS || !_localNetworkCheck.start()) return;
+    var access = LocalNetworkAccess.unknown;
+    try {
+      // The Runner answers within 4 s.
+      access = LocalNetworkAccess.parse(await _localNetworkChannel
+          .invokeMethod<String>('check')
+          .timeout(const Duration(seconds: 10)));
+    } catch (_) {}
+    _localNetworkCheck.done();
+    if (mounted && access != _localNetwork) {
+      setState(() => _localNetwork = access);
+    }
+  }
+
+  Future<void> _openLocalNetworkSettings() async {
+    for (final url in _localNetworkSettings) {
+      try {
+        if (await launchUrl(Uri.parse(url))) return;
+      } catch (_) {}
+    }
   }
 
   // ── reachability ────────────────────────────────────────────────────────
@@ -1140,8 +1209,10 @@ class _ClientHomeState extends State<ClientHome>
     // so the note and the texts below do not blink on every 20-second round.
     final unknown = unreachable.any((m) => m.unknown);
     // Nothing answers yet: while a scan runs or an address has no verdict the
-    // list is simply filling up; afterwards say which situation it is.
+    // list is simply filling up; afterwards say which situation it is
+    // (emptyHomeText), unless macOS keeps the app off the local network.
     final settling = _scanning || unknown;
+    final denied = _localNetwork == LocalNetworkAccess.denied;
     final empty = shown.isEmpty
         ? Container(
             width: double.infinity,
@@ -1149,22 +1220,27 @@ class _ClientHomeState extends State<ClientHome>
             decoration: ui.cardDeco,
             child: Row(
               children: [
-                Icon(Icons.radar, size: 18, color: ui.muted),
+                Icon(denied ? Icons.wifi_off_rounded : Icons.radar,
+                    size: 18, color: ui.muted),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    settling
-                        ? 'Looking for computers on your network…'
-                        : unreachable.isNotEmpty
-                            ? 'No computers answer from this network right now.'
-                            : 'No computers yet. Start Remote Display Server on the Mac (same network, or Tailscale on both) or enter its address below.',
+                    emptyHomeText(_localNetwork,
+                        settling: settling,
+                        unreachable: unreachable.isNotEmpty),
                     style: TextStyle(color: ui.muted, fontSize: 13),
                   ),
                 ),
+                if (denied) ...[
+                  const SizedBox(width: 12),
+                  _localNetworkButton(ui),
+                ],
               ],
             ),
           )
         : null;
+    final networkNote =
+        localNetworkNote(_localNetwork, computersShown: shown.isNotEmpty);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1185,10 +1261,43 @@ class _ClientHomeState extends State<ClientHome>
           ),
         if (unreachable.isNotEmpty && !unknown)
           _unreachableNote(ui, unreachable.length),
+        if (networkNote != null) _localNetworkLine(ui, networkNote),
         if (_discoveryBlocked) _discoveryNote(ui),
       ],
     );
   }
+
+  /// One muted line, with Open Settings: some computers show (over Tailscale,
+  /// say), but macOS keeps the app off the local network, so the ones there
+  /// can't be found ([localNetworkNote]).
+  Widget _localNetworkLine(HomeUi ui, String text) => Padding(
+        padding: const EdgeInsets.only(left: 6),
+        child: Row(
+          children: [
+            Icon(Icons.wifi_off_rounded,
+                size: 14, color: ui.muted.withOpacity(0.8)),
+            const SizedBox(width: 8),
+            Expanded(
+              child:
+                  Text(text, style: TextStyle(color: ui.muted, fontSize: 12)),
+            ),
+            const SizedBox(width: 8),
+            _localNetworkButton(ui),
+          ],
+        ),
+      );
+
+  /// Opens System Settings › Privacy & Security › Local Network.
+  Widget _localNetworkButton(HomeUi ui) => TextButton(
+        onPressed: _openLocalNetworkSettings,
+        style: TextButton.styleFrom(
+          foregroundColor: ui.accentSoft,
+          visualDensity: VisualDensity.compact,
+          textStyle:
+              const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+        ),
+        child: const Text('Open Settings'),
+      );
 
   /// One muted line: the engine's discovery pings get no reply although
   /// computers answer on their port (two runs in a row), so new computers are
@@ -1285,9 +1394,16 @@ class _ClientHomeState extends State<ClientHome>
             controller: _pw,
             obscureText: !_showPw,
             style: TextStyle(color: ui.fg, fontSize: 15),
-            decoration: ui.input('Password', Icons.lock_outline,
-                suffix: eyeButton(
-                    ui, _showPw, () => setState(() => _showPw = !_showPw))),
+            decoration: ui
+                .input('Password', Icons.lock_outline,
+                    suffix: eyeButton(
+                        ui, _showPw, () => setState(() => _showPw = !_showPw)))
+                .copyWith(
+                    // As in the connect sheet: the server app's Permanent
+                    // password (Setup, Settings).
+                    helperText:
+                        'The password set in Remote Display Server on the Mac.',
+                    helperStyle: TextStyle(color: ui.muted, fontSize: 12)),
             onSubmitted: (_) => go(),
           ),
           const SizedBox(height: 16),
