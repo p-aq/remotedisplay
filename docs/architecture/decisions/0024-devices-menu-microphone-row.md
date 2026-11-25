@@ -47,6 +47,8 @@
   volume"*, and the status line over the session shows it once a session, when the
   microphone and the host's sound are both on (decision 0018).
 - **The Devices button** is filled while the camera or the microphone goes to the host.
+  **Since 2026-11-22** a badge beside the pill says so too, at full opacity while the
+  pill is dimmed or collapsed (decision 0018).
 
 ## Consequences
 

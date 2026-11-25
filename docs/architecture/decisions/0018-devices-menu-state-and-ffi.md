@@ -65,6 +65,31 @@ from outside.
   (`FfiModel.peerInfoEpoch`), says *"The connection dropped, so the camera turned off"*
   (issue #70). A switch-off from another window of the same session reads as a drop
   there.
+- **Since 2026-11-22** the session also shows what a Mac host's login response says
+  about its screen and control, `rd_host_screen` and `rd_host_control` (PR #77,
+  decision 0012). Without Screen Recording, the toolbar takes the engine's *Connected,
+  waiting for image...* box off as soon as it shows and puts its own in its place,
+  through the same dialog manager: *"Mac-mini can't share its screen"*, *"Turn on
+  Screen Recording for Remote Display Server on Mac-mini"* and Disconnect. It watches
+  the engine's dialog count (`visibleDialogCount`) and acts after the engine's show,
+  which counts the box before putting it on screen. A picture, a reconnection or
+  another box dismisses it as it would the waiting box. Its Disconnect is the
+  toolbar's: the waiting box's only button, Cancel, calls `closeConnection()`, which
+  needs a tab controller the desktop session window doesn't register. The keys come from the `peer_info` event the engine keeps
+  (`cachedPeerData.peerInfo`): `pi.platformAdditions` can still hold the last
+  connection's when the box shows. Without Accessibility, the status line says once a
+  session, when the picture shows, *"Clicks and keys won't reach Mac-mini · turn on
+  Accessibility for Remote Display Server there"*, under its own key beside the
+  forward lines. A host without the keys changes nothing (UX audit of 2026-11-21,
+  item 1).
+- **Since 2026-11-22** a small badge beside the pill shows while the camera or the
+  microphone goes to the host, asking included: a green camera, an orange microphone,
+  macOS's own colours for them. The Devices button's fill was the only sign, and on a
+  Mac the pill dims to 35% while the pointer is elsewhere, and drops the button when
+  collapsed. The badge sits outside the pill's fade, so it keeps full opacity in both
+  cases and on touch devices. Its tooltip says what goes where, *"Sending your camera
+  and microphone to Mac-mini"* (`sendingTooltip` in `devices.dart`; UX audit of
+  2026-11-21, item 3).
 - A camera plugged in while the menu is open shows up the next time it opens. Unplugging
   the camera being sent isn't handled yet: capture doesn't watch for
   `AVCaptureDeviceWasDisconnectedNotification`, so the forward isn't told, and the case
