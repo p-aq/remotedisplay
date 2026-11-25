@@ -46,7 +46,8 @@ binaries in git (`release/out/` is in .gitignore).
    from Windows) is only an alternative if it can't. All three scripts publish to the same repo,
    and the one that creates the `v<ver>` release tags the commit it built (`--target`), so the
    release's source archives match its binaries: build from a pushed commit, and from the same
-   commit on both machines.
+   commit on both machines. They stop when `v<ver>` already names another commit: this fork
+   inherited the original's tags up to `v1.0.16`, so its releases need versions of their own.
    With the Developer ID identity present the two DMGs come out notarized and stapled
    (about 2–5 minutes per submission; `--skip-notarize` for a quick local build).
    - Server's `ENGINE_BIN`: defaults to `engine/rustdesk/target/release/rustdesk` (the monorepo's

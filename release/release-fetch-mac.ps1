@@ -18,6 +18,10 @@ foreach ($f in $files) { scp -o BatchMode=yes "${remote}:$f" $out; Write-Host "f
 # The tag goes on the commit the Mac built these from (see release-mac.sh).
 $sha = (ssh -o BatchMode=yes $remote "git -C ~/workspace/remotedisplay rev-parse HEAD").Trim()
 if (-not $sha) { throw "Couldn't read the Mac's commit" }
+$prevEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'  # gh errors for a missing tag
+$tagSha = (gh api "repos/$Repo/commits/$Tag" --jq .sha 2>$null | Out-String).Trim()
+$ErrorActionPreference = $prevEap
+if ($tagSha -match '^[0-9a-f]{40}$' -and $tagSha -ne $sha) { throw "$Tag in $Repo is commit $tagSha, not $sha; bump the version" }
 Push-Location $root
 $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
 gh release view $Tag --repo $Repo *> $null; $exists = ($LASTEXITCODE -eq 0); $ErrorActionPreference = $prev

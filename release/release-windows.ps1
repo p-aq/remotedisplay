@@ -68,6 +68,9 @@ if ($Upload) {
   $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   # The tag goes on the commit this was built from (see release-mac.sh): it has to be pushed.
   $sha = (git rev-parse HEAD).Trim()
+  # A tag that already names another commit (inherited from the original): bump the version.
+  $tagSha = (gh api "repos/$Repo/commits/$Tag" --jq .sha 2>$null | Out-String).Trim()
+  if ($tagSha -match '^[0-9a-f]{40}$' -and $tagSha -ne $sha) { throw "$Tag in $Repo is commit $tagSha, not $sha; bump the version" }
   gh release view $Tag --repo $Repo *> $null; $exists = ($LASTEXITCODE -eq 0)
   $ErrorActionPreference = $prev
   if (-not $exists) {

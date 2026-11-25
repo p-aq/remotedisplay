@@ -160,6 +160,13 @@ if [ "$UPLOAD" = 1 ]; then
     || { echo "ERROR: $SHA isn't pushed; push it, then run with --upload again"; exit 1; }
   [ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ] \
     || echo "WARNING: uncommitted changes: these files may not match $SHA"
+  # A tag that already names another commit (a fork inherits the original's v<ver> tags) would
+  # put these files beside someone else's source: bump the version instead.
+  # (For a missing tag gh prints an error body, not a commit: keep only a commit id.)
+  TAG_SHA="$(gh api "repos/$RELEASE_REPO/commits/$TAG" --jq .sha 2>/dev/null | grep -E '^[0-9a-f]{40}$' || true)"
+  if [ -n "$TAG_SHA" ] && [ "$TAG_SHA" != "$SHA" ]; then
+    echo "ERROR: $TAG in $RELEASE_REPO is commit $TAG_SHA, not $SHA; bump the version"; exit 1
+  fi
   if ! gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
     gh release create "$TAG" --repo "$RELEASE_REPO" --target "$SHA" --title "Remote Display $VER" --notes "Build $VER."
   fi
