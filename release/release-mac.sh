@@ -5,8 +5,8 @@
 #   RemoteDisplay-<ver>-macos-client.dmg         macOS client (client/build-sign.sh + hdiutil)
 #   RemoteDisplay-Server-<ver>-macos.dmg         Remote Display Server.app (server-mac/make sign)
 #   RemoteDisplay-<ver>-ios.ipa                  iOS client signed with the development cert
-# Afterwards, from the Windows PC: tools/release-fetch-mac.ps1 fetches them via scp and
-# uploads them to the GitHub Release (the Mac doesn't have gh).
+# With --upload it publishes them itself; release/release-fetch-mac.ps1 on the Windows PC is
+# the alternative when the Mac's gh can't publish (scp, then upload from there).
 #
 # When the signing identity is a "Developer ID Application" certificate (see
 # server-mac/sign-identity.sh) the macOS apps and DMGs are also notarized with Apple and
@@ -28,19 +28,26 @@ echo "Remote Display $VER"
 SKIP_ANDROID=0; SKIP_IOS=0; SKIP_CLIENT=0; SKIP_SERVER=0; SKIP_NOTARIZE=0; UPLOAD=0
 for a in "$@"; do case "$a" in --skip-android) SKIP_ANDROID=1;; --skip-ios) SKIP_IOS=1;; --skip-client) SKIP_CLIENT=1;; --skip-server) SKIP_SERVER=1;; --skip-notarize) SKIP_NOTARIZE=1;; --upload) UPLOAD=1;; esac; done
 
-# Signing identity (personal team only) and notarization. ~/.config/remotedisplay/signing.env
+# Signing identity (the team from server-mac/team-id.sh) and notarization. ~/.config/remotedisplay/signing.env
 # may set RD_NOTARY_PROFILE; it is optional. Notarization is attempted only with a Developer ID.
 # It may also set RD_SERVER_PROFILE and RD_CAMERA_PROFILE, the provisioning profiles for the
 # server app and Remote Display Camera; without both the server ships without the camera
 # extension (decision 0019).
+# The environment's RD_TEAM_ID and RD_RELEASE_REPO win over signing.env (release/README.md),
+# as they do for make sign and team-id.sh on their own.
+ENV_TEAM_ID="${RD_TEAM_ID-}"; ENV_RELEASE_REPO="${RD_RELEASE_REPO-}"
 [ -f "$HOME/.config/remotedisplay/signing.env" ] && . "$HOME/.config/remotedisplay/signing.env"
+[ -n "$ENV_TEAM_ID" ] && export RD_TEAM_ID="$ENV_TEAM_ID"
+[ -n "$ENV_RELEASE_REPO" ] && RD_RELEASE_REPO="$ENV_RELEASE_REPO"
 "$ROOT/server-mac/unlock-signing-keychain.sh"   # locked after a reboot → codesign would prompt
 NOTARY_PROFILE="${RD_NOTARY_PROFILE:-remotedisplay-notary}"
-# The team (RD_TEAM_ID in signing.env for a fork; never in the repository) signs everything and
-# goes into the server's designated requirement and entitlements, so make sign gets it too.
+# The team (RD_TEAM_ID in signing.env for a fork; never in the repository) signs the Mac builds
+# and goes into the server's designated requirement and entitlements, so make sign gets it too.
+# iOS keeps the Xcode project's DEVELOPMENT_TEAM (release/README.md).
 TEAM_ID="$("$ROOT/server-mac/team-id.sh")"
 SIGN_ID="$("$ROOT/server-mac/sign-identity.sh" "$TEAM_ID")" || SIGN_ID=""
-# Where --upload publishes: this fork's releases, which both apps' update checks read.
+# Where --upload publishes. The apps' update checks are compiled in (client/lib/update_check.dart,
+# ServerController.swift): publishing elsewhere means changing those too.
 RELEASE_REPO="${RD_RELEASE_REPO:-p-aq/remotedisplay}"
 NOTARIZE=0
 case "$SIGN_ID" in "Developer ID Application:"*) NOTARIZE=1;; esac
@@ -109,7 +116,7 @@ if [ $SKIP_ANDROID = 0 ]; then
   echo "apk: $OUT/RemoteDisplay-$VER-android-arm64.apk"
 fi
 
-# 2) macOS client (signed by build-sign.sh with the personal-team identity, hardened runtime)
+# 2) macOS client (signed by build-sign.sh with the team's identity, hardened runtime)
 if [ $SKIP_CLIENT = 0 ]; then
   ( cd "$ROOT/client" && SIGN_ID="$SIGN_ID" bash ./build-sign.sh )
   CLIENT_APP="$ROOT/client/build/macos/Build/Products/Release/RemoteDisplay.app"
@@ -119,7 +126,7 @@ if [ $SKIP_CLIENT = 0 ]; then
   make_dmg "$STAGED" "$OUT/RemoteDisplay-$VER-macos-client.dmg" "Remote Display"
 fi
 
-# 3) macOS Server (stable personal-team signing; the identity lives in the dedicated
+# 3) macOS Server (stable signing by the team; the identity lives in the dedicated
 #    signing keychain, so no keychain prompt)
 if [ $SKIP_SERVER = 0 ]; then
   ENGINE_BIN="${ENGINE_BIN:-$ROOT/engine/rustdesk/target/release/rustdesk}"

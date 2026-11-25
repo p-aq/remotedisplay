@@ -165,7 +165,8 @@ endif
 	@codesign $(SIGN_FLAGS) --entitlements Entitlements.plist "$(MACOS_DIR)/remotedisplayd"
 	@codesign $(SIGN_FLAGS) --entitlements "$(APP_ENTITLEMENTS)" "$(MACOS_DIR)/$(APP_NAME)"
 	@codesign $(SIGN_FLAGS) --entitlements "$(APP_ENTITLEMENTS)" "$(APP_BUNDLE)"
-	@codesign --verify --deep --strict "$(APP_BUNDLE)"
+	@# -v also checks the designated requirement: a SIGN_ID of another team than TEAM_ID fails here.
+	@codesign --verify --deep --strict -v "$(APP_BUNDLE)"
 endif
 	@xattr -dr com.apple.quarantine "$(APP_BUNDLE)" 2>/dev/null || true
 	@echo "Signed $(APP_BUNDLE)"

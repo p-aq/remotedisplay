@@ -1,7 +1,10 @@
-# Fetches via scp the artifacts that tools/release-mac.sh produced on the Mac and uploads
-# them to the repo's GitHub Release (the Mac doesn't have gh; this machine does, authenticated).
-# Usage:  powershell -ExecutionPolicy Bypass -File tools/release-fetch-mac.ps1 [-Tag v0.1.0]
-param([string]$Tag = '')
+# Fetches via scp the artifacts that release/release-mac.sh produced on the Mac and uploads
+# them to the GitHub Release, for when the Mac's gh can't publish. The repo: -Repo, else
+# $env:RD_RELEASE_REPO, else p-aq/remotedisplay, the same as release-mac.sh.
+# Usage:  powershell -ExecutionPolicy Bypass -File release/release-fetch-mac.ps1 [-Tag v0.1.0] [-Repo owner/name]
+param([string]$Tag = '', [string]$Repo = '')
+if (-not $Repo) { $Repo = $env:RD_RELEASE_REPO }
+if (-not $Repo) { $Repo = 'p-aq/remotedisplay' }
 $ErrorActionPreference = 'Stop'
 $root = Resolve-Path (Join-Path (Split-Path -Parent $PSCommandPath) '..')
 $cfg = Get-Content (Join-Path $root 'remotedisplay\config.local.json') | ConvertFrom-Json
@@ -14,9 +17,9 @@ if (-not $files) { throw "No $version artifacts on the Mac (run tools/release-ma
 foreach ($f in $files) { scp -o BatchMode=yes "${remote}:$f" $out; Write-Host "fetched: $(Split-Path $f -Leaf)" }
 Push-Location $root
 $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-gh release view $Tag *> $null; $exists = ($LASTEXITCODE -eq 0); $ErrorActionPreference = $prev
-if (-not $exists) { gh release create $Tag --title "Remote Display $version" --notes "Build $version." | Out-Null }
+gh release view $Tag --repo $Repo *> $null; $exists = ($LASTEXITCODE -eq 0); $ErrorActionPreference = $prev
+if (-not $exists) { gh release create $Tag --repo $Repo --title "Remote Display $version" --notes "Build $version." | Out-Null }
 $local = $files | ForEach-Object { Join-Path $out (Split-Path $_ -Leaf) }
-gh release upload $Tag @local --clobber
+gh release upload $Tag @local --repo $Repo --clobber
 Pop-Location
 Write-Host "uploaded to GitHub Releases ($Tag)"

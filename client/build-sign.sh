@@ -7,12 +7,12 @@ export PATH="$HOME/flutter/bin:$PATH"   # Flutter 3.24.5
 cd "$(dirname "$0")"
 flutter build macos --release
 APP=build/macos/Build/Products/Release/RemoteDisplay.app
-# Sign with Sam's personal team identity when present (Developer ID Application, else
+# Sign with the team's identity when present (team-id.sh; Developer ID Application, else
 # Apple Development — see server-mac/sign-identity.sh), ad-hoc otherwise. Never an
 # identity of another organisation.
-SIGN_ID="${SIGN_ID:-$(../server-mac/sign-identity.sh)}"
+SIGN_ID="${SIGN_ID:-$(../server-mac/sign-identity.sh || true)}" # it exits 1 with no identity (set -e)
 ../server-mac/unlock-signing-keychain.sh || true
-if [ -n "$SIGN_ID" ]; then echo "Signing with: $SIGN_ID"; else echo "WARNING: no personal-team identity, ad-hoc signing"; SIGN_ID=-; fi
+if [ -n "$SIGN_ID" ]; then echo "Signing with: $SIGN_ID"; else echo "WARNING: no identity of the team, ad-hoc signing"; SIGN_ID=-; fi
 # --timestamp: secure timestamp, required by notarization (ignored for ad-hoc signing).
 TS=--timestamp; [ "$SIGN_ID" = - ] && TS=
 codesign --force --deep --options runtime $TS \
