@@ -3,6 +3,15 @@
 Remote Display — Copyright © 2026 Samuel Rioja.
 Licensed under the GNU Affero General Public License, version 3 (see `LICENSE`).
 
+## This modified version
+
+This is a modified version of Remote Display, changed since 23 October 2026 by the
+p-aq/remotedisplay fork: camera and microphone forwarding from the controller to the host,
+the host's sound, and the other changes recorded in its git history and in
+`docs/architecture/README.md` ("Changes against the spec"). Its complete source is at
+https://github.com/p-aq/remotedisplay; each release's is at that release's tag. The
+modifications are licensed under the same AGPL-3.0. Its apps say so in their About sections.
+
 ## Third-party software
 
 - **RustDesk** — https://github.com/rustdesk/rustdesk — Copyright © RustDesk

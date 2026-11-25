@@ -323,11 +323,19 @@ struct MainWindowView: View {
                 Spacer()
                 Text("AGPL-3.0 · based on RustDesk").foregroundStyle(.secondary)
             }
+            // AGPL-3.0 §5(a): a modified version says so, with a date.
+            HStack {
+                Text("Modified")
+                Spacer()
+                Text("A modified Remote Display (p-aq), since October 2026").foregroundStyle(.secondary)
+            }
+            // This version's source, not the original's (AGPL-3.0 §6 for the host's own user;
+            // controller users get it from the controller's About, #92).
             HStack {
                 Text("Source code")
                 Spacer()
-                Link("github.com/SamuelRioTz/remotedisplay",
-                     destination: URL(string: "https://github.com/SamuelRioTz/remotedisplay")!)
+                Link("github.com/p-aq/remotedisplay",
+                     destination: URL(string: "https://github.com/p-aq/remotedisplay")!)
                     .controlSize(.small)
             }
             HStack {
